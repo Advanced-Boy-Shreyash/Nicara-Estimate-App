@@ -45,7 +45,3 @@ python manage.py runserver
 - **IAM** — Page-level access control per user
 - **User Management** — Invite-only registration with email
 - **Vendor & Client Database** — CRM functionality
-
-## Documentation
-
-See [DRF Guide](docs/drf_guide.md) for backend setup instructions.

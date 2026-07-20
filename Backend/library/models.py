@@ -8,6 +8,7 @@ Plus separate ServiceItem for labour/service-type entries.
 Structure mirrors the "Sample Detail" sheet in sample template.xlsx.
 """
 from django.db import models
+from django.utils import timezone
 
 
 class MaterialCategory(models.Model):
@@ -78,8 +79,8 @@ class MaterialItem(models.Model):
     is_active = models.BooleanField(default=True)
     notes = models.TextField(blank=True, default='')
     image = models.ImageField(upload_to='library/materials/', blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
         ordering = ['model_name']
@@ -108,7 +109,7 @@ class ServiceItem(models.Model):
     gst_pct = models.DecimalField(max_digits=5, decimal_places=2, default=18)
     margin_pct = models.DecimalField(max_digits=5, decimal_places=2, default=35)
     is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
         ordering = ['category', 'name']

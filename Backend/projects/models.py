@@ -1,25 +1,27 @@
 """
 NICARA Projects — Models
 
-Project, rooms, estimate items with specs, furniture layouts,
-mood boards, and payment schedules.
+Full project lifecycle: Lead → Design → Execution → Handover
+Includes design requirements, versioned deliverables, measurements,
+material selections, execution tracking, payments, and quality checks.
 """
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 
+
+# ════════════════════════════════════════════════════════════════
+# PROJECT
+# ════════════════════════════════════════════════════════════════
 
 class Project(models.Model):
     """A client interior design project."""
 
-    class Status(models.TextChoices):
-        CLIENT_REQ = 'Client Requirements', 'Client Requirements'
-        FURNITURE = 'Furniture Layout', 'Furniture Layout'
-        MOOD_BOARD = 'Mood Board', 'Mood Board'
-        INITIAL_EST = 'Initial Estimate', 'Initial Estimate'
-        DESIGN = 'Design', 'Design'
-        FINAL_EST = 'Final Estimate', 'Final Estimate'
-        EXECUTION = 'Execution', 'Execution'
-        HANDOVER = 'Handover', 'Handover'
+    class Stage(models.TextChoices):
+        LEAD = 'lead', 'Lead'
+        DESIGN = 'design', 'Design'
+        EXECUTION = 'execution', 'Execution'
+        COMPLETED = 'completed', 'Completed'
 
     class PropertyType(models.TextChoices):
         BHK1 = '1BHK', '1 BHK'
@@ -31,38 +33,52 @@ class Project(models.Model):
         COMMERCIAL = 'Commercial', 'Commercial'
         OTHER = 'Other', 'Other'
 
+    class ProjectType(models.TextChoices):
+        RESIDENTIAL = 'Residential', 'Residential'
+        COMMERCIAL = 'Commercial', 'Commercial'
+
+    class Purpose(models.TextChoices):
+        SELF = 'Self', 'Self'
+        RENTAL = 'Rental', 'Rental'
+
     # Client info
     client_name = models.CharField(max_length=200)
     client_email = models.EmailField(blank=True, default='')
     client_phone = models.CharField(max_length=20, blank=True, default='')
+    client_address = models.TextField(blank=True, default='')
 
     # Project info
     name = models.CharField(max_length=200, help_text='Display name, e.g. Sharma Residence')
-    developer = models.CharField(max_length=200, blank=True, default='')
-    project_name = models.CharField(max_length=200, blank=True, default='',
-                                     help_text='Society/building name, e.g. ABC Homes')
+    developer = models.CharField(max_length=200, blank=True, default='',
+                                  help_text='Developer - Project, e.g. Prestige Lakeside')
     unit_no = models.CharField(max_length=50, blank=True, default='')
     city = models.CharField(max_length=100, default='Mumbai')
-    location = models.CharField(max_length=200, blank=True, default='',
-                                 help_text='Area/locality, e.g. Bandra')
+    state = models.CharField(max_length=100, blank=True, default='')
+    pincode = models.CharField(max_length=10, blank=True, default='')
 
     # Property details
-    super_built_up_area = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    carpet_area = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    area = models.CharField(max_length=50, blank=True, default='', help_text='e.g. 1,850 sqft')
     property_type = models.CharField(max_length=20, choices=PropertyType.choices, default=PropertyType.BHK3)
+    project_type = models.CharField(max_length=20, choices=ProjectType.choices, default=ProjectType.RESIDENTIAL)
+    purpose = models.CharField(max_length=20, choices=Purpose.choices, default=Purpose.SELF)
+    interior_style = models.CharField(max_length=100, blank=True, default='Contemporary')
     budget = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
-    # Usage
-    purpose = models.CharField(max_length=50, default='Primary Home')
-    use = models.CharField(max_length=50, default='Self Use')
-    interior_style = models.CharField(max_length=100, blank=True, default='Contemporary')
-
-    # Progress
-    status = models.CharField(max_length=30, choices=Status.choices, default=Status.INITIAL_EST)
+    # Stage & progress
+    stage = models.CharField(max_length=20, choices=Stage.choices, default=Stage.LEAD)
     progress = models.IntegerField(default=0, help_text='0-100 percentage')
-    handover_date = models.DateField(null=True, blank=True)
+    start_date = models.DateField(null=True, blank=True)
+    target_date = models.DateField(null=True, blank=True)
 
-    # Tracking
+    # Team
+    design_owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='design_projects'
+    )
+    site_manager = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='managed_projects'
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
         related_name='created_projects'
@@ -70,6 +86,7 @@ class Project(models.Model):
     team_members = models.ManyToManyField(
         settings.AUTH_USER_MODEL, blank=True, related_name='assigned_projects'
     )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -77,217 +94,313 @@ class Project(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f"{self.name} ({self.status})"
+        return f"{self.name} ({self.get_stage_display()})"
 
 
-class ProjectRoom(models.Model):
-    """Rooms selected for the project."""
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='rooms')
-    name = models.CharField(max_length=100)
-    selected = models.BooleanField(default=True)
+# ════════════════════════════════════════════════════════════════
+# DESIGN REQUIREMENTS
+# ════════════════════════════════════════════════════════════════
+
+class DesignRequirement(models.Model):
+    """Room/unit design requirements — generated from room selection."""
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='design_requirements')
+    room = models.CharField(max_length=100, help_text='Master Bedroom, Kitchen, etc.')
+    unit = models.CharField(max_length=100, help_text='Wardrobe, TV Unit, etc.')
+    length = models.CharField(max_length=20, blank=True, default='')
+    breadth = models.CharField(max_length=20, blank=True, default='')
+    height = models.CharField(max_length=20, blank=True, default='')
+    finishing = models.CharField(max_length=100, blank=True, default='')
+    remarks = models.TextField(blank=True, default='')
+    design_required = models.BooleanField(default=True)
     sort_order = models.IntegerField(default=0)
 
     class Meta:
-        ordering = ['sort_order', 'name']
+        ordering = ['sort_order', 'room', 'unit']
 
     def __str__(self):
-        return f"{self.project.name} — {self.name}"
+        return f"{self.project.name} — {self.room}: {self.unit}"
 
 
-class EstimateItem(models.Model):
-    """
-    Line item in the estimate — matches the Estimate sheet columns.
-    SI No | Area | Item | Width | Height | Depth | Amount
-    """
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='estimate_items')
-    si_no = models.IntegerField()
-    area = models.CharField(max_length=100, help_text='Kitchen, Living, Suite 1, etc.')
-    category = models.CharField(max_length=100, blank=True, default='',
-                                 help_text='Furniture, Electrical, etc.')
-    sub_category = models.CharField(max_length=100, blank=True, default='')
-    item = models.CharField(max_length=200, help_text='Wardrobe, TV Console, etc.')
-    finish = models.CharField(max_length=200, blank=True, default='')
+# ════════════════════════════════════════════════════════════════
+# VERSIONED DELIVERABLES (FL, MB, 3D, Renders, Working Drawings)
+# ════════════════════════════════════════════════════════════════
 
-    # Dimensions in feet + inches
-    width_ft = models.IntegerField(default=0)
-    width_in = models.IntegerField(default=0)
-    height_ft = models.IntegerField(default=0)
-    height_in = models.IntegerField(default=0)
-    depth_ft = models.IntegerField(default=0)
-    depth_in = models.IntegerField(default=0)
+class ProjectDeliverable(models.Model):
+    """Versioned file deliverable — covers FL, MB, 3D, Renders, WD, etc."""
 
-    # Costing
-    vendor_type = models.CharField(max_length=50, blank=True, default='',
-                                    help_text='Service Vendor / Product Vendor')
-    fac_or_site = models.CharField(max_length=20, blank=True, default='Factory',
-                                    choices=[('Factory', 'Factory'), ('Site', 'Site')])
-    qty = models.DecimalField(max_digits=10, decimal_places=2, default=1)
-    unit = models.CharField(max_length=20, blank=True, default='Sft')
-    budget_per_unit = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    class DeliverableType(models.TextChoices):
+        FURNITURE_LAYOUT = 'furniture_layout', 'Furniture Layout'
+        MOOD_BOARD = 'mood_board', 'Mood Board'
+        MODEL_3D = 'model_3d', '3D Model'
+        RENDER = 'render', 'Render'
+        FINAL_RENDER = 'final_render', 'Final Render'
+        WORKING_DRAWING = 'working_drawing', 'Working Drawing'
 
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        APPROVED = 'approved', 'Approved'
+        REVISION = 'revision', 'Revision Required'
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='deliverables')
+    type = models.CharField(max_length=30, choices=DeliverableType.choices)
+    version = models.CharField(max_length=20, help_text='Ver 1, Ver 2, etc.')
+    file = models.FileField(upload_to='deliverables/%Y/%m/', blank=True)
+    file_name = models.CharField(max_length=200, blank=True, default='')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    remarks = models.TextField(blank=True, default='')
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
+    )
+    date = models.DateField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['type', '-date']
+
+    def __str__(self):
+        return f"{self.project.name} — {self.get_type_display()} {self.version}"
+
+
+# ════════════════════════════════════════════════════════════════
+# ESTIMATES (Initial, Intermediate, Final)
+# ════════════════════════════════════════════════════════════════
+
+class Estimate(models.Model):
+    """An estimate version — a project can have multiple (initial, intermediate, final)."""
+
+    class EstimateType(models.TextChoices):
+        INITIAL = 'initial', 'Initial Estimate'
+        INTERMEDIATE = 'intermediate', 'Intermediate Estimate'
+        FINAL = 'final', 'Final Estimate'
+
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        SENT = 'sent', 'Sent for Approval'
+        APPROVED = 'approved', 'Approved'
+        REVISION = 'revision', 'Revision Required'
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='estimates')
+    type = models.CharField(max_length=20, choices=EstimateType.choices)
+    version = models.IntegerField(default=1)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    notes = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['si_no']
-        unique_together = ('project', 'si_no')
+        ordering = ['type', '-version']
+        unique_together = ('project', 'type', 'version')
 
     def __str__(self):
-        return f"#{self.si_no} {self.area} — {self.item}"
+        return f"{self.project.name} — {self.get_type_display()} v{self.version}"
+
+    @property
+    def subtotal(self):
+        return sum(i.amount for i in self.items.all())
+
+    @property
+    def gst_total(self):
+        return sum(i.amount * i.gst_pct / 100 for i in self.items.all())
+
+    @property
+    def grand_total(self):
+        return self.subtotal + self.gst_total
 
 
-class EstimateItemSpec(models.Model):
-    """
-    Material specifications for each estimate item.
-    Matches the Sample Detail sheet columns.
-    """
-
-    class SpecType(models.TextChoices):
-        PROCUREMENT = 'Procurement', 'Procurement'
-        SERVICE = 'Service', 'Service'
-        SPEC_PURPOSE = 'Spec Purpose', 'Spec Purpose'
-        PROC_SERVICE = 'Procurement cum Service', 'Procurement cum Service'
-
-    estimate_item = models.ForeignKey(EstimateItem, on_delete=models.CASCADE, related_name='specs')
-
-    # Type & Category (from library)
-    type = models.CharField(max_length=30, choices=SpecType.choices, default=SpecType.PROCUREMENT)
-    category = models.CharField(max_length=100, help_text='e.g. Core Material(16mm BWP Ply)')
-    brand = models.CharField(max_length=100, blank=True, default='')
-    model_name = models.CharField(max_length=200, blank=True, default='')
-    notes = models.CharField(max_length=300, blank=True, default='')
-    specification = models.CharField(max_length=500, help_text='Full display text')
-
-    # Costing
-    qty = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    unit = models.CharField(max_length=20, blank=True, default='')
-    rate = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    cost = models.DecimalField(max_digits=12, decimal_places=2, default=0,
-                                help_text='qty × rate')
-    margin_pct = models.DecimalField(max_digits=5, decimal_places=2, default=35)
-    margin_amt = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+class EstimateItem(models.Model):
+    """Line item within an estimate."""
+    estimate = models.ForeignKey(Estimate, on_delete=models.CASCADE, related_name='items')
+    sno = models.IntegerField()
+    area = models.CharField(max_length=100, help_text='Room/area name')
+    item = models.CharField(max_length=200)
+    description = models.TextField(blank=True, default='')
+    length = models.CharField(max_length=20, blank=True, default='')
+    breadth = models.CharField(max_length=20, blank=True, default='')
+    height = models.CharField(max_length=20, blank=True, default='')
+    qty = models.DecimalField(max_digits=10, decimal_places=2, default=1)
+    unit = models.CharField(max_length=20, default='unit')
+    rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     gst_pct = models.DecimalField(max_digits=5, decimal_places=2, default=18)
-    gst_amt = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    total = models.DecimalField(max_digits=12, decimal_places=2, default=0,
-                                 help_text='cost + margin + gst')
-    service_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
-    # Reference to library item (optional)
+    class Meta:
+        ordering = ['sno']
+
+    def __str__(self):
+        return f"#{self.sno} {self.area} — {self.item}"
+
+
+# ════════════════════════════════════════════════════════════════
+# MEASUREMENTS
+# ════════════════════════════════════════════════════════════════
+
+class Measurement(models.Model):
+    """Room measurement data — walls and proof check."""
+
+    class Status(models.TextChoices):
+        COMPLETE = 'complete', 'Complete'
+        PENDING = 'pending', 'Pending'
+        ISSUE = 'issue', 'Issue'
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='measurements')
+    room = models.CharField(max_length=100)
+    plan_verified = models.BooleanField(default=False)
+    east = models.CharField(max_length=20, blank=True, default='')
+    west = models.CharField(max_length=20, blank=True, default='')
+    north = models.CharField(max_length=20, blank=True, default='')
+    south = models.CharField(max_length=20, blank=True, default='')
+    other_details = models.TextField(blank=True, default='')
+    measurement_file = models.FileField(upload_to='measurements/%Y/%m/', blank=True)
+    proof_checked_by = models.CharField(max_length=100, blank=True, default='')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+
+    class Meta:
+        ordering = ['room']
+
+    def __str__(self):
+        return f"{self.project.name} — {self.room} measurements"
+
+
+# ════════════════════════════════════════════════════════════════
+# MATERIAL SELECTIONS
+# ════════════════════════════════════════════════════════════════
+
+class MaterialSelection(models.Model):
+    """Per-room, per-wall material selection with supplier details."""
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='material_selections')
+    category = models.CharField(max_length=100, help_text='Plywood, Laminates, Hardware, etc.')
+    room = models.CharField(max_length=100)
+    wall_area = models.CharField(max_length=100, help_text='Which wall or area')
+    price_range = models.CharField(max_length=50, blank=True, default='')
+    supplier_name = models.CharField(max_length=200, blank=True, default='')
+    brand_name = models.CharField(max_length=200, blank=True, default='')
+    catalog = models.CharField(max_length=200, blank=True, default='')
+    item_code = models.CharField(max_length=100, blank=True, default='')
+    supplier_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    availability = models.CharField(max_length=50, default='In Stock')
+    # Optional reference to library item
     library_item = models.ForeignKey(
         'library.MaterialItem', on_delete=models.SET_NULL,
-        null=True, blank=True, related_name='used_in_specs'
+        null=True, blank=True, related_name='selections'
     )
 
     class Meta:
-        ordering = ['id']
+        ordering = ['category', 'room']
 
     def __str__(self):
-        return f"{self.category}: {self.brand} {self.model_name}"
+        return f"{self.project.name} — {self.category}: {self.brand_name} ({self.room})"
 
 
-class FurnitureLayout(models.Model):
-    """Furniture layout file uploads per project."""
+# ════════════════════════════════════════════════════════════════
+# EXECUTION STAGES
+# ════════════════════════════════════════════════════════════════
 
-    class LayoutStatus(models.TextChoices):
-        DRAFT = 'draft', 'Draft'
-        SUBMITTED = 'submitted', 'Submitted'
-        APPROVED = 'approved', 'Approved'
-        REJECTED = 'rejected', 'Rejected'
+class ExecutionStage(models.Model):
+    """Execution phase stage tracking."""
 
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='layouts')
-    version = models.IntegerField(default=1)
-    file = models.FileField(upload_to='layouts/%Y/%m/')
-    status = models.CharField(max_length=20, choices=LayoutStatus.choices, default=LayoutStatus.DRAFT)
-    notes = models.TextField(blank=True, default='')
-    uploaded_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
+    class Status(models.TextChoices):
+        UPCOMING = 'upcoming', 'Upcoming'
+        IN_PROGRESS = 'in-progress', 'In Progress'
+        COMPLETED = 'completed', 'Completed'
+        DELAYED = 'delayed', 'Delayed'
 
-    class Meta:
-        ordering = ['-version']
-
-    def __str__(self):
-        return f"{self.project.name} — Layout v{self.version}"
-
-
-class MoodBoard(models.Model):
-    """Mood board per area within a project."""
-
-    class BoardStatus(models.TextChoices):
+    class PaymentStatus(models.TextChoices):
         PENDING = 'pending', 'Pending'
-        APPROVED = 'approved', 'Approved'
-        REJECTED = 'rejected', 'Rejected'
+        PARTIAL = 'partial', 'Partial'
+        PAID = 'paid', 'Paid'
 
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='moodboards')
-    area = models.CharField(max_length=100)
-    status = models.CharField(max_length=20, choices=BoardStatus.choices, default=BoardStatus.PENDING)
-    notes = models.TextField(blank=True, default='')
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.project.name} — {self.area} Mood Board"
-
-
-class MoodBoardImage(models.Model):
-    """Images within a mood board."""
-    mood_board = models.ForeignKey(MoodBoard, on_delete=models.CASCADE, related_name='images')
-    image = models.ImageField(upload_to='moodboards/%Y/%m/')
-    caption = models.CharField(max_length=200, blank=True, default='')
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='execution_stages')
+    name = models.CharField(max_length=200, help_text='Floor Protection, False Ceiling, etc.')
+    vendor = models.CharField(max_length=200, blank=True, default='')
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPCOMING)
+    progress = models.IntegerField(default=0, help_text='0-100')
+    payment = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    payment_status = models.CharField(max_length=20, choices=PaymentStatus.choices, default=PaymentStatus.PENDING)
     sort_order = models.IntegerField(default=0)
 
     class Meta:
         ordering = ['sort_order']
 
+    def __str__(self):
+        return f"{self.project.name} — {self.name}"
 
-class PaymentSchedule(models.Model):
-    """Payment schedule entries for a project."""
 
-    class Mode(models.TextChoices):
-        BANK = 'Bank', 'Bank Transfer'
-        CASH = 'Cash', 'Cash'
+# ════════════════════════════════════════════════════════════════
+# PAYMENT SCHEDULE
+# ════════════════════════════════════════════════════════════════
 
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='payments')
-    stage = models.CharField(max_length=10, help_text='P1, P2, P3, etc.')
+class PaymentMilestone(models.Model):
+    """Payment milestone for a project."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        PARTIAL = 'partial', 'Partial'
+        PAID = 'paid', 'Paid'
+        OVERDUE = 'overdue', 'Overdue'
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='payment_milestones')
+    milestone = models.CharField(max_length=200, help_text='Booking Advance, Design Phase P1, etc.')
     amount = models.DecimalField(max_digits=12, decimal_places=2)
-    mode = models.CharField(max_length=10, choices=Mode.choices, default=Mode.BANK)
-    paid = models.BooleanField(default=False)
+    due_date = models.DateField()
     paid_date = models.DateField(null=True, blank=True)
-    notes = models.CharField(max_length=200, blank=True, default='')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    mode = models.CharField(max_length=50, blank=True, default='', help_text='NEFT, UPI, RTGS, etc.')
+    reference = models.CharField(max_length=200, blank=True, default='')
 
     class Meta:
-        ordering = ['stage']
+        ordering = ['due_date']
 
     def __str__(self):
-        return f"{self.project.name} — {self.stage}: ₹{self.amount}"
+        return f"{self.project.name} — {self.milestone}: ₹{self.amount}"
 
 
-class ServiceVendor(models.Model):
-    """Service vendor database."""
+# ════════════════════════════════════════════════════════════════
+# QUALITY CHECKS
+# ════════════════════════════════════════════════════════════════
+
+class QualityCheck(models.Model):
+    """Quality inspection record."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        PASS = 'pass', 'Pass'
+        FAIL = 'fail', 'Fail'
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='quality_checks')
+    area = models.CharField(max_length=100)
+    check_type = models.CharField(max_length=200)
+    date = models.DateField(default=timezone.now)
+    inspector = models.CharField(max_length=100, blank=True, default='')
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    remarks = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-date']
+
+    def __str__(self):
+        return f"{self.project.name} — {self.check_type} ({self.get_status_display()})"
+
+
+# ════════════════════════════════════════════════════════════════
+# VENDORS (kept from original)
+# ════════════════════════════════════════════════════════════════
+
+class Vendor(models.Model):
+    """Unified vendor model — material suppliers and contractors."""
+
+    class VendorType(models.TextChoices):
+        MATERIAL_SUPPLIER = 'material_supplier', 'Material Supplier'
+        CONTRACTOR = 'contractor', 'Contractor'
+
     name = models.CharField(max_length=200)
-    category = models.CharField(max_length=100)
+    vendor_type = models.CharField(max_length=20, choices=VendorType.choices)
+    category = models.CharField(max_length=100, blank=True, default='')
     contact_person = models.CharField(max_length=200, blank=True, default='')
     phone = models.CharField(max_length=20, blank=True, default='')
     email = models.EmailField(blank=True, default='')
-    projects_count = models.IntegerField(default=0)
-    rating = models.DecimalField(max_digits=3, decimal_places=1, default=0)
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        ordering = ['name']
-
-    def __str__(self):
-        return self.name
-
-
-class ProductVendor(models.Model):
-    """Product vendor database."""
-    name = models.CharField(max_length=200)
-    category = models.CharField(max_length=100)
-    contact_person = models.CharField(max_length=200, blank=True, default='')
-    phone = models.CharField(max_length=20, blank=True, default='')
-    email = models.EmailField(blank=True, default='')
+    address = models.TextField(blank=True, default='')
     lead_time = models.CharField(max_length=50, blank=True, default='')
     rating = models.DecimalField(max_digits=3, decimal_places=1, default=0)
     is_active = models.BooleanField(default=True)
@@ -296,21 +409,4 @@ class ProductVendor(models.Model):
         ordering = ['name']
 
     def __str__(self):
-        return self.name
-
-
-class Client(models.Model):
-    """Client database (separate from User — for CRM tracking)."""
-    name = models.CharField(max_length=200)
-    email = models.EmailField(blank=True, default='')
-    phone = models.CharField(max_length=20, blank=True, default='')
-    project = models.CharField(max_length=200, blank=True, default='')
-    status = models.CharField(max_length=50, default='Active')
-    budget = models.CharField(max_length=50, blank=True, default='')
-    notes = models.TextField(blank=True, default='')
-
-    class Meta:
-        ordering = ['name']
-
-    def __str__(self):
-        return self.name
+        return f"{self.name} ({self.get_vendor_type_display()})"

@@ -1,129 +1,168 @@
 """
 NICARA Projects — Serializers
+Full project lifecycle serializers.
 """
 from rest_framework import serializers
-from django.db.models import Sum
 from .models import (
-    Project, ProjectRoom, EstimateItem, EstimateItemSpec,
-    FurnitureLayout, MoodBoard, MoodBoardImage,
-    PaymentSchedule, ServiceVendor, ProductVendor, Client,
+    Project, DesignRequirement, ProjectDeliverable, Estimate, EstimateItem,
+    Measurement, MaterialSelection, ExecutionStage, PaymentMilestone,
+    QualityCheck, Vendor,
 )
 
 
-class ProjectRoomSerializer(serializers.ModelSerializer):
+# ── Design Requirements ─────────────────────────────────────
+class DesignRequirementSerializer(serializers.ModelSerializer):
     class Meta:
-        model = ProjectRoom
+        model = DesignRequirement
         fields = '__all__'
 
 
-class EstimateItemSpecSerializer(serializers.ModelSerializer):
+# ── Deliverables (FL, MB, 3D, Renders, WD) ──────────────────
+class ProjectDeliverableSerializer(serializers.ModelSerializer):
+    uploaded_by_name = serializers.SerializerMethodField()
+    type_display = serializers.CharField(source='get_type_display', read_only=True)
+
     class Meta:
-        model = EstimateItemSpec
+        model = ProjectDeliverable
         fields = '__all__'
 
+    def get_uploaded_by_name(self, obj):
+        return obj.uploaded_by.get_full_name() if obj.uploaded_by else ''
 
+
+# ── Estimate Items ──────────────────────────────────────────
 class EstimateItemSerializer(serializers.ModelSerializer):
-    specs = EstimateItemSpecSerializer(many=True, read_only=True)
-    dimension_display = serializers.SerializerMethodField()
-
-    class Meta:
-        model = EstimateItem
-        fields = '__all__'
-
-    def get_dimension_display(self, obj):
-        """Format dimensions as 8'0\" style."""
-        parts = []
-        if obj.width_ft or obj.width_in:
-            parts.append(f"{obj.width_ft}'{obj.width_in}\"")
-        if obj.height_ft or obj.height_in:
-            parts.append(f"{obj.height_ft}'{obj.height_in}\"")
-        if obj.depth_ft or obj.depth_in:
-            parts.append(f"{obj.depth_ft}'{obj.depth_in}\"")
-        return ' × '.join(parts) if parts else '—'
-
-
-class EstimateItemWriteSerializer(serializers.ModelSerializer):
-    """For creating/updating estimate items (no nested specs)."""
     class Meta:
         model = EstimateItem
         fields = '__all__'
 
 
-class FurnitureLayoutSerializer(serializers.ModelSerializer):
+class EstimateSerializer(serializers.ModelSerializer):
+    items = EstimateItemSerializer(many=True, read_only=True)
+    subtotal = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    gst_total = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    grand_total = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+
     class Meta:
-        model = FurnitureLayout
+        model = Estimate
         fields = '__all__'
 
 
-class MoodBoardImageSerializer(serializers.ModelSerializer):
+class EstimateListSerializer(serializers.ModelSerializer):
+    """Lightweight — for listing estimates without items."""
+    item_count = serializers.SerializerMethodField()
+    total = serializers.SerializerMethodField()
+
     class Meta:
-        model = MoodBoardImage
+        model = Estimate
+        fields = ['id', 'type', 'version', 'status', 'item_count', 'total', 'created_at']
+
+    def get_item_count(self, obj):
+        return obj.items.count()
+
+    def get_total(self, obj):
+        return float(obj.grand_total)
+
+
+# ── Measurements ────────────────────────────────────────────
+class MeasurementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Measurement
         fields = '__all__'
 
 
-class MoodBoardSerializer(serializers.ModelSerializer):
-    images = MoodBoardImageSerializer(many=True, read_only=True)
-
+# ── Material Selections ────────────────────────────────────
+class MaterialSelectionSerializer(serializers.ModelSerializer):
     class Meta:
-        model = MoodBoard
+        model = MaterialSelection
         fields = '__all__'
 
 
-class PaymentScheduleSerializer(serializers.ModelSerializer):
+# ── Execution Stages ────────────────────────────────────────
+class ExecutionStageSerializer(serializers.ModelSerializer):
     class Meta:
-        model = PaymentSchedule
+        model = ExecutionStage
         fields = '__all__'
 
 
+# ── Payments ────────────────────────────────────────────────
+class PaymentMilestoneSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PaymentMilestone
+        fields = '__all__'
+
+
+# ── Quality Checks ──────────────────────────────────────────
+class QualityCheckSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QualityCheck
+        fields = '__all__'
+
+
+# ── Vendors ─────────────────────────────────────────────────
+class VendorSerializer(serializers.ModelSerializer):
+    type_display = serializers.CharField(source='get_vendor_type_display', read_only=True)
+
+    class Meta:
+        model = Vendor
+        fields = '__all__'
+
+
+# ── Project Serializers ─────────────────────────────────────
 class ProjectListSerializer(serializers.ModelSerializer):
-    """Lightweight serializer for project list view."""
-    created_by_name = serializers.SerializerMethodField()
-    team_count = serializers.SerializerMethodField()
+    """Lightweight — for project list tables."""
+    design_owner_name = serializers.SerializerMethodField()
+    site_manager_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
         fields = [
-            'id', 'name', 'client_name', 'project_name', 'unit_no', 'city',
-            'location', 'property_type', 'status', 'progress',
-            'created_by_name', 'team_count', 'created_at',
+            'id', 'name', 'client_name', 'client_phone', 'developer', 'unit_no',
+            'city', 'state', 'area', 'property_type', 'project_type', 'purpose',
+            'interior_style', 'stage', 'progress', 'budget',
+            'start_date', 'target_date',
+            'design_owner_name', 'site_manager_name', 'created_at',
         ]
 
-    def get_created_by_name(self, obj):
-        return obj.created_by.get_full_name() if obj.created_by else ''
+    def get_design_owner_name(self, obj):
+        return obj.design_owner.get_full_name() if obj.design_owner else ''
 
-    def get_team_count(self, obj):
-        return obj.team_members.count()
+    def get_site_manager_name(self, obj):
+        return obj.site_manager.get_full_name() if obj.site_manager else ''
 
 
 class ProjectDetailSerializer(serializers.ModelSerializer):
-    """Full serializer for project detail view."""
-    rooms = ProjectRoomSerializer(many=True, read_only=True)
-    payments = PaymentScheduleSerializer(many=True, read_only=True)
-    estimate_total = serializers.SerializerMethodField()
+    """Full detail — includes all nested data."""
+    design_requirements = DesignRequirementSerializer(many=True, read_only=True)
+    deliverables = ProjectDeliverableSerializer(many=True, read_only=True)
+    measurements = MeasurementSerializer(many=True, read_only=True)
+    material_selections = MaterialSelectionSerializer(many=True, read_only=True)
+    execution_stages = ExecutionStageSerializer(many=True, read_only=True)
+    payment_milestones = PaymentMilestoneSerializer(many=True, read_only=True)
+    quality_checks = QualityCheckSerializer(many=True, read_only=True)
+    estimates_summary = serializers.SerializerMethodField()
+    design_owner_name = serializers.SerializerMethodField()
+    site_manager_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
         fields = '__all__'
 
-    def get_estimate_total(self, obj):
-        return float(obj.estimate_items.aggregate(
-            total=Sum('amount')
-        )['total'] or 0)
+    def get_estimates_summary(self, obj):
+        return [
+            {
+                'id': e.id,
+                'type': e.type,
+                'version': e.version,
+                'status': e.status,
+                'item_count': e.items.count(),
+                'total': float(e.grand_total),
+            }
+            for e in obj.estimates.all()
+        ]
 
+    def get_design_owner_name(self, obj):
+        return obj.design_owner.get_full_name() if obj.design_owner else ''
 
-class ServiceVendorSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ServiceVendor
-        fields = '__all__'
-
-
-class ProductVendorSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ProductVendor
-        fields = '__all__'
-
-
-class ClientSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Client
-        fields = '__all__'
+    def get_site_manager_name(self, obj):
+        return obj.site_manager.get_full_name() if obj.site_manager else ''

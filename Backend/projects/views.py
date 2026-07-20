@@ -1,32 +1,33 @@
 """
 NICARA Projects — Views
+Full CRUD for all project lifecycle resources.
 """
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.db.models import Sum
 
 from .models import (
-    Project, ProjectRoom, EstimateItem, EstimateItemSpec,
-    FurnitureLayout, MoodBoard, MoodBoardImage,
-    PaymentSchedule, ServiceVendor, ProductVendor, Client,
+    Project, DesignRequirement, ProjectDeliverable, Estimate, EstimateItem,
+    Measurement, MaterialSelection, ExecutionStage, PaymentMilestone,
+    QualityCheck, Vendor,
 )
 from .serializers import (
-    ProjectListSerializer, ProjectDetailSerializer, ProjectRoomSerializer,
-    EstimateItemSerializer, EstimateItemWriteSerializer, EstimateItemSpecSerializer,
-    FurnitureLayoutSerializer, MoodBoardSerializer, MoodBoardImageSerializer,
-    PaymentScheduleSerializer, ServiceVendorSerializer, ProductVendorSerializer,
-    ClientSerializer,
+    ProjectListSerializer, ProjectDetailSerializer,
+    DesignRequirementSerializer, ProjectDeliverableSerializer,
+    EstimateSerializer, EstimateListSerializer, EstimateItemSerializer,
+    MeasurementSerializer, MaterialSelectionSerializer,
+    ExecutionStageSerializer, PaymentMilestoneSerializer,
+    QualityCheckSerializer, VendorSerializer,
 )
 
 
 # ── Projects ────────────────────────────────────────────────
 
 class ProjectListCreateView(generics.ListCreateAPIView):
-    """GET /api/projects/ — list all, POST — create new."""
+    """GET /api/projects/ — list, POST — create."""
     queryset = Project.objects.all()
-    filterset_fields = ['status', 'city', 'property_type']
-    search_fields = ['name', 'client_name', 'project_name']
+    filterset_fields = ['stage', 'city', 'property_type', 'project_type']
+    search_fields = ['name', 'client_name', 'developer']
     ordering_fields = ['created_at', 'name', 'progress']
 
     def get_serializer_class(self):
@@ -40,94 +41,66 @@ class ProjectListCreateView(generics.ListCreateAPIView):
 
 class ProjectDetailView(generics.RetrieveUpdateDestroyAPIView):
     """GET/PUT/DELETE /api/projects/{id}/"""
-    queryset = Project.objects.all()
+    queryset = Project.objects.prefetch_related(
+        'design_requirements', 'deliverables', 'measurements',
+        'material_selections', 'execution_stages', 'payment_milestones',
+        'quality_checks', 'estimates__items',
+    )
     serializer_class = ProjectDetailSerializer
 
 
-# ── Rooms ───────────────────────────────────────────────────
+class ProjectDashboardView(APIView):
+    """GET /api/projects/dashboard/ — KPI summary."""
+    def get(self, request):
+        projects = Project.objects.all()
+        stage_counts = {}
+        for stage_val, stage_label in Project.Stage.choices:
+            stage_counts[stage_val] = projects.filter(stage=stage_val).count()
 
-class ProjectRoomListCreateView(generics.ListCreateAPIView):
-    """GET/POST /api/projects/{project_id}/rooms/"""
-    serializer_class = ProjectRoomSerializer
-
-    def get_queryset(self):
-        return ProjectRoom.objects.filter(project_id=self.kwargs['project_id'])
-
-    def perform_create(self, serializer):
-        serializer.save(project_id=self.kwargs['project_id'])
-
-
-# ── Estimate Items ──────────────────────────────────────────
-
-class EstimateItemListCreateView(generics.ListCreateAPIView):
-    """GET/POST /api/projects/{project_id}/estimate/"""
-    filterset_fields = ['area', 'category', 'vendor_type', 'fac_or_site']
-
-    def get_queryset(self):
-        return EstimateItem.objects.filter(
-            project_id=self.kwargs['project_id']
-        ).prefetch_related('specs')
-
-    def get_serializer_class(self):
-        if self.request.method == 'POST':
-            return EstimateItemWriteSerializer
-        return EstimateItemSerializer
-
-    def perform_create(self, serializer):
-        serializer.save(project_id=self.kwargs['project_id'])
-
-
-class EstimateItemDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """GET/PUT/DELETE /api/projects/{project_id}/estimate/{pk}/"""
-    serializer_class = EstimateItemWriteSerializer
-
-    def get_queryset(self):
-        return EstimateItem.objects.filter(project_id=self.kwargs['project_id'])
-
-
-class EstimateItemSpecListCreateView(generics.ListCreateAPIView):
-    """GET/POST /api/projects/{project_id}/estimate/{item_id}/specs/"""
-    serializer_class = EstimateItemSpecSerializer
-
-    def get_queryset(self):
-        return EstimateItemSpec.objects.filter(
-            estimate_item_id=self.kwargs['item_id'],
-            estimate_item__project_id=self.kwargs['project_id'],
+        total_budget = sum(float(p.budget or 0) for p in projects)
+        total_paid = sum(
+            float(pm.amount) for pm in PaymentMilestone.objects.filter(status='paid')
         )
 
-    def perform_create(self, serializer):
-        serializer.save(estimate_item_id=self.kwargs['item_id'])
-
-
-class EstimateSummaryView(APIView):
-    """GET /api/projects/{project_id}/estimate/summary/"""
-
-    def get(self, request, project_id):
-        items = EstimateItem.objects.filter(project_id=project_id)
-        total = items.aggregate(total=Sum('amount'))['total'] or 0
-
-        # Area breakdown
-        area_totals = items.values('area').annotate(
-            area_total=Sum('amount')
-        ).order_by('area')
-
         return Response({
-            'total': float(total),
-            'item_count': items.count(),
-            'area_breakdown': [
-                {'area': a['area'], 'total': float(a['area_total'])}
-                for a in area_totals
-            ],
+            'total_projects': projects.count(),
+            'stage_counts': stage_counts,
+            'total_budget': total_budget,
+            'total_paid': total_paid,
+            'total_pending': total_budget - total_paid,
+            'overdue_payments': PaymentMilestone.objects.filter(status='overdue').count(),
         })
 
 
-# ── Furniture Layouts ───────────────────────────────────────
+# ── Design Requirements ────────────────────────────────────
 
-class FurnitureLayoutListCreateView(generics.ListCreateAPIView):
-    serializer_class = FurnitureLayoutSerializer
+class DesignRequirementListCreateView(generics.ListCreateAPIView):
+    """GET/POST /api/projects/{project_id}/design-requirements/"""
+    serializer_class = DesignRequirementSerializer
 
     def get_queryset(self):
-        return FurnitureLayout.objects.filter(project_id=self.kwargs['project_id'])
+        return DesignRequirement.objects.filter(project_id=self.kwargs['project_id'])
+
+    def perform_create(self, serializer):
+        serializer.save(project_id=self.kwargs['project_id'])
+
+
+class DesignRequirementDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = DesignRequirementSerializer
+
+    def get_queryset(self):
+        return DesignRequirement.objects.filter(project_id=self.kwargs['project_id'])
+
+
+# ── Deliverables (FL, MB, 3D, Renders, WD) ────────────────
+
+class DeliverableListCreateView(generics.ListCreateAPIView):
+    """GET/POST /api/projects/{project_id}/deliverables/?type=furniture_layout"""
+    serializer_class = ProjectDeliverableSerializer
+    filterset_fields = ['type', 'status']
+
+    def get_queryset(self):
+        return ProjectDeliverable.objects.filter(project_id=self.kwargs['project_id'])
 
     def perform_create(self, serializer):
         serializer.save(
@@ -136,66 +109,172 @@ class FurnitureLayoutListCreateView(generics.ListCreateAPIView):
         )
 
 
-# ── Mood Boards ─────────────────────────────────────────────
-
-class MoodBoardListCreateView(generics.ListCreateAPIView):
-    serializer_class = MoodBoardSerializer
+class DeliverableDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = ProjectDeliverableSerializer
 
     def get_queryset(self):
-        return MoodBoard.objects.filter(
+        return ProjectDeliverable.objects.filter(project_id=self.kwargs['project_id'])
+
+
+# ── Estimates ──────────────────────────────────────────────
+
+class EstimateListCreateView(generics.ListCreateAPIView):
+    """GET/POST /api/projects/{project_id}/estimates/"""
+    filterset_fields = ['type', 'status']
+
+    def get_queryset(self):
+        return Estimate.objects.filter(
             project_id=self.kwargs['project_id']
-        ).prefetch_related('images')
+        ).prefetch_related('items')
+
+    def get_serializer_class(self):
+        if self.request.method == 'GET':
+            # Return full data with items
+            return EstimateSerializer
+        return EstimateSerializer
 
     def perform_create(self, serializer):
         serializer.save(project_id=self.kwargs['project_id'])
 
 
-class MoodBoardImageCreateView(generics.CreateAPIView):
-    serializer_class = MoodBoardImageSerializer
-
-
-# ── Payments ────────────────────────────────────────────────
-
-class PaymentScheduleListCreateView(generics.ListCreateAPIView):
-    serializer_class = PaymentScheduleSerializer
+class EstimateDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = EstimateSerializer
 
     def get_queryset(self):
-        return PaymentSchedule.objects.filter(project_id=self.kwargs['project_id'])
+        return Estimate.objects.filter(
+            project_id=self.kwargs['project_id']
+        ).prefetch_related('items')
+
+
+class EstimateItemListCreateView(generics.ListCreateAPIView):
+    """GET/POST /api/projects/{project_id}/estimates/{estimate_id}/items/"""
+    serializer_class = EstimateItemSerializer
+
+    def get_queryset(self):
+        return EstimateItem.objects.filter(
+            estimate_id=self.kwargs['estimate_id'],
+            estimate__project_id=self.kwargs['project_id'],
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(estimate_id=self.kwargs['estimate_id'])
+
+
+class EstimateItemDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = EstimateItemSerializer
+
+    def get_queryset(self):
+        return EstimateItem.objects.filter(
+            estimate_id=self.kwargs['estimate_id'],
+            estimate__project_id=self.kwargs['project_id'],
+        )
+
+
+# ── Measurements ───────────────────────────────────────────
+
+class MeasurementListCreateView(generics.ListCreateAPIView):
+    serializer_class = MeasurementSerializer
+
+    def get_queryset(self):
+        return Measurement.objects.filter(project_id=self.kwargs['project_id'])
 
     def perform_create(self, serializer):
         serializer.save(project_id=self.kwargs['project_id'])
 
 
-# ── Vendors & Clients ──────────────────────────────────────
+class MeasurementDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = MeasurementSerializer
 
-class ServiceVendorListCreateView(generics.ListCreateAPIView):
-    queryset = ServiceVendor.objects.all()
-    serializer_class = ServiceVendorSerializer
-    search_fields = ['name', 'category']
-
-
-class ServiceVendorDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = ServiceVendor.objects.all()
-    serializer_class = ServiceVendorSerializer
+    def get_queryset(self):
+        return Measurement.objects.filter(project_id=self.kwargs['project_id'])
 
 
-class ProductVendorListCreateView(generics.ListCreateAPIView):
-    queryset = ProductVendor.objects.all()
-    serializer_class = ProductVendorSerializer
-    search_fields = ['name', 'category']
+# ── Material Selections ────────────────────────────────────
+
+class MaterialSelectionListCreateView(generics.ListCreateAPIView):
+    serializer_class = MaterialSelectionSerializer
+    filterset_fields = ['category', 'room']
+
+    def get_queryset(self):
+        return MaterialSelection.objects.filter(project_id=self.kwargs['project_id'])
+
+    def perform_create(self, serializer):
+        serializer.save(project_id=self.kwargs['project_id'])
 
 
-class ProductVendorDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = ProductVendor.objects.all()
-    serializer_class = ProductVendorSerializer
+class MaterialSelectionDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = MaterialSelectionSerializer
+
+    def get_queryset(self):
+        return MaterialSelection.objects.filter(project_id=self.kwargs['project_id'])
 
 
-class ClientListCreateView(generics.ListCreateAPIView):
-    queryset = Client.objects.all()
-    serializer_class = ClientSerializer
-    search_fields = ['name', 'email', 'phone']
+# ── Execution Stages ───────────────────────────────────────
+
+class ExecutionStageListCreateView(generics.ListCreateAPIView):
+    serializer_class = ExecutionStageSerializer
+
+    def get_queryset(self):
+        return ExecutionStage.objects.filter(project_id=self.kwargs['project_id'])
+
+    def perform_create(self, serializer):
+        serializer.save(project_id=self.kwargs['project_id'])
 
 
-class ClientDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Client.objects.all()
-    serializer_class = ClientSerializer
+class ExecutionStageDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = ExecutionStageSerializer
+
+    def get_queryset(self):
+        return ExecutionStage.objects.filter(project_id=self.kwargs['project_id'])
+
+
+# ── Payments ───────────────────────────────────────────────
+
+class PaymentMilestoneListCreateView(generics.ListCreateAPIView):
+    serializer_class = PaymentMilestoneSerializer
+
+    def get_queryset(self):
+        return PaymentMilestone.objects.filter(project_id=self.kwargs['project_id'])
+
+    def perform_create(self, serializer):
+        serializer.save(project_id=self.kwargs['project_id'])
+
+
+class PaymentMilestoneDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = PaymentMilestoneSerializer
+
+    def get_queryset(self):
+        return PaymentMilestone.objects.filter(project_id=self.kwargs['project_id'])
+
+
+# ── Quality Checks ─────────────────────────────────────────
+
+class QualityCheckListCreateView(generics.ListCreateAPIView):
+    serializer_class = QualityCheckSerializer
+
+    def get_queryset(self):
+        return QualityCheck.objects.filter(project_id=self.kwargs['project_id'])
+
+    def perform_create(self, serializer):
+        serializer.save(project_id=self.kwargs['project_id'])
+
+
+class QualityCheckDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = QualityCheckSerializer
+
+    def get_queryset(self):
+        return QualityCheck.objects.filter(project_id=self.kwargs['project_id'])
+
+
+# ── Vendors ────────────────────────────────────────────────
+
+class VendorListCreateView(generics.ListCreateAPIView):
+    queryset = Vendor.objects.all()
+    serializer_class = VendorSerializer
+    filterset_fields = ['vendor_type', 'category', 'is_active']
+    search_fields = ['name', 'category', 'contact_person']
+
+
+class VendorDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Vendor.objects.all()
+    serializer_class = VendorSerializer
