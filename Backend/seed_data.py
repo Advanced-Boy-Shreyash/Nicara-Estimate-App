@@ -14,24 +14,25 @@ from accounts.models import User
 from projects.models import (
     Project, DesignRequirement, ProjectDeliverable, Estimate, EstimateItem,
     Measurement, MaterialSelection, ExecutionStage, PaymentMilestone,
-    QualityCheck, Vendor,
+    QualityCheck,
 )
+from vendors.models import Vendor  # moved out of projects into its own app
 
-admin = User.objects.get(username='admin')
+admin = User.objects.filter(role='admin').order_by('id').first() or User.objects.first()
 
 # Also create team members
-nishanth, _ = User.objects.get_or_create(username='nishanth', defaults={
-    'email': 'nishanth@nicara.in', 'first_name': 'Nishanth', 'last_name': 'K',
+nishanth, _ = User.objects.get_or_create(email='nishanth@nicara.in', defaults={
+    'first_name': 'Nishanth', 'last_name': 'K',
     'role': 'designer', 'is_active': True,
 })
-nishanth.set_password('password')
+nishanth.set_password('Passw0rd!2026')
 nishanth.save()
 
-priya, _ = User.objects.get_or_create(username='priya', defaults={
-    'email': 'priya@nicara.in', 'first_name': 'Priya', 'last_name': 'S',
+priya, _ = User.objects.get_or_create(email='priya@nicara.in', defaults={
+    'first_name': 'Priya', 'last_name': 'S',
     'role': 'designer', 'is_active': True,
 })
-priya.set_password('password')
+priya.set_password('Passw0rd!2026')
 priya.save()
 
 # ════════════════════════════════════════════════════════════════
@@ -362,23 +363,9 @@ for area, ct, dt, insp, st, rem in [
         inspector=insp, status=st, remarks=rem,
     )
 
-# Vendors
-vendors = [
-    ("material_supplier", "Raj Timber", "Timber & Plywood", "Rajan", "+91 98111 22233"),
-    ("material_supplier", "D Decor Hub", "Laminates & Veneers", "Deepak", "+91 98222 33344"),
-    ("material_supplier", "Metro Hardware", "Hardware & Fittings", "Mahesh", "+91 98333 44455"),
-    ("material_supplier", "Kitchen World", "Kitchen Accessories", "Kiran", "+91 98444 55566"),
-    ("contractor", "Shree Furniture Works", "Carpentry", "Shyam Sundar", "+91 99555 66677"),
-    ("contractor", "Skyline Interiors", "False Ceiling", "Ravi", "+91 99666 77788"),
-    ("contractor", "PowerTech Electricals", "Electrical", "Prakash", "+91 99777 88899"),
-    ("contractor", "Crystal Glass Works", "Glass & Mirror", "Vijay", "+91 99888 99900"),
-    ("contractor", "ColorPro Painters", "Painting", "Sunil", "+91 99999 00011"),
-]
-for vt, name, cat, cp, ph in vendors:
-    Vendor.objects.get_or_create(name=name, defaults={
-        'vendor_type': vt, 'category': cat, 'contact_person': cp, 'phone': ph,
-        'rating': Decimal('4.2'), 'is_active': True,
-    })
+# Vendors — full supplier/contractor records live in their own seed command.
+from django.core.management import call_command
+call_command('seed_vendors')
 
 print(f"\n✅ Seeded successfully!")
 print(f"   Projects: {Project.objects.count()}")

@@ -3,9 +3,9 @@ NICARA Projects — Admin Configuration
 """
 from django.contrib import admin
 from .models import (
-    Project, DesignRequirement, ProjectDeliverable, Estimate, EstimateItem,
-    Measurement, MaterialSelection, ExecutionStage, PaymentMilestone,
-    QualityCheck, Vendor,
+    BookingForm, Project, DesignRequirement, ProjectDeliverable, Estimate,
+    EstimateItem, Measurement, MaterialSelection, ExecutionStage,
+    PaymentMilestone, QualityCheck,
 )
 
 
@@ -47,13 +47,32 @@ class ProjectDeliverableAdmin(admin.ModelAdmin):
 class EstimateItemInline(admin.TabularInline):
     model = EstimateItem
     extra = 0
+    autocomplete_fields = ['catalog_item']
+    readonly_fields = ['amount']
 
 
 @admin.register(Estimate)
 class EstimateAdmin(admin.ModelAdmin):
-    list_display = ['project', 'type', 'version', 'status', 'created_at']
+    list_display = ['project', 'type', 'version', 'status', 'grand_total_display', 'created_at']
     list_filter = ['type', 'status']
+    search_fields = ['project__name', 'title']
+    readonly_fields = ['sent_at', 'sent_by', 'approved_at', 'approved_by',
+                       'created_by', 'created_at', 'updated_at']
     inlines = [EstimateItemInline]
+
+    @admin.display(description='Grand total')
+    def grand_total_display(self, obj):
+        return f'₹{obj.grand_total:,.2f}'
+
+
+@admin.register(BookingForm)
+class BookingFormAdmin(admin.ModelAdmin):
+    list_display = ['booking_number', 'project', 'booking_date', 'total_value',
+                    'advance_amount', 'advance_received', 'status']
+    list_filter = ['status', 'advance_received', 'payment_mode']
+    search_fields = ['booking_number', 'project__name', 'project__client_name']
+    readonly_fields = ['booking_number', 'balance_due', 'created_by',
+                       'created_at', 'updated_at']
 
 
 @admin.register(Measurement)
@@ -84,10 +103,3 @@ class PaymentMilestoneAdmin(admin.ModelAdmin):
 class QualityCheckAdmin(admin.ModelAdmin):
     list_display = ['project', 'area', 'check_type', 'date', 'inspector', 'status']
     list_filter = ['status']
-
-
-@admin.register(Vendor)
-class VendorAdmin(admin.ModelAdmin):
-    list_display = ['name', 'vendor_type', 'category', 'contact_person', 'phone', 'rating', 'is_active']
-    list_filter = ['vendor_type', 'is_active']
-    search_fields = ['name', 'category']

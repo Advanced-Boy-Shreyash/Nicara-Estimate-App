@@ -13,13 +13,12 @@ frontend/.yarn/*
 !frontend/.yarn/versions
 
 # ── Backend (Django) ────────────────────────────────
-backend/.venv/
-backend/__pycache__/
-backend/*/__pycache__/
-backend/*/*/__pycache__/
-backend/db.sqlite3
-backend/media/
-backend/staticfiles/
+Backend/.venv/
+Backend/venv/
+Backend/db.sqlite3
+Backend/media/
+Backend/staticfiles/
+__pycache__/
 *.pyc
 *.pyo
 

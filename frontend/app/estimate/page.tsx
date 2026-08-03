@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { AuthProvider, useAuth } from "@/lib/auth";
-import { ToastProvider, useToast } from "@/components/ui/Toast";
+import { useAuth } from "@/lib/auth";
+import AppShell from "@/components/auth/AppShell";
+import { useToast } from "@/components/ui/Toast";
 import Avatar from "@/components/ui/Avatar";
 import { SAMPLE_PROJECTS, getProjectTotals } from "@/lib/sampleProjects";
 import type {
@@ -721,5 +722,6 @@ function EstimateAppInner() {
 }
 
 export default function EstimateApp() {
-  return (<AuthProvider><ToastProvider><EstimateAppInner /></ToastProvider></AuthProvider>);
+  // AppShell supplies AuthProvider + ToastProvider and gates on a live session.
+  return (<AppShell><EstimateAppInner /></AppShell>);
 }

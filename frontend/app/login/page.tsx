@@ -1,32 +1,55 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth, AuthProvider } from "@/lib/auth";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 function LoginForm() {
-  const { login } = useAuth();
+  const { login, isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [remember, setRemember] = useState(false);
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
+  const [submitting, setSubmitting] = useState(false);
   const [showPwd, setShowPwd] = useState(false);
+
+  /* Already signed in — skip the form. */
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) router.replace("/estimate");
+  }, [isLoading, isAuthenticated, router]);
+
+  /* Remembered address from the last successful sign-in. localStorage cannot
+     be read while the server prerenders, so this has to land after mount. */
+  useEffect(() => {
+    const last = localStorage.getItem("nicara_last_email");
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time read of an external store
+    if (last) setEmail(last);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) { setError("Please fill in all fields"); return; }
-    setLoading(true);
+    setSubmitting(true);
     setError("");
+    setFieldErrors({});
+
     const result = await login(email, password);
     if (result.success) {
-      router.push("/estimate");
-    } else {
-      setError(result.error || "Login failed");
-      setLoading(false);
+      if (remember) localStorage.setItem("nicara_last_email", email.trim());
+      else localStorage.removeItem("nicara_last_email");
+      router.replace("/estimate");
+      return;
     }
+
+    setError(result.error || "Login failed");
+    setFieldErrors(result.fieldErrors || {});
+    setSubmitting(false);
   };
+
+  const fieldError = (name: string) => fieldErrors[name]?.[0];
 
   return (
     <div className="min-h-screen flex">
@@ -85,23 +108,32 @@ function LoginForm() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} noValidate>
             <div className="mb-4">
-              <label className="block text-[11px] font-bold text-surface-500 uppercase tracking-wider mb-1.5">Email</label>
-              <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com"
-                className="w-full px-4 py-3 border border-surface-300 rounded-xl text-[13px] bg-white text-nicara-dark" autoFocus />
+              <label htmlFor="email" className="block text-[11px] font-bold text-surface-500 uppercase tracking-wider mb-1.5">Email</label>
+              <input id="email" name="email" type="email" autoComplete="username" value={email}
+                onChange={e => setEmail(e.target.value)} placeholder="you@company.com"
+                className={`w-full px-4 py-3 border rounded-xl text-[13px] bg-white text-nicara-dark ${
+                  fieldError("email") ? "border-red-300" : "border-surface-300"
+                }`} autoFocus />
+              {fieldError("email") && <div className="mt-1 text-[11px] text-red-600">{fieldError("email")}</div>}
             </div>
 
             <div className="mb-4">
-              <label className="block text-[11px] font-bold text-surface-500 uppercase tracking-wider mb-1.5">Password</label>
+              <label htmlFor="password" className="block text-[11px] font-bold text-surface-500 uppercase tracking-wider mb-1.5">Password</label>
               <div className="relative">
-                <input type={showPwd ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••"
-                  className="w-full px-4 py-3 border border-surface-300 rounded-xl text-[13px] bg-white text-nicara-dark pr-12" />
+                <input id="password" name="password" type={showPwd ? "text" : "password"} autoComplete="current-password"
+                  value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••"
+                  className={`w-full px-4 py-3 border rounded-xl text-[13px] bg-white text-nicara-dark pr-12 ${
+                    fieldError("password") ? "border-red-300" : "border-surface-300"
+                  }`} />
                 <button type="button" onClick={() => setShowPwd(!showPwd)}
+                  aria-label={showPwd ? "Hide password" : "Show password"}
                   className="absolute right-3 top-1/2 -translate-y-1/2 bg-transparent border-none text-surface-400 cursor-pointer text-sm hover:text-surface-600">
                   {showPwd ? "🙈" : "👁"}
                 </button>
               </div>
+              {fieldError("password") && <div className="mt-1 text-[11px] text-red-600">{fieldError("password")}</div>}
             </div>
 
             <div className="flex justify-between items-center mb-6">
@@ -110,14 +142,16 @@ function LoginForm() {
                   className="w-4 h-4 accent-nicara-gold cursor-pointer" />
                 <span className="text-[12px] text-surface-500">Remember me</span>
               </label>
-              <button type="button" className="text-[12px] text-nicara-gold font-semibold bg-transparent border-none cursor-pointer hover:underline">Forgot password?</button>
+              <Link href="/forgot-password" className="text-[12px] text-nicara-gold font-semibold hover:underline">
+                Forgot password?
+              </Link>
             </div>
 
-            <button type="submit" disabled={loading}
+            <button type="submit" disabled={submitting}
               className={`w-full py-3.5 rounded-xl text-[14px] font-bold border-none cursor-pointer flex items-center justify-center gap-2 ${
-                loading ? "bg-surface-300 text-surface-500 cursor-not-allowed" : "btn-gold"
+                submitting ? "bg-surface-300 text-surface-500 cursor-not-allowed" : "btn-gold"
               }`}>
-              {loading ? <><span className="animate-spin-slow inline-block">⟳</span> Signing in…</> : "Sign In"}
+              {submitting ? <><span className="animate-spin-slow inline-block">⟳</span> Signing in…</> : "Sign In"}
             </button>
           </form>
 
@@ -125,12 +159,6 @@ function LoginForm() {
             <p className="text-[11px] text-surface-400">
               Don&apos;t have an account? Contact your administrator for an invitation.
             </p>
-          </div>
-
-          {/* Demo hint */}
-          <div className="mt-6 p-3 bg-nicara-gold-light border border-nicara-gold/20 rounded-xl">
-            <div className="text-[10px] text-nicara-gold font-bold uppercase tracking-wider mb-1">Demo Mode</div>
-            <div className="text-[11px] text-surface-600">Enter any email and password to sign in. Django REST auth is integrated — connect your backend to enable real authentication.</div>
           </div>
         </div>
       </div>

@@ -15,18 +15,21 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     }
   }, [isLoading, isAuthenticated, router]);
 
-  if (isLoading) {
+  // Covers both the initial hydration and the frame after a session ends,
+  // so protected content is never painted without a live session.
+  if (isLoading || !isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface-50">
         <div className="text-center">
           <div className="text-3xl font-black text-nicara-gold tracking-[0.2em] mb-2">NICARA</div>
-          <div className="text-[11px] text-surface-400 tracking-widest uppercase">Loading…</div>
+          <div className="text-[11px] text-surface-400 tracking-widest uppercase">
+            {isLoading ? "Loading…" : "Redirecting…"}
+          </div>
         </div>
       </div>
     );
   }
 
-  if (!isAuthenticated) return null;
   return <>{children}</>;
 }
 
