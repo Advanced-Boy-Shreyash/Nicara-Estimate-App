@@ -131,13 +131,20 @@ Nicara-Estimate-App/
     │   └── estimate/page.tsx    the whole app shell + project detail tabs
     ├── components/
     │   ├── auth/                AppShell (route guard), AuthCard
-    │   ├── tabs/                one component per project sub-tab
-    │   ├── admin/               IAM + user management
-    │   └── ui/                  shared table / modal / toast primitives
+    │   ├── engagement/          Initial Engagement tabs — all API-backed:
+    │   │                        ClientDetails, DesignRequirements,
+    │   │                        DeliverablesTab, EstimateTab, BookingFormTab
+    │   ├── items/               ItemsPage — catalogue browser + editor
+    │   ├── vendors/             VendorsPage — suppliers and contractors
+    │   ├── admin/               IAM + user management (still mock)
+    │   ├── tabs/                older mock tab components (unused)
+    │   └── ui/                  Modal, Form inputs, States, Toast, Avatar
     └── lib/
         ├── api.ts               every API call + token refresh
+        ├── apiTypes.ts          TypeScript shapes matching the DRF payloads
         ├── auth.tsx             useAuth() session state
-        └── sampleProjects.ts    mock data still used by the UI
+        ├── hooks.ts             useApiData + rupee formatting
+        └── sampleProjects.ts    legacy mock data (no longer rendered)
 ```
 
 ### Which app does what
@@ -281,6 +288,15 @@ that switch on automatically when `DJANGO_DEBUG=False`.
 Invitation and reset emails print to the **console** in development — copy the
 link out of the Django terminal.
 
+### How the frontend talks to it
+
+`lib/api.ts` holds the token store and a fetch wrapper that transparently
+refreshes an expired access token (single-flight, so concurrent requests share
+one refresh) and replays the original request. Responses are typed against
+`lib/apiTypes.ts`, so the shapes in the UI match what Django actually sends.
+`lib/hooks.ts` supplies `useApiData` — loading, error and `reload()` — which
+every screen uses, and `components/auth/AppShell.tsx` guards protected routes.
+
 ---
 
 ## 5. Conventions worth knowing
@@ -314,10 +330,37 @@ cd Backend
 
 ---
 
-## 7. Still to do
+## 7. Demo walkthrough
+
+Everything below is live against the database — no mock data.
+
+1. **Projects** → the list, KPIs and search all come from `/api/projects/`.
+2. Open **Sharma Residence** → **Initial Engagement**:
+   - **Client Details** — edit any field, hit *Save Changes*, reload the page:
+     the value persists.
+   - **Design Requirements** — 16 rows, editable inline. Add or delete rows and
+     *Save Requirements* replaces the grid in one call.
+   - **FL & Mood Board** — version tables; add a version, flip its status.
+   - **Initial Estimate** — v1 is approved and locked. Hit **Duplicate to
+     Revise** → v2 draft → **+ Add from Catalogue**, tick a few items, adjust
+     room and qty, add them. Totals recompute on the server.
+   - **Booking Form** — *Create Booking Form*; it picks up the approved
+     estimate value automatically and issues `BKG-2026-NNNN`. Record the
+     advance, then *Mark Signed*.
+3. **Catalogue → Items** — 28 items grouped by category with rates and ranges.
+   Add or edit one; it appears in the estimate picker immediately.
+4. **Vendors → Material Suppliers / Contractors** — 6 and 7 records. *Edit* opens
+   the full form (GST, PAN, bank, terms, and the supplier- or contractor-only
+   fields). Bad GSTIN or a rating over 5 is rejected by the backend.
+5. **Dashboard** — KPIs and progress bars from `/api/projects/dashboard/`.
+
+## 8. Still to do
 
 - Quote calculation engine (item BOM → cost → margin → rate).
-- Wire the frontend tabs to these endpoints — the UI still renders
-  `lib/sampleProjects.ts` mock data. `lib/api.ts` already has every call ready.
-- Design and Execution phase screens.
-- Procurement and a standalone Clients module (no backend yet).
+- File uploads for deliverables and booking signatures (records exist; storage
+  integration pending).
+- Design/Execution phase screens are **read-only** — measurements, material
+  selections, execution stages, payments and quality render live data but have
+  no edit forms yet.
+- Procurement, standalone Clients, Tasks, Finance and Raw Material screens have
+  no backend module yet and still show a placeholder.

@@ -4,6 +4,12 @@
 // http://localhost:8000/api). Access tokens are short lived; when one expires
 // this layer transparently redeems the refresh token and replays the request.
 
+import type {
+  BookingForm, Deliverable, DeliverableType, DesignRequirement, Estimate,
+  EstimateItem, EstimateListItem, EstimateType, Item, ItemCategory, ItemMeta,
+  Project, ProjectListItem, ProjectMeta, Vendor, VendorMeta,
+} from "@/lib/apiTypes";
+
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
 const ACCESS_KEY = "nicara_token";
@@ -294,45 +300,55 @@ export const projectsApi = {
       Object.entries(params).filter(([, v]) => v) as [string, string][]
     );
     const qs = query.toString();
-    return apiFetch<Paginated<unknown>>(`/projects/${qs ? `?${qs}` : ""}`);
+    return apiFetch<Paginated<ProjectListItem>>(`/projects/${qs ? `?${qs}` : ""}`);
   },
-  get: (id: number) => apiFetch<unknown>(`/projects/${id}/`),
-  create: (data: unknown) =>
-    apiFetch<unknown>("/projects/", {
+  get: (id: number) => apiFetch<Project>(`/projects/${id}/`),
+  create: (data: Partial<Project>) =>
+    apiFetch<Project>("/projects/", {
       method: "POST",
       body: JSON.stringify(data),
     }),
   /** Client Details tab saves here. */
-  update: (id: number, data: unknown) =>
-    apiFetch<unknown>(`/projects/${id}/`, {
+  update: (id: number, data: Partial<Project>) =>
+    apiFetch<Project>(`/projects/${id}/`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
   delete: (id: number) =>
     apiFetch<void>(`/projects/${id}/`, { method: "DELETE" }),
-  dashboard: () => apiFetch<unknown>("/projects/dashboard/"),
+  dashboard: () =>
+    apiFetch<{
+      total_projects: number;
+      stage_counts: Record<string, number>;
+      total_budget: number;
+      total_paid: number;
+      total_pending: number;
+      overdue_payments: number;
+    }>("/projects/dashboard/"),
   /** Stages, property types, estimate statuses, payment modes. */
-  meta: () => apiFetch<unknown>("/projects/meta/"),
+  meta: () => apiFetch<ProjectMeta>("/projects/meta/"),
 };
 
 // ── Initial Engagement: Design Requirements ───────────────────
 
+export type DesignRequirementInput = Omit<DesignRequirement, "id" | "sort_order">;
+
 export const designRequirementsApi = {
   list: (projectId: number) =>
-    apiFetch<Paginated<unknown>>(`/projects/${projectId}/design-requirements/`),
-  create: (projectId: number, data: unknown) =>
-    apiFetch<unknown>(`/projects/${projectId}/design-requirements/`, {
+    apiFetch<Paginated<DesignRequirement>>(`/projects/${projectId}/design-requirements/`),
+  create: (projectId: number, data: Partial<DesignRequirementInput>) =>
+    apiFetch<DesignRequirement>(`/projects/${projectId}/design-requirements/`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
   /** Replace the whole grid in one call. */
-  saveAll: (projectId: number, rows: unknown[]) =>
-    apiFetch<unknown[]>(`/projects/${projectId}/design-requirements/bulk/`, {
+  saveAll: (projectId: number, rows: Partial<DesignRequirementInput>[]) =>
+    apiFetch<DesignRequirement[]>(`/projects/${projectId}/design-requirements/bulk/`, {
       method: "PUT",
       body: JSON.stringify({ rows }),
     }),
-  update: (projectId: number, id: number, data: unknown) =>
-    apiFetch<unknown>(`/projects/${projectId}/design-requirements/${id}/`, {
+  update: (projectId: number, id: number, data: Partial<DesignRequirementInput>) =>
+    apiFetch<DesignRequirement>(`/projects/${projectId}/design-requirements/${id}/`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
@@ -343,17 +359,17 @@ export const designRequirementsApi = {
 // ── Initial Engagement: Deliverables (FL, Mood Board, 3D, …) ──
 
 export const deliverablesApi = {
-  list: (projectId: number, type?: string) =>
-    apiFetch<Paginated<unknown>>(
+  list: (projectId: number, type?: DeliverableType) =>
+    apiFetch<Paginated<Deliverable>>(
       `/projects/${projectId}/deliverables/${type ? `?type=${type}` : ""}`
     ),
-  create: (projectId: number, data: unknown) =>
-    apiFetch<unknown>(`/projects/${projectId}/deliverables/`, {
+  create: (projectId: number, data: Partial<Deliverable>) =>
+    apiFetch<Deliverable>(`/projects/${projectId}/deliverables/`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  update: (projectId: number, id: number, data: unknown) =>
-    apiFetch<unknown>(`/projects/${projectId}/deliverables/${id}/`, {
+  update: (projectId: number, id: number, data: Partial<Deliverable>) =>
+    apiFetch<Deliverable>(`/projects/${projectId}/deliverables/${id}/`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
@@ -363,49 +379,54 @@ export const deliverablesApi = {
 
 // ── Estimates ─────────────────────────────────────────────────
 
+export type EstimateItemInput = Partial<
+  Pick<EstimateItem, "area" | "item" | "description" | "length" | "breadth" |
+       "height" | "unit" | "remarks"> & { qty: number | string; rate: number | string; gst_pct: number | string }
+>;
+
 export const estimatesApi = {
-  list: (projectId: number, type?: string) =>
-    apiFetch<Paginated<unknown>>(
+  list: (projectId: number, type?: EstimateType) =>
+    apiFetch<Paginated<EstimateListItem>>(
       `/projects/${projectId}/estimates/${type ? `?type=${type}` : ""}`
     ),
   get: (projectId: number, estimateId: number) =>
-    apiFetch<unknown>(`/projects/${projectId}/estimates/${estimateId}/`),
-  create: (projectId: number, data: { type: string; title?: string }) =>
-    apiFetch<unknown>(`/projects/${projectId}/estimates/`, {
+    apiFetch<Estimate>(`/projects/${projectId}/estimates/${estimateId}/`),
+  create: (projectId: number, data: { type: EstimateType; title?: string }) =>
+    apiFetch<Estimate>(`/projects/${projectId}/estimates/`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  update: (projectId: number, estimateId: number, data: unknown) =>
-    apiFetch<unknown>(`/projects/${projectId}/estimates/${estimateId}/`, {
+  update: (projectId: number, estimateId: number, data: Partial<Estimate>) =>
+    apiFetch<Estimate>(`/projects/${projectId}/estimates/${estimateId}/`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
 
   // Workflow
   send: (projectId: number, estimateId: number) =>
-    apiFetch<unknown>(`/projects/${projectId}/estimates/${estimateId}/send/`, { method: "POST" }),
+    apiFetch<Estimate>(`/projects/${projectId}/estimates/${estimateId}/send/`, { method: "POST" }),
   approve: (projectId: number, estimateId: number, clientRemarks = "") =>
-    apiFetch<unknown>(`/projects/${projectId}/estimates/${estimateId}/approve/`, {
+    apiFetch<Estimate>(`/projects/${projectId}/estimates/${estimateId}/approve/`, {
       method: "POST",
       body: JSON.stringify({ client_remarks: clientRemarks }),
     }),
   requestRevision: (projectId: number, estimateId: number, clientRemarks: string) =>
-    apiFetch<unknown>(`/projects/${projectId}/estimates/${estimateId}/request-revision/`, {
+    apiFetch<Estimate>(`/projects/${projectId}/estimates/${estimateId}/request-revision/`, {
       method: "POST",
       body: JSON.stringify({ client_remarks: clientRemarks }),
     }),
   /** Copy into a new draft — a revision, or initial → final. */
-  duplicate: (projectId: number, estimateId: number, type?: string) =>
-    apiFetch<unknown>(`/projects/${projectId}/estimates/${estimateId}/duplicate/`, {
+  duplicate: (projectId: number, estimateId: number, type?: EstimateType) =>
+    apiFetch<Estimate>(`/projects/${projectId}/estimates/${estimateId}/duplicate/`, {
       method: "POST",
       body: JSON.stringify(type ? { type } : {}),
     }),
 
   // Line items
   items: (projectId: number, estimateId: number) =>
-    apiFetch<Paginated<unknown>>(`/projects/${projectId}/estimates/${estimateId}/items/`),
-  addItem: (projectId: number, estimateId: number, data: unknown) =>
-    apiFetch<unknown>(`/projects/${projectId}/estimates/${estimateId}/items/`, {
+    apiFetch<Paginated<EstimateItem>>(`/projects/${projectId}/estimates/${estimateId}/items/`),
+  addItem: (projectId: number, estimateId: number, data: EstimateItemInput) =>
+    apiFetch<EstimateItem>(`/projects/${projectId}/estimates/${estimateId}/items/`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
@@ -413,14 +434,14 @@ export const estimatesApi = {
   addFromCatalog: (
     projectId: number,
     estimateId: number,
-    items: { item_id: number; [key: string]: unknown }[]
+    items: ({ item_id: number } & EstimateItemInput)[]
   ) =>
-    apiFetch<unknown>(`/projects/${projectId}/estimates/${estimateId}/items/add-from-catalog/`, {
-      method: "POST",
-      body: JSON.stringify({ items }),
-    }),
-  updateItem: (projectId: number, estimateId: number, itemId: number, data: unknown) =>
-    apiFetch<unknown>(`/projects/${projectId}/estimates/${estimateId}/items/${itemId}/`, {
+    apiFetch<{ detail: string; items: EstimateItem[]; estimate: Estimate }>(
+      `/projects/${projectId}/estimates/${estimateId}/items/add-from-catalog/`,
+      { method: "POST", body: JSON.stringify({ items }) }
+    ),
+  updateItem: (projectId: number, estimateId: number, itemId: number, data: EstimateItemInput) =>
+    apiFetch<EstimateItem>(`/projects/${projectId}/estimates/${estimateId}/items/${itemId}/`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
@@ -433,15 +454,15 @@ export const estimatesApi = {
 // ── Initial Engagement: Booking Form ──────────────────────────
 
 export const bookingApi = {
-  /** 404 until a booking form has been created for the project. */
-  get: (projectId: number) => apiFetch<unknown>(`/projects/${projectId}/booking-form/`),
-  create: (projectId: number, data: unknown = {}) =>
-    apiFetch<unknown>(`/projects/${projectId}/booking-form/`, {
+  /** Throws ApiError with status 404 until a booking form has been created. */
+  get: (projectId: number) => apiFetch<BookingForm>(`/projects/${projectId}/booking-form/`),
+  create: (projectId: number, data: Partial<BookingForm> = {}) =>
+    apiFetch<BookingForm>(`/projects/${projectId}/booking-form/`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  update: (projectId: number, data: unknown) =>
-    apiFetch<unknown>(`/projects/${projectId}/booking-form/`, {
+  update: (projectId: number, data: Partial<BookingForm>) =>
+    apiFetch<BookingForm>(`/projects/${projectId}/booking-form/`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
@@ -449,25 +470,27 @@ export const bookingApi = {
 
 // ── Items catalogue ───────────────────────────────────────────
 
+export type ItemInput = Partial<Omit<Item, "id" | "code" | "category_name" | "category_icon" | "unit_display">>;
+
 export const itemsApi = {
   list: (params: { category?: number; search?: string; room?: string } = {}) => {
     const query = new URLSearchParams();
     if (params.category) query.set("category", String(params.category));
     if (params.search) query.set("search", params.search);
     if (params.room) query.set("default_room", params.room);
-    const qs = query.toString();
-    return apiFetch<Paginated<unknown>>(`/items/${qs ? `?${qs}` : ""}`);
+    query.set("page_size", "200"); // the catalogue is small; fetch it in one go
+    return apiFetch<Paginated<Item>>(`/items/?${query.toString()}`);
   },
-  get: (id: number) => apiFetch<unknown>(`/items/${id}/`),
-  create: (data: unknown) =>
-    apiFetch<unknown>("/items/", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: number, data: unknown) =>
-    apiFetch<unknown>(`/items/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  get: (id: number) => apiFetch<Item>(`/items/${id}/`),
+  create: (data: ItemInput) =>
+    apiFetch<Item>("/items/", { method: "POST", body: JSON.stringify(data) }),
+  update: (id: number, data: ItemInput) =>
+    apiFetch<Item>(`/items/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
   delete: (id: number) => apiFetch<void>(`/items/${id}/`, { method: "DELETE" }),
 
-  categories: () => apiFetch<Paginated<unknown>>("/items/categories/"),
-  createCategory: (data: unknown) =>
-    apiFetch<unknown>("/items/categories/", { method: "POST", body: JSON.stringify(data) }),
+  categories: () => apiFetch<Paginated<ItemCategory>>("/items/categories/"),
+  createCategory: (data: Partial<ItemCategory>) =>
+    apiFetch<ItemCategory>("/items/categories/", { method: "POST", body: JSON.stringify(data) }),
 
   /** Bill of materials for an item — drives future rate build-up. */
   components: (itemId: number) => apiFetch<Paginated<unknown>>(`/items/${itemId}/components/`),
@@ -478,30 +501,31 @@ export const itemsApi = {
     }),
 
   /** Units, calc methods, rooms and categories for the item form. */
-  meta: () => apiFetch<unknown>("/items/meta/"),
+  meta: () => apiFetch<ItemMeta>("/items/meta/"),
 };
 
 // ── Vendors: Material Suppliers & Contractors ─────────────────
 
+export type VendorInput = Partial<
+  Omit<Vendor, "id" | "code" | "type_display" | "trade_display" | "payment_terms_display">
+>;
+
 export const vendorsApi = {
-  list: (params: { search?: string; city?: string; trade?: string } = {}) => {
-    const query = new URLSearchParams(
-      Object.entries(params).filter(([, v]) => v) as [string, string][]
-    );
-    const qs = query.toString();
-    return apiFetch<Paginated<unknown>>(`/vendors/${qs ? `?${qs}` : ""}`);
-  },
-  suppliers: (search?: string) =>
-    apiFetch<Paginated<unknown>>(`/vendors/suppliers/${search ? `?search=${search}` : ""}`),
-  contractors: (search?: string) =>
-    apiFetch<Paginated<unknown>>(`/vendors/contractors/${search ? `?search=${search}` : ""}`),
-  get: (id: number) => apiFetch<unknown>(`/vendors/${id}/`),
-  createSupplier: (data: unknown) =>
-    apiFetch<unknown>("/vendors/suppliers/", { method: "POST", body: JSON.stringify(data) }),
-  createContractor: (data: unknown) =>
-    apiFetch<unknown>("/vendors/contractors/", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: number, data: unknown) =>
-    apiFetch<unknown>(`/vendors/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  suppliers: (search = "") =>
+    apiFetch<Paginated<Vendor>>(
+      `/vendors/suppliers/?page_size=200${search ? `&search=${encodeURIComponent(search)}` : ""}`
+    ),
+  contractors: (search = "") =>
+    apiFetch<Paginated<Vendor>>(
+      `/vendors/contractors/?page_size=200${search ? `&search=${encodeURIComponent(search)}` : ""}`
+    ),
+  get: (id: number) => apiFetch<Vendor>(`/vendors/${id}/`),
+  createSupplier: (data: VendorInput) =>
+    apiFetch<Vendor>("/vendors/suppliers/", { method: "POST", body: JSON.stringify(data) }),
+  createContractor: (data: VendorInput) =>
+    apiFetch<Vendor>("/vendors/contractors/", { method: "POST", body: JSON.stringify(data) }),
+  update: (id: number, data: VendorInput) =>
+    apiFetch<Vendor>(`/vendors/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
   /** Deactivates rather than deletes — history keeps pointing at the vendor. */
   delete: (id: number) => apiFetch<void>(`/vendors/${id}/`, { method: "DELETE" }),
 
@@ -514,7 +538,7 @@ export const vendorsApi = {
   documents: (vendorId: number) => apiFetch<Paginated<unknown>>(`/vendors/${vendorId}/documents/`),
 
   /** Vendor types, trades, payment terms and counts. */
-  meta: () => apiFetch<unknown>("/vendors/meta/"),
+  meta: () => apiFetch<VendorMeta>("/vendors/meta/"),
 };
 
 // NOTE: There is no standalone Clients or Procurement endpoint yet — client
