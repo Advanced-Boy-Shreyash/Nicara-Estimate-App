@@ -15,17 +15,18 @@ const STATUS_OPTIONS = [
   { value: "revision", label: "Revision Required" },
 ];
 
-const STATUS_STYLES: Record<string, { bg: string; text: string; icon: string }> = {
-  pending: { bg: "bg-amber-50 border-amber-200", text: "text-amber-700", icon: "⏳" },
-  approved: { bg: "bg-emerald-50 border-emerald-200", text: "text-emerald-700", icon: "✅" },
-  revision: { bg: "bg-red-50 border-red-200", text: "text-red-700", icon: "↩" },
+const STATUS_STYLES: Record<string, { bg: string; text: string; icon: string; badge: string }> = {
+  pending: { bg: "bg-amber-50", text: "text-amber-700", icon: "⏳", badge: "bg-amber-100 border-amber-200 text-amber-700" },
+  approved: { bg: "bg-emerald-50", text: "text-emerald-700", icon: "✅", badge: "bg-emerald-100 border-emerald-200 text-emerald-700" },
+  revision: { bg: "bg-red-50", text: "text-red-700", icon: "↩", badge: "bg-red-100 border-red-200 text-red-700" },
 };
 
 const ACCEPT_TYPES = ".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.gif,.dwg,.dxf";
 
 /**
  * Initial Engagement → FL & Mood Board.
- * Card-based version list with file upload, download, and view.
+ * Stacked layout: Furniture Layout on top, Mood Board below.
+ * Each has version cards with View/Download/Upload/Approve/Reject + AutoCAD launch.
  */
 export default function DeliverablesTab({
   project, types,
@@ -48,7 +49,8 @@ export default function DeliverablesTab({
 
   return (
     <>
-      <div className={`grid gap-4 ${types.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
+      {/* ── Stacked: one section below the other ── */}
+      <div className="space-y-6">
         {types.map(({ type, title, icon }) => (
           <VersionSection
             key={type}
@@ -120,7 +122,9 @@ export default function DeliverablesTab({
   );
 }
 
-/* ── Card-based version section (master-branch style) ── */
+/* ══════════════════════════════════════════════════════════════════
+   VERSION SECTION — WholeCode.jsx style with approval + AutoCAD
+   ══════════════════════════════════════════════════════════════════ */
 
 function VersionSection({
   title, icon, versions, onAdd, onStatusChange, onDelete, onViewFile,
@@ -133,7 +137,6 @@ function VersionSection({
   onDelete: (id: number, name: string) => void;
   onViewFile: (url: string, name: string) => void;
 }) {
-  // Local file map for uploaded files (client-side only)
   const [fileMap, setFileMap] = useState<Record<number, { url: string; name: string; size: string }>>({});
 
   const handleFileUpload = (id: number, file: File) => {
@@ -146,21 +149,36 @@ function VersionSection({
 
   return (
     <div className="bg-white border border-surface-200 rounded-2xl overflow-hidden">
-      {/* Header */}
-      <div className="flex justify-between items-center px-4 py-3 border-b border-surface-100 bg-surface-50/50">
-        <div className="flex items-center gap-2">
-          <span className="text-[16px]">{icon}</span>
-          <span className="text-[12px] font-bold text-nicara-dark uppercase tracking-wider">{title}</span>
-          <span className="text-[10px] bg-surface-100 text-surface-500 px-2 py-0.5 rounded-full font-semibold">{versions.length}</span>
+      {/* ── Header ── */}
+      <div className="flex justify-between items-center px-5 py-3.5 border-b border-surface-100 bg-nicara-dark">
+        <div className="flex items-center gap-2.5">
+          <span className="text-[18px]">{icon}</span>
+          <div>
+            <div className="text-[13px] font-bold text-white">{title}</div>
+            <div className="text-[10px] text-stone-400">{versions.length} version(s) uploaded</div>
+          </div>
         </div>
-        <button onClick={onAdd}
-          className="flex items-center gap-1 px-3 py-1.5 bg-nicara-gold/10 border border-nicara-gold/30 rounded-lg text-[11px] font-semibold text-nicara-gold cursor-pointer hover:bg-nicara-gold/20">
-          + Add Version
-        </button>
+        <div className="flex items-center gap-2">
+          {/* AutoCAD Launch */}
+          <a href="autocad://" title="Launch AutoCAD"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/20 border border-amber-500/40 rounded-lg text-[11px] font-semibold text-amber-300 no-underline hover:bg-amber-500/30 transition-colors">
+            🚀 Launch AutoCAD
+          </a>
+          {/* Email icon */}
+          <button title="Send via Email"
+            className="w-8 h-8 flex items-center justify-center bg-white/10 border border-white/20 rounded-lg text-white text-[14px] cursor-pointer hover:bg-white/20 transition-colors">
+            ✉️
+          </button>
+          {/* Add version */}
+          <button onClick={onAdd}
+            className="flex items-center gap-1 px-3.5 py-1.5 bg-nicara-gold border-none rounded-lg text-[11px] font-bold text-white cursor-pointer hover:opacity-90 transition-opacity">
+            + Add Version
+          </button>
+        </div>
       </div>
 
-      {/* Version cards */}
-      <div className="p-3 space-y-2.5">
+      {/* ── Version cards ── */}
+      <div className="p-4 space-y-3">
         {versions.map(v => {
           const s = STATUS_STYLES[v.status] || STATUS_STYLES.pending;
           const uploadedFile = fileMap[v.id];
@@ -171,9 +189,14 @@ function VersionSection({
           );
         })}
         {versions.length === 0 && (
-          <div className="text-center py-8 text-surface-400 text-[12px]">
-            <div className="text-2xl mb-2">{icon}</div>
-            No versions uploaded yet. Click <strong>+ Add Version</strong> to get started.
+          <div className="text-center py-10 text-surface-400 text-[12px]">
+            <div className="text-3xl mb-3">{icon}</div>
+            <div className="text-[14px] font-bold text-nicara-dark mb-1">No versions uploaded yet</div>
+            <div className="text-[11px] text-surface-400 mb-3">Upload your first {title.toLowerCase()} version to get started.</div>
+            <button onClick={onAdd}
+              className="px-5 py-2 bg-nicara-gold border-none rounded-xl text-white text-[12px] font-bold cursor-pointer hover:opacity-90">
+              + Upload First Version
+            </button>
           </div>
         )}
       </div>
@@ -181,11 +204,11 @@ function VersionSection({
   );
 }
 
-/* ── Single version card ── */
+/* ── Version card with View/Download/Upload/Approve/Reject ── */
 
 function VersionCard({ v, s, uploadedFile, onStatusChange, onDelete, onViewFile, onFileUpload, title }: {
   v: Deliverable;
-  s: { bg: string; text: string; icon: string };
+  s: { bg: string; text: string; icon: string; badge: string };
   uploadedFile?: { url: string; name: string; size: string };
   onStatusChange: (id: number, status: string) => void;
   onDelete: (id: number, name: string) => void;
@@ -196,74 +219,108 @@ function VersionCard({ v, s, uploadedFile, onStatusChange, onDelete, onViewFile,
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   return (
-    <div className={`border ${s.bg} rounded-xl p-3 transition-all hover:shadow-sm`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2.5 flex-1">
-          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0 ${s.bg} ${s.text}`}>
+    <div className={`border border-surface-200 rounded-xl overflow-hidden transition-all hover:shadow-sm`}>
+      {/* Card header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-surface-50/80">
+        <div className="flex items-center gap-3">
+          <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-[14px] shrink-0 border ${s.badge}`}>
             {s.icon}
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-[12px] font-bold text-nicara-dark">{v.version}</div>
-            <div className="text-[10px] text-surface-400 flex items-center gap-2">
+          <div>
+            <div className="text-[13px] font-bold text-nicara-dark">{v.version}</div>
+            <div className="text-[10px] text-surface-400 flex items-center gap-1.5">
               <span>{v.date}</span>
-              {v.uploaded_by_name && <span>· by {v.uploaded_by_name}</span>}
+              {v.uploaded_by_name && <><span>·</span><span>by {v.uploaded_by_name}</span></>}
             </div>
-            {v.remarks && <div className="text-[10px] text-surface-500 mt-0.5 truncate">{v.remarks}</div>}
           </div>
         </div>
 
-        {/* Status select */}
-        <select value={v.status} onChange={e => onStatusChange(v.id, e.target.value)}
-          className={`text-[10px] px-2 py-1 rounded-lg border ${s.bg} ${s.text} font-semibold cursor-pointer outline-none`}>
-          {STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-
-        <button onClick={() => onDelete(v.id, `${title} ${v.version}`)} title="Remove"
-          className="text-surface-300 hover:text-red-500 bg-transparent border-none cursor-pointer text-[14px] p-0">🗑</button>
+        {/* Status badge */}
+        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${s.badge}`}>
+          {v.status === "approved" ? "✅ Approved" : v.status === "revision" ? "↩ Revision" : "⏳ Pending"}
+        </span>
       </div>
 
-      {/* File section */}
-      <div className="mt-2 pt-2 border-t border-surface-100 flex items-center gap-2 flex-wrap">
-        {/* Upload button */}
-        <input type="file" ref={fileInputRef} accept={ACCEPT_TYPES} className="hidden"
-          onChange={e => { if (e.target.files?.[0]) onFileUpload(v.id, e.target.files[0]); }} />
+      {/* Card body — remarks + file + actions */}
+      <div className="px-4 py-3 space-y-2.5">
+        {v.remarks && (
+          <div className="text-[11px] text-surface-500 bg-surface-50 rounded-lg px-3 py-2">{v.remarks}</div>
+        )}
 
-        {uploadedFile ? (
-          <>
-            <div className="flex items-center gap-1.5 px-2 py-1 bg-white border border-surface-200 rounded-lg">
-              <span className="text-[10px]">📎</span>
-              <span className="text-[10px] font-semibold text-nicara-dark max-w-[120px] truncate">{uploadedFile.name}</span>
+        {/* File section */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <input type="file" ref={fileInputRef} accept={ACCEPT_TYPES} className="hidden"
+            onChange={e => { if (e.target.files?.[0]) onFileUpload(v.id, e.target.files[0]); }} />
+
+          {uploadedFile ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-surface-200 rounded-lg">
+              <span className="text-[11px]">📎</span>
+              <span className="text-[11px] font-semibold text-nicara-dark max-w-[150px] truncate">{uploadedFile.name}</span>
               <span className="text-[9px] text-surface-400">{uploadedFile.size}</span>
             </div>
+          ) : v.file_name ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-surface-200 rounded-lg">
+              <span className="text-[11px]">📎</span>
+              <span className="text-[11px] font-semibold text-nicara-dark max-w-[150px] truncate">{v.file_name}</span>
+            </div>
+          ) : null}
+        </div>
+
+        {/* Action buttons — View, Download, Upload, Approve, Reject, Email, Delete */}
+        <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-surface-100">
+          {/* View */}
+          {uploadedFile && (
             <button onClick={() => onViewFile(uploadedFile.url, uploadedFile.name)}
-              className="px-2 py-1 bg-blue-50 border border-blue-200 rounded-lg text-[10px] font-semibold text-blue-600 cursor-pointer hover:bg-blue-100">
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 border border-blue-200 rounded-lg text-[10px] font-semibold text-blue-600 cursor-pointer hover:bg-blue-100">
               👁 View
             </button>
+          )}
+          {/* Download */}
+          {uploadedFile && (
             <a href={uploadedFile.url} download={uploadedFile.name}
-              className="px-2 py-1 bg-surface-50 border border-surface-200 rounded-lg text-[10px] font-semibold text-surface-600 cursor-pointer hover:bg-surface-100 no-underline">
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-surface-50 border border-surface-200 rounded-lg text-[10px] font-semibold text-surface-600 no-underline hover:bg-surface-100">
               ⬇ Download
             </a>
-          </>
-        ) : (
-          <>
-            {v.file_name ? (
-              <div className="flex items-center gap-1.5 px-2 py-1 bg-white border border-surface-200 rounded-lg">
-                <span className="text-[10px]">📎</span>
-                <span className="text-[10px] font-semibold text-nicara-dark max-w-[120px] truncate">{v.file_name}</span>
-              </div>
-            ) : null}
-            <button onClick={() => fileInputRef.current?.click()}
-              className="px-2 py-1 bg-surface-50 border border-dashed border-surface-300 rounded-lg text-[10px] font-semibold text-surface-500 cursor-pointer hover:border-nicara-gold hover:text-nicara-gold">
-              📤 Upload File
+          )}
+          {/* Upload */}
+          <button onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1 px-2.5 py-1.5 bg-surface-50 border border-dashed border-surface-300 rounded-lg text-[10px] font-semibold text-surface-500 cursor-pointer hover:border-nicara-gold hover:text-nicara-gold">
+            📤 Upload
+          </button>
+
+          <div className="flex-1" />
+
+          {/* Approve */}
+          {v.status !== "approved" && (
+            <button onClick={() => onStatusChange(v.id, "approved")}
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 border border-emerald-200 rounded-lg text-[10px] font-bold text-emerald-700 cursor-pointer hover:bg-emerald-100">
+              ✅ Approve
             </button>
-          </>
-        )}
+          )}
+          {/* Reject */}
+          {v.status !== "revision" && (
+            <button onClick={() => onStatusChange(v.id, "revision")}
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-red-50 border border-red-200 rounded-lg text-[10px] font-bold text-red-600 cursor-pointer hover:bg-red-100">
+              ✕ Reject
+            </button>
+          )}
+          {/* Email */}
+          <button title="Send via Email"
+            className="w-7 h-7 flex items-center justify-center bg-surface-50 border border-surface-200 rounded-lg text-[12px] text-surface-500 cursor-pointer hover:bg-surface-100">
+            ✉️
+          </button>
+          {/* Delete */}
+          <button onClick={() => onDelete(v.id, `${title} ${v.version}`)} title="Remove"
+            className="w-7 h-7 flex items-center justify-center bg-red-50 border border-red-200 rounded-lg text-[12px] text-red-400 cursor-pointer hover:bg-red-100 hover:text-red-600">
+            🗑
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-/* ── Add version modal (with file upload) ── */
+/* ── Add version modal ── */
 
 function AddVersionModal({
   projectId, type, title, onClose, onSaved,

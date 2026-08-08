@@ -283,7 +283,7 @@ export default function DesignRequirements({ project }: { project: Project }) {
         <table className="w-full text-[11px] min-w-[1000px]">
           <thead>
             <tr className="bg-nicara-dark">
-              {["Unit Selection", "L", "B", "H", "Finishing", "Remarks", "Design Ref.", "Actions", "🗑"].map(h => (
+              {["Unit Selection", "L", "B", "H", "Finishing", "Remarks", "Design Ref.", "🗑"].map(h => (
                 <th key={h} className={TH}>{h}</th>
               ))}
             </tr>
@@ -357,7 +357,7 @@ function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage }
     <>
       {/* Room heading */}
       <tr className="bg-nicara-gold/10">
-        <td colSpan={9} className="px-3 py-2">
+        <td colSpan={8} className="px-3 py-2">
           <div className="flex items-center gap-2">
             <span className="text-sm">{roomDef?.icon || "📁"}</span>
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.room}</span>
@@ -440,27 +440,7 @@ function DesignRow({ row, ri, editByRef, removeByRef, onImageUpload, onViewImage
           </button>
         )}
       </td>
-      {/* Actions — AutoCAD + Download + View */}
-      <td className={`px-2 py-1.5 ${BD}`}>
-        <div className="flex items-center gap-1">
-          <a href="autocad://" title="Launch AutoCAD"
-            className="px-1.5 py-0.5 bg-amber-50 border border-amber-300 rounded text-[9px] font-semibold text-amber-700 cursor-pointer hover:bg-amber-100 no-underline">
-            🚀 CAD
-          </a>
-          {row.designImage && (
-            <>
-              <a href={row.designImage} download={`${row.room}_${row.unit}_design`} title="Download"
-                className="px-1.5 py-0.5 bg-surface-50 border border-surface-200 rounded text-[9px] font-semibold text-surface-600 cursor-pointer hover:bg-surface-100 no-underline">
-                ⬇
-              </a>
-              <button onClick={() => onViewImage(row.designImage!)} title="View"
-                className="px-1.5 py-0.5 bg-blue-50 border border-blue-200 rounded text-[9px] font-semibold text-blue-600 cursor-pointer hover:bg-blue-100">
-                👁
-              </button>
-            </>
-          )}
-        </div>
-      </td>
+
       {/* Delete */}
       <td className="px-2 py-1.5 text-center">
         <button onClick={() => removeByRef(row)} title="Remove row"

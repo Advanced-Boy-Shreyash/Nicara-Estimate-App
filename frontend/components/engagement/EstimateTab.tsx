@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ApiError, estimatesApi, itemsApi } from "@/lib/api";
+import { ApiError, designRequirementsApi, estimatesApi, itemsApi } from "@/lib/api";
 import type { Estimate, EstimateItem, EstimateType, Item, Project } from "@/lib/apiTypes";
 import { useApiData, inr, inrExact } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
@@ -29,6 +29,8 @@ export default function EstimateTab({
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [showGenerator, setShowGenerator] = useState(false);
+  const [populating, setPopulating] = useState(false);
 
   const listQuery = useApiData(() => estimatesApi.list(project.id, type), [project.id, type]);
   const versions = useMemo(() => listQuery.data?.results ?? [], [listQuery.data]);
@@ -92,11 +94,10 @@ export default function EstimateTab({
           <span className="text-[11px] font-bold text-surface-500 uppercase tracking-wider">Version</span>
           {versions.map(v => (
             <button key={v.id} onClick={() => setSelectedId(v.id)}
-              className={`px-3 py-1.5 rounded-xl text-[11px] font-semibold border cursor-pointer transition-all ${
-                v.id === activeId
+              className={`px-3 py-1.5 rounded-xl text-[11px] font-semibold border cursor-pointer transition-all ${v.id === activeId
                   ? "bg-nicara-dark text-nicara-gold border-nicara-dark"
                   : "bg-white text-surface-500 border-surface-200 hover:border-surface-300"
-              }`}>
+                }`}>
               v{v.version} · {v.status_display}
             </button>
           ))}
@@ -140,6 +141,61 @@ export default function EstimateTab({
               )}>
               + Blank Line
             </Btn>
+            <Btn variant="ghost" disabled={busy || locked}
+              onClick={() => setShowGenerator(!showGenerator)}>
+              {showGenerator ? "✕ Close Generator" : "🧠 Smart Generator"}
+            </Btn>
+            <Btn variant="ghost" disabled={busy || locked || populating}
+              onClick={async () => {
+                if (!estimate) return;
+                setPopulating(true);
+                setBanner("");
+                try {
+                  const drData = await designRequirementsApi.list(project.id);
+                  const rows = drData.results ?? [];
+                  if (rows.length === 0) {
+                    setBanner("No design requirements found. Add them first.");
+                    setPopulating(false);
+                    return;
+                  }
+                  let added = 0;
+                  for (const row of rows) {
+                    if (!row.unit?.trim()) continue;
+                    // Try to find matching catalogue item
+                    let rate = 0;
+                    let unit = "Sft";
+                    try {
+                      const items = await itemsApi.list({ search: row.unit });
+                      const match = (items.results ?? []).find(
+                        (i: Item) => i.name.toLowerCase().includes(row.unit.toLowerCase())
+                      );
+                      if (match) {
+                        rate = parseFloat(match.default_rate) || 0;
+                        unit = match.unit || "Sft";
+                      }
+                    } catch { /* no match */ }
+                    // Calculate qty from dimensions
+                    const l = parseFloat(row.length) || 1;
+                    const b = parseFloat(row.breadth) || 1;
+                    const h = parseFloat(row.height) || 1;
+                    const qty = Math.round(l * b * 100) / 100; // L×B area
+                    await estimatesApi.addItem(project.id, estimate.id, {
+                      area: row.room,
+                      item: row.unit,
+                      qty, unit, rate, gst_pct: 18,
+                    });
+                    added++;
+                  }
+                  await refresh();
+                  toast.success("Populated", `${added} item(s) from Design Requirements`);
+                } catch (e) {
+                  setBanner(e instanceof ApiError ? e.message : "Failed to populate.");
+                } finally {
+                  setPopulating(false);
+                }
+              }}>
+              {populating ? "Populating…" : "📋 Populate from Design Req"}
+            </Btn>
             <div className="flex-1" />
             {estimate.status === "draft" && (
               <Btn variant="ghost" disabled={busy}
@@ -181,6 +237,21 @@ export default function EstimateTab({
               Approved{estimate.approved_by_name ? ` by ${estimate.approved_by_name}` : ""} — locked for editing.
               Duplicate it to make changes.
             </div>
+          )}
+
+          {/* ── Smart Estimate Generator ── */}
+          {showGenerator && (
+            <SmartEstimateGenerator
+              projectId={project.id}
+              estimateId={estimate.id}
+              disabled={busy || !!locked}
+              onGenerated={async () => {
+                await refresh();
+                setShowGenerator(false);
+                toast.success("Generated", "Estimate items created from material preferences");
+              }}
+              onError={setBanner}
+            />
           )}
 
           <LineItems
@@ -352,7 +423,7 @@ function LineItems({
   };
 
   const val = (item: EstimateItem, key: string) =>
-    (draft[item.id]?.[key] as string) ?? ((item as Record<string, unknown>)[key] as string ?? "");
+    (draft[item.id]?.[key] as string) ?? ((item as unknown as Record<string, string>)[key] ?? "");
 
   const uAreas = useMemo(() => {
     const areas = Array.from(new Set(estimate.items.map(i => i.area).filter(Boolean)));
@@ -580,9 +651,8 @@ function ItemRow({
         {/* Expand toggle */}
         <td className={`px-2 py-1.5 text-center ${BD}`}>
           <button onClick={onToggle}
-            className={`px-2 py-0.5 rounded-md text-[10px] cursor-pointer border ${
-              isOpen ? "bg-nicara-gold/10 border-nicara-gold text-nicara-gold" : "bg-surface-50 border-surface-200 text-surface-500"
-            }`}>
+            className={`px-2 py-0.5 rounded-md text-[10px] cursor-pointer border ${isOpen ? "bg-nicara-gold/10 border-nicara-gold text-nicara-gold" : "bg-surface-50 border-surface-200 text-surface-500"
+              }`}>
             {isOpen ? "▲" : "▼"}
           </button>
         </td>
@@ -825,5 +895,226 @@ function CatalogPicker({
         </div>
       )}
     </Modal>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SMART ESTIMATE GENERATOR — Material preferences → auto-generate
+   ══════════════════════════════════════════════════════════════════ */
+
+const PLYWOOD_OPTIONS = [
+  { label: "Austin Lincoln BWP 16mm", brand: "Austin", model: "Lincoln BWP", thick: "16mm", price: 3520, perUnit: "sheet" },
+  { label: "Austin Lincoln BWP 8mm", brand: "Austin", model: "Lincoln BWP", thick: "8mm", price: 2560, perUnit: "sheet" },
+  { label: "Century BWP 16mm", brand: "Century", model: "BWP Marine", thick: "16mm", price: 3800, perUnit: "sheet" },
+  { label: "Greenply MR 16mm", brand: "Greenply", model: "Green Club MR", thick: "16mm", price: 2800, perUnit: "sheet" },
+  { label: "Kitply BWP 16mm", brand: "Kitply", model: "Kit Club", thick: "16mm", price: 3200, perUnit: "sheet" },
+];
+
+const HARDWARE_OPTIONS = [
+  { label: "Hettich — Onsys Soft Close Hinges", brand: "Hettich", model: "Onsys 0-Crank", unitCost: 260 },
+  { label: "Hettich — Quadro Draw Channels", brand: "Hettich", model: "Quadro 18\" Soft Close", unitCost: 2600 },
+  { label: "Hafele — Full Hardware Set", brand: "Hafele", model: "Matrix Box + H-Box", unitCost: 12000 },
+  { label: "Ebco — Tandem Drawer System", brand: "Ebco", model: "Tandem Drawer", unitCost: 3500 },
+  { label: "Godrej — Locks + Accessories", brand: "Godrej", model: "Nuovo Draw Locks 25mm", unitCost: 650 },
+];
+
+const KITCHEN_ACC_OPTIONS = [
+  { label: "Hettich — Tandem Baskets (4 nos)", brand: "Hettich", model: "Architech Tandem Basket", qty: 4, unitCost: 3650, total: 14600 },
+  { label: "Hafele — Full Modular Kitchen Set", brand: "Hafele", model: "Modular Kitchen Accessories", qty: 1, unitCost: 45000, total: 45000 },
+  { label: "Ebco — Corner Unit + Basket", brand: "Ebco", model: "Corner Magic + Pull-out", qty: 1, unitCost: 8500, total: 8500 },
+  { label: "Hettich — Cutlery + Thali Tray", brand: "Hettich", model: "Cutlery + Thali Tray", qty: 2, unitCost: 850, total: 1700 },
+  { label: "Sincore — Sink & Tap (upto ₹35,000)", brand: "Sincore", model: "Sink & Tap Set", qty: 1, unitCost: 35000, total: 35000 },
+];
+
+const FINISH_OPTIONS = [
+  { label: "Greenlam Laminate — Matt White", brand: "Greenlam", model: "White Matt", finish: "Laminate", pricePerSheet: 3000 },
+  { label: "Greenlam Laminate — Wooden Oak", brand: "Greenlam", model: "Wooden Oak", finish: "Laminate", pricePerSheet: 3000 },
+  { label: "Merino Laminate — Off White", brand: "Merino", model: "Off White", finish: "Laminate", pricePerSheet: 3200 },
+  { label: "Merino Acrylic — High Gloss White", brand: "Merino", model: "High Gloss White", finish: "Acrylic", pricePerSheet: 4500 },
+  { label: "Rehau Acrylic — Champagne", brand: "Rehau", model: "Champagne Gloss", finish: "Acrylic", pricePerSheet: 5200 },
+  { label: "Thermo Laminate — Off White", brand: "Thermo", model: "Off White", finish: "Thermo Laminate", pricePerSheet: 5500 },
+  { label: "Duropal HPL — Anthracite", brand: "Duropal", model: "Anthracite", finish: "HPL", pricePerSheet: 4800 },
+];
+
+function SmartEstimateGenerator({
+  projectId, estimateId, disabled, onGenerated, onError,
+}: {
+  projectId: number;
+  estimateId: number;
+  disabled: boolean;
+  onGenerated: () => Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const [selPlywood, setSelPlywood] = useState("");
+  const [selHardware, setSelHardware] = useState("");
+  const [selKitchenAcc, setSelKitchenAcc] = useState("");
+  const [selFinish, setSelFinish] = useState("");
+  const [generating, setGenerating] = useState(false);
+
+  const canGenerate = selPlywood && selHardware && selKitchenAcc && selFinish;
+
+  const generate = async () => {
+    if (!canGenerate) return;
+    setGenerating(true);
+    try {
+      const ply = PLYWOOD_OPTIONS.find(o => o.label === selPlywood)!;
+      const hw = HARDWARE_OPTIONS.find(o => o.label === selHardware)!;
+      const kac = KITCHEN_ACC_OPTIONS.find(o => o.label === selKitchenAcc)!;
+      const fin = FINISH_OPTIONS.find(o => o.label === selFinish)!;
+
+      // Generate plywood items for common areas
+      const rooms = ["Living Room", "Kitchen", "Master Bedroom", "Bedroom 2", "Bedroom 3"];
+      for (const room of rooms) {
+        const sheets = room === "Kitchen" ? 11 : room === "Master Bedroom" ? 8 : 4;
+        await estimatesApi.addItem(projectId, estimateId, {
+          area: room, item: `Core Material ${ply.thick} BWP Ply - ${ply.brand} ${ply.model}`,
+          qty: sheets, unit: "Sheets", rate: ply.price, gst_pct: 18,
+        });
+      }
+
+      // Hardware items
+      const hwRooms = ["Kitchen", "Master Bedroom", "Bedroom 2", "Living Room"];
+      for (const room of hwRooms) {
+        const qty = room === "Kitchen" ? 20 : room === "Master Bedroom" ? 12 : 6;
+        await estimatesApi.addItem(projectId, estimateId, {
+          area: room, item: `${hw.brand} ${hw.model}`,
+          qty, unit: "Sets", rate: hw.unitCost, gst_pct: 18,
+        });
+      }
+
+      // Kitchen accessories
+      await estimatesApi.addItem(projectId, estimateId, {
+        area: "Kitchen", item: `${kac.brand} ${kac.model}`,
+        qty: kac.qty, unit: "Nos", rate: kac.unitCost, gst_pct: 18,
+      });
+
+      // Finishing for all rooms
+      for (const room of rooms) {
+        const sheets = room === "Kitchen" ? 6 : room === "Master Bedroom" ? 4 : 2;
+        await estimatesApi.addItem(projectId, estimateId, {
+          area: room, item: `Finishing ${fin.finish} - ${fin.brand} ${fin.model}`,
+          qty: sheets, unit: "Sheets", rate: fin.pricePerSheet, gst_pct: 18,
+        });
+      }
+
+      await onGenerated();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Failed to generate estimate.");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const ddCls = "w-full px-3 py-2.5 border rounded-xl text-[11px] outline-none cursor-pointer transition-colors";
+
+  return (
+    <div className="mb-4 bg-gradient-to-br from-nicara-dark to-[#2a1f18] rounded-2xl overflow-hidden border border-stone-700">
+      {/* Header */}
+      <div className="px-5 py-3 border-b border-stone-700">
+        <div className="text-[14px] font-bold text-white flex items-center gap-2">
+          <span className="text-lg">🧠</span> Smart Estimate Generator
+        </div>
+        <div className="text-[11px] text-stone-400 mt-0.5">
+          Select your material preferences — we&apos;ll generate the estimate automatically
+        </div>
+      </div>
+
+      {/* Material preference selectors */}
+      <div className="grid grid-cols-4 gap-3 p-5">
+        {/* Plywood */}
+        <div>
+          <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
+            <span>🪵</span> Plywood
+          </div>
+          <select value={selPlywood} onChange={e => setSelPlywood(e.target.value)}
+            className={`${ddCls} ${selPlywood ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
+            <option className="text-gray-500 bg-white" value="">Select plywood…</option>
+            {PLYWOOD_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
+          </select>
+          {selPlywood && (() => {
+            const o = PLYWOOD_OPTIONS.find(p => p.label === selPlywood);
+            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.price.toLocaleString()}/{o.perUnit}</div> : null;
+          })()}
+        </div>
+
+        {/* Hardware */}
+        <div>
+          <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
+            <span>🔩</span> Hardware
+          </div>
+          <select value={selHardware} onChange={e => setSelHardware(e.target.value)}
+            className={`${ddCls} ${selHardware ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
+            <option className="text-gray-500 bg-white" value="">Select hardware…</option>
+            {HARDWARE_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
+          </select>
+          {selHardware && (() => {
+            const o = HARDWARE_OPTIONS.find(p => p.label === selHardware);
+            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.unitCost.toLocaleString()}/set</div> : null;
+          })()}
+        </div>
+
+        {/* Kitchen Accessories */}
+        <div>
+          <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
+            <span>🍳</span> Kitchen Acc.
+          </div>
+          <select value={selKitchenAcc} onChange={e => setSelKitchenAcc(e.target.value)}
+            className={`${ddCls} ${selKitchenAcc ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
+            <option className="text-gray-500 bg-white" value="">Select kitchen accessories…</option>
+            {KITCHEN_ACC_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
+          </select>
+          {selKitchenAcc && (() => {
+            const o = KITCHEN_ACC_OPTIONS.find(p => p.label === selKitchenAcc);
+            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.total.toLocaleString()} total</div> : null;
+          })()}
+        </div>
+
+        {/* Finishing */}
+        <div>
+          <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
+            <span>✨</span> Finishing
+          </div>
+          <select value={selFinish} onChange={e => setSelFinish(e.target.value)}
+            className={`${ddCls} ${selFinish ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
+            <option className="text-gray-500 bg-white" value="">Select finish…</option>
+            {FINISH_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
+          </select>
+          {selFinish && (() => {
+            const o = FINISH_OPTIONS.find(p => p.label === selFinish);
+            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.pricePerSheet.toLocaleString()}/sheet</div> : null;
+          })()}
+        </div>
+      </div>
+
+      {/* Selected preferences summary */}
+      {(selPlywood || selHardware || selKitchenAcc || selFinish) && (
+        <div className="px-5 pb-2">
+          <div className="flex flex-wrap gap-1.5">
+            {[["🪵 Plywood", selPlywood], ["🔩 Hardware", selHardware],
+            ["🍳 Kitchen", selKitchenAcc], ["✨ Finish", selFinish]].map(([label, val]) =>
+              val ? (
+                <span key={label as string} className="px-2.5 py-1 bg-nicara-gold/10 border border-nicara-gold/30 rounded-full text-[9px] font-semibold text-nicara-gold">
+                  {label}: {(val as string).split("—")[0]?.trim() || val}
+                </span>
+              ) : null
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Generate button */}
+      <div className="px-5 py-3 border-t border-stone-700 flex items-center justify-between">
+        {canGenerate ? (
+          <button onClick={generate} disabled={disabled || generating}
+            className="px-6 py-2.5 bg-nicara-gold border-none rounded-xl text-white text-[12px] font-bold cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50">
+            {generating ? "⏳ Generating Estimate…" : "⚡ Generate Estimate"}
+          </button>
+        ) : (
+          <div className="text-[11px] text-stone-500">
+            Select all 4 material preferences above to enable estimate generation
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
