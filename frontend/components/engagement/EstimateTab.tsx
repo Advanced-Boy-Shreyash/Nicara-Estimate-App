@@ -9,13 +9,12 @@ import Modal from "@/components/ui/Modal";
 import { Btn } from "@/components/ui/Form";
 import { EmptyState, ErrorState, InlineError, Loading, StatusPill } from "@/components/ui/States";
 
-const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[12px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
+const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
+const TH = "px-2 py-2 text-stone-200 font-semibold text-[10px] text-left whitespace-nowrap border-r border-stone-700";
 
 /**
  * Initial / Intermediate / Final Estimate tab.
- *
- * Line totals and the grand total are always whatever the server just
- * returned — the UI never does its own money maths.
+ * Line totals and the grand total are always whatever the server just returned.
  */
 export default function EstimateTab({
   project, type, title,
@@ -29,11 +28,10 @@ export default function EstimateTab({
   const [banner, setBanner] = useState("");
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const listQuery = useApiData(() => estimatesApi.list(project.id, type), [project.id, type]);
   const versions = useMemo(() => listQuery.data?.results ?? [], [listQuery.data]);
-
-  // Default to the newest version until the user picks another.
   const activeId = selectedId ?? versions[0]?.id ?? null;
 
   const detailQuery = useApiData(
@@ -115,6 +113,21 @@ export default function EstimateTab({
 
       {estimate && (
         <>
+          {/* ── Prominent Total Bar (master-style dark) ── */}
+          <div className="bg-nicara-dark rounded-xl p-3 px-5 mb-4 flex justify-between items-center flex-wrap gap-2.5">
+            <div>
+              <div className="text-[10px] text-surface-500 uppercase tracking-wider mb-0.5">{title}</div>
+              <div className="text-2xl font-extrabold text-nicara-gold">{inrExact(estimate.grand_total)}</div>
+              <div className="text-[11px] text-surface-500">{estimate.item_count} items · inc GST</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setImporting(true)} disabled={busy || !!locked}
+                className="flex items-center gap-1.5 px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-[11px] font-semibold cursor-pointer hover:bg-white/20 transition-colors">
+                📥 Import
+              </button>
+            </div>
+          </div>
+
           {/* Actions */}
           <div className="flex items-center gap-2 mb-4 flex-wrap">
             <Btn onClick={() => setPicking(true)} disabled={busy || locked}>+ Add from Catalogue</Btn>
@@ -195,11 +208,113 @@ export default function EstimateTab({
           }}
         />
       )}
+
+      {importing && estimate && (
+        <ImportModal
+          onClose={() => setImporting(false)}
+          onImported={async () => {
+            setImporting(false);
+            await refresh();
+            toast.success("Imported", "Items added from file");
+          }}
+          projectId={project.id}
+          estimateId={estimate.id}
+        />
+      )}
     </div>
   );
 }
 
-/* ── Line items table ─────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════
+   IMPORT MODAL — download template + upload CSV
+   ══════════════════════════════════════════════════════════════════ */
+
+function ImportModal({ onClose, onImported, projectId, estimateId }: {
+  onClose: () => void;
+  onImported: () => void;
+  projectId: number;
+  estimateId: number;
+}) {
+  const downloadTemplate = () => {
+    const headers = "Area,Category,Sub Category,Item,Qty,Unit,Rate,GST%";
+    const sample = [
+      "Kitchen,Cabinetry,Base Unit,Kitchen Base Unit - Laminate,1,Nos,45000,18",
+      "Kitchen,Hardware,Hinges,Box Hinges Hettich Onsys,6,Sets,260,18",
+      "Master Bedroom,Cabinetry,Wardrobe,3 Door Wardrobe,1,Nos,120000,18",
+    ];
+    const csv = [headers, ...sample].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "estimate_import_template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const lines = text.trim().split("\n").slice(1); // skip header
+    for (const line of lines) {
+      const cols = line.split(",");
+      if (cols.length < 8) continue;
+      try {
+        await estimatesApi.addItem(projectId, estimateId, {
+          area: cols[0]?.trim() || "",
+          item: cols[3]?.trim() || "Imported Item",
+          qty: parseFloat(cols[4]) || 1,
+          unit: cols[5]?.trim() || "Nos",
+          rate: parseFloat(cols[6]) || 0,
+          gst_pct: parseFloat(cols[7]) || 18,
+        });
+      } catch { /* skip bad rows */ }
+    }
+    onImported();
+  };
+
+  return (
+    <Modal open onClose={onClose} size="md" title="📥 Import Estimate Items"
+      subtitle="Download the template, fill it in, then upload the CSV."
+      footer={<Btn variant="ghost" onClick={onClose}>Close</Btn>}>
+
+      {/* Sample format preview */}
+      <div className="mb-4">
+        <div className="text-[10px] font-bold text-surface-500 uppercase tracking-wider mb-2">Sample Format</div>
+        <div className="border border-surface-200 rounded-xl overflow-hidden">
+          <table className="w-full text-[10px]">
+            <thead><tr className="bg-surface-100">
+              {["Area", "Category", "Sub Cat", "Item", "Qty", "Unit", "Rate", "GST%"].map(h =>
+                <th key={h} className="px-2 py-1.5 text-surface-500 font-semibold text-left">{h}</th>
+              )}
+            </tr></thead>
+            <tbody>
+              <tr className="border-t border-surface-100"><td className="px-2 py-1">Kitchen</td><td className="px-2 py-1">Cabinetry</td><td className="px-2 py-1">Base Unit</td><td className="px-2 py-1 font-semibold">Kitchen Base Unit</td><td className="px-2 py-1">1</td><td className="px-2 py-1">Nos</td><td className="px-2 py-1">45,000</td><td className="px-2 py-1">18%</td></tr>
+              <tr className="border-t border-surface-100 bg-surface-50"><td className="px-2 py-1">M.Bed</td><td className="px-2 py-1">Cabinetry</td><td className="px-2 py-1">Wardrobe</td><td className="px-2 py-1 font-semibold">3 Door Wardrobe</td><td className="px-2 py-1">1</td><td className="px-2 py-1">Nos</td><td className="px-2 py-1">1,20,000</td><td className="px-2 py-1">18%</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="flex gap-3">
+        <button onClick={downloadTemplate}
+          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-surface-50 border border-surface-200 rounded-xl text-[12px] font-semibold text-nicara-dark cursor-pointer hover:bg-surface-100 transition-colors">
+          ⬇ Download Template
+        </button>
+        <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-nicara-gold/10 border border-nicara-gold/30 rounded-xl text-[12px] font-semibold text-nicara-gold cursor-pointer hover:bg-nicara-gold/20 transition-colors">
+          📤 Upload CSV
+          <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleUpload} />
+        </label>
+      </div>
+    </Modal>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   LINE ITEMS TABLE — master-branch style with cell borders,
+   area grouping, collapsible details, Category/SubCat, no serial #
+   ══════════════════════════════════════════════════════════════════ */
 
 function LineItems({
   project, estimate, locked, busy, onChanged, onError,
@@ -211,7 +326,9 @@ function LineItems({
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
 }) {
-  const [draft, setDraft] = useState<Record<number, Partial<EstimateItem>>>({});
+  const [draft, setDraft] = useState<Record<number, Record<string, unknown>>>({});
+  const [fArea, setFArea] = useState("All");
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
   const commit = async (item: EstimateItem) => {
     const changes = draft[item.id];
@@ -234,85 +351,294 @@ function LineItems({
     }
   };
 
-  const value = (item: EstimateItem, key: keyof EstimateItem) =>
-    (draft[item.id]?.[key] as string) ?? (item[key] as string);
+  const val = (item: EstimateItem, key: string) =>
+    (draft[item.id]?.[key] as string) ?? ((item as Record<string, unknown>)[key] as string ?? "");
+
+  const uAreas = useMemo(() => {
+    const areas = Array.from(new Set(estimate.items.map(i => i.area).filter(Boolean)));
+    return ["All", ...areas.sort()];
+  }, [estimate.items]);
+
+  const filtered = useMemo(() => {
+    if (fArea === "All") return estimate.items;
+    return estimate.items.filter(i => i.area === fArea);
+  }, [estimate.items, fArea]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, EstimateItem[]>();
+    filtered.forEach(item => {
+      const area = item.area || "Uncategorized";
+      if (!map.has(area)) map.set(area, []);
+      map.get(area)!.push(item);
+    });
+    return Array.from(map.entries()).map(([area, items]) => ({
+      area,
+      items,
+      subtotal: items.reduce((s, i) => s + parseFloat(i.amount || "0"), 0),
+    }));
+  }, [filtered]);
 
   if (estimate.items.length === 0) {
     return (
       <EmptyState icon="🧾" title="No line items yet"
-        hint="Use “Add from Catalogue” to pull in items with their standard rates." />
+        hint={'Use "Add from Catalogue" to pull in items with their standard rates.'} />
     );
   }
 
+  const ddCls = "px-2.5 py-1.5 border border-surface-200 rounded-lg text-[11px] outline-none bg-white cursor-pointer focus:border-nicara-gold";
+
   return (
-    <div className="bg-white border border-surface-200 rounded-2xl overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-[12px]">
+    <div>
+      {/* ── Filter Bar ── */}
+      <div className="flex gap-2 flex-wrap mb-3 p-2.5 px-3.5 bg-white border border-surface-200 rounded-xl items-center">
+        <span className="text-[11px] font-bold text-surface-400 uppercase tracking-wider mr-1">Filter:</span>
+        <select value={fArea} onChange={e => setFArea(e.target.value)} className={ddCls}>
+          {uAreas.map(o => <option key={o} value={o}>{o === "All" ? "All Areas" : o}</option>)}
+        </select>
+        {fArea !== "All" && (
+          <button onClick={() => setFArea("All")}
+            className="px-2.5 py-1 bg-transparent border border-surface-200 rounded-md text-[11px] text-surface-400 cursor-pointer hover:bg-surface-50">✕ Clear</button>
+        )}
+        <span className="ml-auto text-[11px] text-surface-400">{filtered.length}/{estimate.items.length} items</span>
+      </div>
+
+      {/* ── Table (master-branch styling) ── */}
+      <div className="overflow-x-auto border border-surface-200 rounded-xl">
+        <table className="w-full text-[11px] min-w-[1100px]">
           <thead>
             <tr className="bg-nicara-dark">
-              {["#", "Area", "Item & Description", "L", "B", "H", "Qty", "Unit", "Rate", "Amount", "GST", ""].map(h => (
-                <th key={h} className="px-3 py-2.5 text-surface-300 font-semibold text-left text-[10px] uppercase tracking-wider whitespace-nowrap">{h}</th>
+              {["Area", "Category", "Sub Cat", "Item", "L", "B", "H", "Qty", "Unit", "Rate", "Amount", "GST", "▼", "🗑"].map(h => (
+                <th key={h} className={TH}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {estimate.items.map(item => (
-              <tr key={item.id} className="border-b border-surface-100 hover:bg-surface-50">
-                <td className="px-3 py-2 text-surface-400 font-mono">{item.sno}</td>
-                <td className="px-2 py-2 min-w-[130px]">
-                  <EditableCell locked={locked} value={value(item, "area")}
-                    onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], area: v } }))}
-                    onCommit={() => commit(item)} placeholder="Room" />
-                </td>
-                <td className="px-2 py-2 min-w-[240px]">
-                  <EditableCell locked={locked} value={value(item, "item")} bold
-                    onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], item: v } }))}
-                    onCommit={() => commit(item)} placeholder="Item name" />
-                  <EditableCell locked={locked} value={value(item, "description")} small
-                    onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], description: v } }))}
-                    onCommit={() => commit(item)} placeholder="Description" />
-                  {item.catalog_item_code && (
-                    <div className="px-2 text-[9px] text-surface-300 font-mono">{item.catalog_item_code}</div>
-                  )}
-                </td>
-                {(["length", "breadth", "height"] as const).map(dim => (
-                  <td key={dim} className="px-2 py-2 w-[70px]">
-                    <EditableCell locked={locked} value={value(item, dim)} mono
-                      onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], [dim]: v } }))}
-                      onCommit={() => commit(item)} placeholder="—" />
-                  </td>
-                ))}
-                <td className="px-2 py-2 w-[70px]">
-                  <EditableCell locked={locked} value={value(item, "qty")} mono type="number"
-                    onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], qty: v } }))}
-                    onCommit={() => commit(item)} />
-                </td>
-                <td className="px-2 py-2 w-[70px]">
-                  <EditableCell locked={locked} value={value(item, "unit")}
-                    onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], unit: v } }))}
-                    onCommit={() => commit(item)} />
-                </td>
-                <td className="px-2 py-2 w-[100px]">
-                  <EditableCell locked={locked} value={value(item, "rate")} mono type="number"
-                    onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], rate: v } }))}
-                    onCommit={() => commit(item)} />
-                </td>
-                <td className="px-3 py-2 font-bold text-nicara-dark whitespace-nowrap">{inr(item.amount)}</td>
-                <td className="px-3 py-2 text-surface-500 whitespace-nowrap">{parseFloat(item.gst_pct)}%</td>
-                <td className="px-3 py-2 text-right">
-                  {!locked && (
-                    <button onClick={() => remove(item)} disabled={busy} title="Remove line"
-                      className="text-surface-300 hover:text-red-500 bg-transparent border-none cursor-pointer text-[13px]">✕</button>
-                  )}
-                </td>
-              </tr>
+            {grouped.map(group => (
+              <GroupBlock
+                key={group.area}
+                group={group}
+                locked={locked}
+                busy={busy}
+                val={val}
+                setDraft={setDraft}
+                commit={commit}
+                remove={remove}
+                expanded={expanded}
+                setExpanded={setExpanded}
+              />
             ))}
+            {/* Grand total footer */}
+            <tr className="bg-nicara-dark">
+              <td colSpan={10} className="p-2.5 text-stone-200 font-bold text-right text-xs">
+                GRAND TOTAL ({filtered.length} items)
+              </td>
+              <td className="p-2.5 text-nicara-gold font-extrabold text-right font-mono text-[14px]">
+                {inr(String(grouped.reduce((s, g) => s + g.subtotal, 0)))}
+              </td>
+              <td className="bg-nicara-dark" colSpan={3} />
+            </tr>
           </tbody>
         </table>
       </div>
     </div>
   );
 }
+
+/* ── Area group block with header + rows + expandable details ── */
+
+function GroupBlock({
+  group, locked, busy, val, setDraft, commit, remove, expanded, setExpanded,
+}: {
+  group: { area: string; items: EstimateItem[]; subtotal: number };
+  locked: boolean;
+  busy: boolean;
+  val: (item: EstimateItem, key: string) => string;
+  setDraft: React.Dispatch<React.SetStateAction<Record<number, Record<string, unknown>>>>;
+  commit: (item: EstimateItem) => Promise<void>;
+  remove: (item: EstimateItem) => Promise<void>;
+  expanded: Record<number, boolean>;
+  setExpanded: React.Dispatch<React.SetStateAction<Record<number, boolean>>>;
+}) {
+  const BD = "border-r border-surface-200";
+  return (
+    <>
+      {/* Area header */}
+      <tr className="bg-nicara-gold/10">
+        <td colSpan={14} className="px-3 py-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.area}</span>
+            <span className="text-[10px] text-surface-400">{group.items.length} item(s)</span>
+            <span className="text-[10px] font-semibold text-nicara-gold ml-auto">{inr(String(group.subtotal))}</span>
+          </div>
+        </td>
+      </tr>
+      {/* Item rows */}
+      {group.items.map((item, ri) => {
+        const isOpen = expanded[item.id];
+        return (
+          <ItemRow
+            key={item.id}
+            item={item}
+            ri={ri}
+            isOpen={isOpen}
+            locked={locked}
+            busy={busy}
+            val={val}
+            setDraft={setDraft}
+            commit={commit}
+            remove={remove}
+            onToggle={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))}
+            BD={BD}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+/* ── Single item row + collapsible detail sub-table ── */
+
+function ItemRow({
+  item, ri, isOpen, locked, busy, val, setDraft, commit, remove, onToggle, BD,
+}: {
+  item: EstimateItem;
+  ri: number;
+  isOpen: boolean;
+  locked: boolean;
+  busy: boolean;
+  val: (item: EstimateItem, key: string) => string;
+  setDraft: React.Dispatch<React.SetStateAction<Record<number, Record<string, unknown>>>>;
+  commit: (item: EstimateItem) => Promise<void>;
+  remove: (item: EstimateItem) => Promise<void>;
+  onToggle: () => void;
+  BD: string;
+}) {
+  return (
+    <>
+      <tr className={`border-b border-surface-100 ${isOpen ? "bg-nicara-gold/5 border-l-[3px] border-l-nicara-gold" : ri % 2 === 0 ? "bg-white" : "bg-surface-50/50"}`}>
+        {/* Area */}
+        <td className={`px-2 py-1.5 font-semibold text-nicara-dark ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "area")}
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], area: v } }))}
+            onCommit={() => commit(item)} placeholder="Room" />
+        </td>
+        {/* Category */}
+        <td className={`px-2 py-1.5 ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "category") || ""}
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], category: v } }))}
+            onCommit={() => commit(item)} placeholder="Category" />
+        </td>
+        {/* Sub Cat */}
+        <td className={`px-2 py-1.5 ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "subcategory") || ""}
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], subcategory: v } }))}
+            onCommit={() => commit(item)} placeholder="Sub Cat" />
+        </td>
+        {/* Item */}
+        <td className={`px-2 py-1.5 font-semibold text-nicara-dark ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "item")} bold
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], item: v } }))}
+            onCommit={() => commit(item)} placeholder="Item name" />
+          {item.catalog_item_code && (
+            <div className="px-2 text-[9px] text-surface-300 font-mono">{item.catalog_item_code}</div>
+          )}
+        </td>
+        {/* L B H */}
+        {(["length", "breadth", "height"] as const).map(dim => (
+          <td key={dim} className={`px-2 py-1.5 w-[55px] ${BD}`}>
+            <EditableCell locked={locked} value={val(item, dim)} mono
+              onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], [dim]: v } }))}
+              onCommit={() => commit(item)} placeholder="—" />
+          </td>
+        ))}
+        {/* Qty */}
+        <td className={`px-2 py-1.5 w-[55px] text-right font-mono ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "qty")} mono type="number"
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], qty: v } }))}
+            onCommit={() => commit(item)} />
+        </td>
+        {/* Unit */}
+        <td className={`px-2 py-1.5 w-[55px] ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "unit")}
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], unit: v } }))}
+            onCommit={() => commit(item)} />
+        </td>
+        {/* Rate */}
+        <td className={`px-2 py-1.5 w-[80px] text-right font-mono ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "rate")} mono type="number"
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], rate: v } }))}
+            onCommit={() => commit(item)} />
+        </td>
+        {/* Amount */}
+        <td className={`px-2 py-1.5 text-right font-bold text-nicara-gold font-mono whitespace-nowrap ${BD}`}>
+          {inr(item.amount)}
+        </td>
+        {/* GST */}
+        <td className={`px-2 py-1.5 text-center text-surface-500 ${BD}`}>
+          {parseFloat(item.gst_pct)}%
+        </td>
+        {/* Expand toggle */}
+        <td className={`px-2 py-1.5 text-center ${BD}`}>
+          <button onClick={onToggle}
+            className={`px-2 py-0.5 rounded-md text-[10px] cursor-pointer border ${
+              isOpen ? "bg-nicara-gold/10 border-nicara-gold text-nicara-gold" : "bg-surface-50 border-surface-200 text-surface-500"
+            }`}>
+            {isOpen ? "▲" : "▼"}
+          </button>
+        </td>
+        {/* Delete */}
+        <td className="px-2 py-1.5 text-center">
+          {!locked && (
+            <button onClick={() => remove(item)} disabled={busy} title="Delete row"
+              className="bg-transparent border-none text-red-300 cursor-pointer text-[14px] p-0 hover:text-red-500 transition-colors">🗑</button>
+          )}
+        </td>
+      </tr>
+      {/* Collapsible detail row */}
+      {isOpen && (
+        <tr>
+          <td colSpan={14} className="p-0">
+            <div className="bg-amber-50 border-l-[3px] border-l-nicara-gold px-4 py-3">
+              <div className="text-[10px] font-bold text-amber-800 mb-2">📋 Item Breakdown — {val(item, "item")}</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[10px] min-w-[700px] border border-amber-200 rounded-lg overflow-hidden">
+                  <thead>
+                    <tr className="bg-amber-100">
+                      {["Type", "Specification", "Brand", "Model", "Qty", "Unit", "Price", "Cost", "GST%", "Total"].map(h => (
+                        <th key={h} className="px-2 py-1.5 text-amber-800 font-semibold text-left text-[9px] uppercase">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-t border-amber-200">
+                      <td className="px-2 py-1.5 text-surface-500">Procurement</td>
+                      <td className="px-2 py-1.5 font-semibold">{val(item, "item")}</td>
+                      <td className="px-2 py-1.5 text-surface-500">—</td>
+                      <td className="px-2 py-1.5 text-surface-500">—</td>
+                      <td className="px-2 py-1.5 font-mono">{val(item, "qty") || 1}</td>
+                      <td className="px-2 py-1.5">{val(item, "unit") || "Nos"}</td>
+                      <td className="px-2 py-1.5 font-mono">{inr(val(item, "rate") || "0")}</td>
+                      <td className="px-2 py-1.5 font-mono">{inr(item.amount)}</td>
+                      <td className="px-2 py-1.5">{parseFloat(item.gst_pct)}%</td>
+                      <td className="px-2 py-1.5 font-bold text-nicara-gold font-mono">{inr(item.amount)}</td>
+                    </tr>
+                    <tr className="border-t border-amber-200 text-surface-400 italic">
+                      <td colSpan={10} className="px-2 py-1.5 text-[9px]">
+                        Detail breakdown will be auto-populated when linked to catalogue items with BOMs.
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/* ── Editable cell ─────────────────────────────────────────────── */
 
 function EditableCell({
   value, onChange, onCommit, locked, placeholder, mono, bold, small, type = "text",

@@ -33,13 +33,17 @@ class Project(models.Model):
         COMPLETED = 'completed', 'Completed'
 
     class PropertyType(models.TextChoices):
-        BHK1 = '1BHK', '1 BHK'
-        BHK2 = '2BHK', '2 BHK'
-        BHK3 = '3BHK', '3 BHK'
-        BHK4 = '4BHK', '4 BHK'
-        VILLA = 'Villa', 'Villa'
+        # ["1BHK Apartment", "2BHK Apartment", "3BHK Apartment", "4BHK Apartment", "Independent Villa", "Duplex", "Penthouse", "Row House", "Commercial Office", "Commercial Retail"]
+        BHK1 = '1BHK Apartment', '1 BHK Apartment'
+        BHK2 = '2BHK Apartment', '2 BHK Apartment'
+        BHK3 = '3BHK Apartment', '3BHK Apartment'
+        BHK4 = '4BHK Apartment', '4BHK Apartment'
+        VILLA = 'Independent Villa', 'Independent Villa'
+        DUPLEX = 'Duplex', 'Duplex'
         PENTHOUSE = 'Penthouse', 'Penthouse'
-        COMMERCIAL = 'Commercial', 'Commercial'
+        ROW_HOUSE = 'Row House', 'Row House'
+        COMMERCIAL_OFFICE = 'Commercial Office', 'Commercial Office'
+        COMMERCIAL_RETAIL = 'Commercial Retail', 'Commercial Retail'
         OTHER = 'Other', 'Other'
 
     class ProjectType(models.TextChoices):

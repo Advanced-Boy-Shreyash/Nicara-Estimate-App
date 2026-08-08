@@ -10,6 +10,7 @@ import { ApiError, projectsApi } from "@/lib/api";
 import type { Project, ProjectListItem, ProjectMeta } from "@/lib/apiTypes";
 import { useApiData, inr, inrExact } from "@/lib/hooks";
 import { Btn, Field, Select, TextArea } from "@/components/ui/Form";
+import { INTERIOR_STYLES } from "@/lib/constants";
 import { EmptyState, ErrorState, Loading, StatusPill } from "@/components/ui/States";
 import VendorsPage from "@/components/vendors/VendorsPage";
 import ItemsPage from "@/components/items/ItemsPage";
@@ -99,7 +100,7 @@ function Sidebar({ view, setView, selectedProject, setSelectedProject }: {
    PROJECTS LIST — live from /api/projects/
    ═══════════════════════════════════════════════════════════════ */
 function ProjectsList({ onOpen, onNewLead }: { onOpen: (id: number) => void; onNewLead: () => void }) {
-  const [tab, setTab] = useState<"all" | "lead" | "design" | "execution">("all");
+  const [tab, setTab] = useState<"ongoing" | "completed" | "all" | "lead" | "design" | "execution">("ongoing");
   const [search, setSearch] = useState("");
   const { data, loading, error, reload } = useApiData(
     () => projectsApi.list({ search: search || undefined }),
@@ -112,6 +113,7 @@ function ProjectsList({ onOpen, onNewLead }: { onOpen: (id: number) => void; onN
   const designs = byStage("design");
   const execs = byStage("execution");
   const completed = byStage("completed");
+  const ongoing = projects.filter(p => p.stage !== "completed");
 
   return (
     <div className="p-6 px-8 animate-fade-in">
@@ -128,8 +130,8 @@ function ProjectsList({ onOpen, onNewLead }: { onOpen: (id: number) => void; onN
 
       <div className="flex items-center justify-between mb-4">
         <div className="flex gap-1 bg-surface-100 rounded-xl p-1">
-          {([["all", "All"], ["lead", "Leads"], ["design", "Design"], ["execution", "Execution"]] as const).map(([k, l]) => (
-            <button key={k} onClick={() => setTab(k)} className={`px-4 py-2 rounded-lg text-[12px] font-semibold border-none cursor-pointer transition-all ${tab === k ? "bg-white text-nicara-dark shadow-sm" : "bg-transparent text-surface-500"}`}>{l}</button>
+          {([["ongoing", "Ongoing"], ["completed", "Completed"], ["all", "All"], ["lead", "Leads"], ["design", "Design"], ["execution", "Execution"]] as const).map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)} className={`px-4 py-2 rounded-lg text-[12px] font-semibold border-none cursor-pointer transition-all ${tab === k ? "bg-white text-nicara-dark shadow-sm" : "bg-transparent text-surface-500"}`}>{l} <span className="text-[9px] ml-0.5 opacity-50">({k === "ongoing" ? ongoing.length : k === "completed" ? completed.length : k === "all" ? projects.length : k === "lead" ? leads.length : k === "design" ? designs.length : execs.length})</span></button>
           ))}
         </div>
         <div className="relative min-w-[250px]"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400 text-sm">🔍</span>
@@ -142,9 +144,16 @@ function ProjectsList({ onOpen, onNewLead }: { onOpen: (id: number) => void; onN
 
       {!loading && !error && (
         <>
-          {(tab === "all" || tab === "design") && <><SectionHead icon="🎨" title="Design Projects" count={designs.length} tone="bg-purple-50 text-purple-700" /><ProjectTable rows={designs} stage="design" onOpen={onOpen} /></>}
-          {(tab === "all" || tab === "execution") && <><SectionHead icon="🏗️" title="Execution Projects" count={execs.length} tone="bg-amber-50 text-amber-700" /><ProjectTable rows={execs} stage="execution" onOpen={onOpen} /></>}
-          {(tab === "all" || tab === "lead") && <><SectionHead icon="🎯" title="Lead Projects" count={leads.length} tone="bg-blue-50 text-blue-700" /><ProjectTable rows={leads} stage="lead" onOpen={onOpen} /></>}
+          {/* Ongoing = all non-completed */}
+          {tab === "ongoing" && <><SectionHead icon="📁" title="Ongoing Projects" count={ongoing.length} tone="bg-nicara-gold/10 text-nicara-gold" /><ProjectTable rows={ongoing} stage="all" onOpen={onOpen} /></>}
+          {/* Completed */}
+          {tab === "completed" && <><SectionHead icon="✅" title="Completed Projects" count={completed.length} tone="bg-green-50 text-green-700" /><ProjectTable rows={completed} stage="completed" onOpen={onOpen} /></>}
+          {/* All */}
+          {tab === "all" && <><SectionHead icon="📁" title="All Projects" count={projects.length} tone="bg-surface-100 text-surface-600" /><ProjectTable rows={projects} stage="all" onOpen={onOpen} /></>}
+          {/* Individual stages */}
+          {tab === "lead" && <><SectionHead icon="🎯" title="Lead Projects" count={leads.length} tone="bg-blue-50 text-blue-700" /><ProjectTable rows={leads} stage="lead" onOpen={onOpen} /></>}
+          {tab === "design" && <><SectionHead icon="🎨" title="Design Projects" count={designs.length} tone="bg-purple-50 text-purple-700" /><ProjectTable rows={designs} stage="design" onOpen={onOpen} /></>}
+          {tab === "execution" && <><SectionHead icon="🏗️" title="Execution Projects" count={execs.length} tone="bg-amber-50 text-amber-700" /><ProjectTable rows={execs} stage="execution" onOpen={onOpen} /></>}
         </>
       )}
     </div>
@@ -192,22 +201,118 @@ function SectionHead({ icon, title, count, tone }: { icon: string; title: string
 /* ═══════════════════════════════════════════════════════════════
    ADD LEAD MODAL — creates a real project
    ═══════════════════════════════════════════════════════════════ */
+
+// Client‑ID generator — prefix + random digits + suffix
+function generateLeadClientId(prefix: string, suffix: string) {
+  const num = Math.floor(10000 + Math.random() * 90000);
+  return `${prefix}${num}${suffix}`;
+}
+
+// Inline Style Picker for the lead modal
+function LeadStylePicker({ selected, onSelect }: { selected: string; onSelect: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const current = INTERIOR_STYLES.find(s => s.id === selected);
+
+  return (
+    <div>
+      {/* Trigger */}
+      <div className="text-[10px] font-bold text-surface-500 uppercase tracking-wider mb-1">Style Preference</div>
+      <button
+        type="button" onClick={() => setOpen(true)}
+        className="w-full px-3 py-2 border border-surface-200 rounded-xl text-[12px] bg-white text-left cursor-pointer flex items-center justify-between hover:border-nicara-gold transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          {current && <span className="text-base">{current.emoji}</span>}
+          <span className="font-semibold text-nicara-dark">{current?.name || "Select style…"}</span>
+        </span>
+        <span className="text-surface-400">▼</span>
+      </button>
+      {/* Selected preview */}
+      {current && (
+        <div className="flex items-center gap-2 mt-2 px-3 py-2 rounded-xl" style={{ background: current.img }}>
+          <span className="text-xl">{current.emoji}</span>
+          <div className="flex-1 min-w-0">
+            <div className="text-[11px] font-bold text-white drop-shadow-md">{current.name}</div>
+            <div className="text-[9px] text-white/70 truncate drop-shadow-md">{current.desc}</div>
+          </div>
+          <div className="flex gap-0.5">
+            {current.palette.map((c, i) => <div key={i} className="w-3 h-3 rounded-full border border-white/40 shadow-sm" style={{ background: c }} />)}
+          </div>
+        </div>
+      )}
+
+      {/* Modal overlay */}
+      {open && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[600]" onClick={() => setOpen(false)}>
+          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-y-auto shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-surface-100 flex justify-between items-center sticky top-0 bg-white z-10">
+              <div>
+                <div className="text-[15px] font-bold text-nicara-dark">Select Interior Style</div>
+                <div className="text-[11px] text-surface-400 mt-0.5">Choose one — it sets the design direction</div>
+              </div>
+              <button onClick={() => setOpen(false)} className="text-xl text-surface-400 bg-transparent border-none cursor-pointer hover:text-nicara-gold">✕</button>
+            </div>
+            <div className="p-5 grid grid-cols-2 gap-3">
+              {INTERIOR_STYLES.map(st => {
+                const isActive = selected === st.id;
+                return (
+                  <div key={st.id} onClick={() => { onSelect(st.id); setOpen(false); }}
+                    className={`rounded-xl border-2 cursor-pointer overflow-hidden transition-all hover:scale-[1.01] ${isActive ? "border-nicara-gold shadow-lg" : "border-surface-200 hover:border-nicara-gold/50"}`}>
+                    <div className="h-16 flex items-center justify-center" style={{ background: st.img }}>
+                      <span className="text-3xl drop-shadow-md">{st.emoji}</span>
+                    </div>
+                    <div className="p-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[12px] font-bold text-nicara-dark">{st.name}</span>
+                        {isActive && <span className="text-[9px] font-bold bg-nicara-gold/15 text-nicara-gold px-1.5 py-0.5 rounded-full">Selected</span>}
+                      </div>
+                      <div className="text-[10px] text-surface-500 leading-relaxed mb-2">{st.desc}</div>
+                      <div className="flex gap-1 mb-1.5">
+                        {st.palette.map((c, ci) => <div key={ci} className="w-4 h-4 rounded-full border border-white shadow-sm" style={{ background: c }} />)}
+                      </div>
+                      <div className="flex gap-1 flex-wrap">
+                        {st.keywords.map(k => <span key={k} className="text-[8px] bg-surface-50 border border-surface-200 text-surface-500 px-1.5 py-0.5 rounded">{k}</span>)}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AddLeadModal({ open, onClose, meta, onCreated }: {
   open: boolean; onClose: () => void; meta: ProjectMeta | null; onCreated: (id: number) => void;
 }) {
   const toast = useToast();
+  // Client ID config
+  const [clientIdPrefix, setClientIdPrefix] = useState("NIC-");
+  const [clientIdSuffix, setClientIdSuffix] = useState("");
+  const [clientId, setClientId] = useState(() => generateLeadClientId("NIC-", ""));
+  const regenerateId = () => setClientId(generateLeadClientId(clientIdPrefix, clientIdSuffix));
+
   const [form, setForm] = useState<Partial<Project>>({
     client_name: "", client_phone: "", client_email: "", client_address: "",
     name: "", developer: "", unit_no: "", city: "", state: "", pincode: "",
-    area: "", property_type: "3BHK", project_type: "Residential", purpose: "Self",
-    stage: "lead", budget: "",
+    area: "", property_type: "3BHK Apartment", project_type: "Residential", purpose: "Self",
+    interior_style: "", stage: "lead", budget: "", start_date: null, target_date: null,
   });
+  const [carpetArea, setCarpetArea] = useState("");
+  const [selfInvestment, setSelfInvestment] = useState("Self");
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [banner, setBanner] = useState("");
   const [saving, setSaving] = useState(false);
 
   const set = <K extends keyof Project>(k: K, v: Project[K]) => setForm(f => ({ ...f, [k]: v }));
   const err = (field: string) => errors[field]?.[0];
+
+  const IC = "w-full px-3 py-2 border border-surface-200 rounded-xl text-[12px] bg-white outline-none focus:border-nicara-gold";
+  const LC = "text-[10px] font-bold text-surface-500 uppercase tracking-wider mb-1";
+  const selectCls = IC + " cursor-pointer";
 
   const submit = async () => {
     if (!form.client_name?.trim() || !form.name?.trim()) {
@@ -234,15 +339,39 @@ function AddLeadModal({ open, onClose, meta, onCreated }: {
   if (!open) return null;
 
   return (
-    <Modal open onClose={onClose} size="md" title="+ Add New Lead" subtitle="Enter client and project details"
+    <Modal open onClose={onClose} size="lg" title="+ Add New Lead" subtitle="Enter client and project details"
       footer={<>
         <Btn variant="ghost" onClick={onClose} disabled={saving}>Cancel</Btn>
         <Btn onClick={submit} disabled={saving}>{saving ? "Creating…" : "Create Lead"}</Btn>
       </>}>
       {banner && <div className="mb-4 px-4 py-2.5 bg-red-50 border border-red-200 rounded-xl text-[12px] text-red-700">{banner}</div>}
 
+      {/* ── Client Section ── */}
       <div className="mb-5">
         <div className="text-[10px] font-bold text-nicara-gold uppercase tracking-[0.12em] mb-2.5 pb-1.5 border-b border-surface-100">Client</div>
+
+        {/* Client ID — auto-generated */}
+        <div className="bg-surface-50 border border-surface-200 rounded-xl p-3 mb-3">
+          <div className={LC}>Client ID (Auto-Generated)</div>
+          <div className="flex items-center gap-2">
+            <div className="flex-1 flex items-center gap-1">
+              <input
+                value={clientIdPrefix} onChange={e => setClientIdPrefix(e.target.value)}
+                placeholder="Prefix" className="w-16 px-2 py-1.5 border border-surface-200 rounded-lg text-[11px] outline-none bg-white text-center font-mono"
+              />
+              <div className="px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-lg text-[12px] text-emerald-800 font-mono font-bold flex-1 text-center">
+                {clientId}
+              </div>
+              <input
+                value={clientIdSuffix} onChange={e => setClientIdSuffix(e.target.value)}
+                placeholder="Suffix" className="w-16 px-2 py-1.5 border border-surface-200 rounded-lg text-[11px] outline-none bg-white text-center font-mono"
+              />
+            </div>
+            <button onClick={regenerateId} className="px-3 py-1.5 bg-nicara-gold/10 border-none rounded-lg text-[10px] text-nicara-gold font-bold cursor-pointer whitespace-nowrap">🔄 Regenerate</button>
+          </div>
+          <div className="text-[9px] text-surface-400 mt-1.5">Customize prefix & suffix, then regenerate. Example: NIC-84321-MUM</div>
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
           <Field label="Name" value={form.client_name ?? ""} onChange={v => set("client_name", v)} required error={err("client_name")} />
           <Field label="Phone" value={form.client_phone ?? ""} onChange={v => set("client_phone", v)} />
@@ -251,7 +380,8 @@ function AddLeadModal({ open, onClose, meta, onCreated }: {
         </div>
       </div>
 
-      <div>
+      {/* ── Project Section ── */}
+      <div className="mb-5">
         <div className="text-[10px] font-bold text-nicara-gold uppercase tracking-[0.12em] mb-2.5 pb-1.5 border-b border-surface-100">Project</div>
         <div className="grid grid-cols-2 gap-3">
           <div className="col-span-2"><Field label="Project Name" value={form.name ?? ""} onChange={v => set("name", v)} required error={err("name")} placeholder="Sharma Residence" /></div>
@@ -259,11 +389,58 @@ function AddLeadModal({ open, onClose, meta, onCreated }: {
           <Field label="Unit No" value={form.unit_no ?? ""} onChange={v => set("unit_no", v)} />
           <Field label="City" value={form.city ?? ""} onChange={v => set("city", v)} />
           <Field label="State" value={form.state ?? ""} onChange={v => set("state", v)} />
-          <Field label="Area" value={form.area ?? ""} onChange={v => set("area", v)} placeholder="1,850 sqft" />
+          <Field label="Super Area (sqft)" value={form.area ?? ""} onChange={v => set("area", v)} placeholder="1,850 sqft" />
+          {/* Carpet Area — local field */}
+          <div>
+            <div className={LC}>Carpet Area (sqft)</div>
+            <input value={carpetArea} onChange={e => setCarpetArea(e.target.value)} placeholder="1,287 sqft" className={IC} />
+          </div>
           <Field label="Budget (₹)" type="number" value={form.budget ?? ""} onChange={v => set("budget", v)} error={err("budget")} />
-          <Select label="Property Type" value={form.property_type ?? ""} onChange={v => set("property_type", v)} options={meta?.property_types ?? []} />
-          <Select label="Purpose" value={form.purpose ?? ""} onChange={v => set("purpose", v)} options={meta?.purposes ?? []} />
+          {/* Start Date */}
+          <div>
+            <div className={LC}>Start Date</div>
+            <input type="date" value={form.start_date ?? ""} onChange={e => set("start_date", e.target.value || null)} className={IC} />
+          </div>
+          {/* End Date */}
+          <div>
+            <div className={LC}>End Date</div>
+            <input type="date" value={form.target_date ?? ""} onChange={e => set("target_date", e.target.value || null)} className={IC} />
+          </div>
         </div>
+      </div>
+
+      {/* ── Classification Section ── */}
+      <div className="mb-5">
+        <div className="text-[10px] font-bold text-nicara-gold uppercase tracking-[0.12em] mb-2.5 pb-1.5 border-b border-surface-100">Classification</div>
+        <div className="grid grid-cols-3 gap-3">
+          {/* Purpose */}
+          <div>
+            <div className={LC}>Purpose</div>
+            <select value={form.project_type ?? "Residential"} onChange={e => set("project_type", e.target.value)} className={selectCls}>
+              {["Residential", "Commercial", "Other"].map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+          {/* Self / Investment */}
+          <div>
+            <div className={LC}>Self / Investment</div>
+            <select value={selfInvestment} onChange={e => setSelfInvestment(e.target.value)} className={selectCls}>
+              {["Self", "Investment", "Both"].map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+          {/* Property Type */}
+          <div>
+            <div className={LC}>Property Type</div>
+            <select value={form.property_type ?? "3BHK Apartment"} onChange={e => set("property_type", e.target.value)} className={selectCls}>
+              {["1BHK Apartment", "2BHK Apartment", "3BHK Apartment", "4BHK Apartment", "Independent Villa", "Duplex", "Penthouse", "Row House", "Commercial Office", "Commercial Retail"].map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Style Preference ── */}
+      <div className="mb-2">
+        <div className="text-[10px] font-bold text-nicara-gold uppercase tracking-[0.12em] mb-2.5 pb-1.5 border-b border-surface-100">Design Direction</div>
+        <LeadStylePicker selected={form.interior_style ?? ""} onSelect={v => set("interior_style", v)} />
       </div>
     </Modal>
   );

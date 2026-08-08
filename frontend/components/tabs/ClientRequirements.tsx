@@ -1,13 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { DEFAULT_ROOMS, INTERIOR_STYLES, WELCOME_EMAIL } from "@/lib/constants";
+import { INTERIOR_STYLES, WELCOME_EMAIL } from "@/lib/constants";
 import { generateClientId } from "@/lib/utils";
-import Card from "@/components/ui/Card";
 import SectionHeader from "@/components/ui/SectionHeader";
 import SendBar from "@/components/ui/SendBar";
-import RefImages from "@/components/ui/RefImages";
-import type { RoomData, ClientFormData } from "@/lib/types";
+import type { ClientFormData } from "@/lib/types";
 
 // ── Style Picker Modal ────────────────────────────────────────
 function StylePickerModal({
@@ -121,51 +119,17 @@ export default function ClientRequirements() {
     startDate: "",
     endDate: "",
     city: "Mumbai",
-    purpose: "Primary Home",
-    use: "Self Use",
-    type: "3BHK",
+    purpose: "Residential",
+    use: "Self",
+    type: "3BHK Apartment",
     style: "contemporary",
     notes: "",
   });
-
-  const [rooms, setRooms] = useState<Record<string, RoomData>>(
-    Object.fromEntries(
-      DEFAULT_ROOMS.map((r) => [
-        r,
-        {
-          selected: [
-            "Foyer",
-            "Living Room",
-            "Dining Room",
-            "Kitchen",
-            "Master Bedroom",
-            "Bedroom 2",
-            "Bedroom 3",
-            "Master Bathroom",
-            "Common Bathroom",
-            "Pooja Room",
-          ].includes(r),
-          req: "",
-        },
-      ])
-    )
-  );
 
   const [showStylePicker, setShowStylePicker] = useState(false);
 
   const upd = (key: keyof ClientFormData, val: string) =>
     setForm((p) => ({ ...p, [key]: val }));
-
-  const toggleRoom = (name: string) =>
-    setRooms((p) => ({
-      ...p,
-      [name]: { ...p[name], selected: !p[name].selected },
-    }));
-
-  const setReq = (name: string, req: string) =>
-    setRooms((p) => ({ ...p, [name]: { ...p[name], req } }));
-
-  const selectedRooms = Object.entries(rooms).filter(([, r]) => r.selected);
 
   const selectedStyle = INTERIOR_STYLES.find((s) => s.id === form.style);
 
@@ -205,17 +169,22 @@ export default function ClientRequirements() {
       {/* Client Details */}
       <SectionHeader title="Client Details" />
       <div className="grid grid-cols-4 gap-3 mb-5">
+        {/* Client ID — auto-generated */}
         <div>
           <div className={labelCls}>Client ID</div>
-          <div className="px-3 py-2 bg-stone-50 border border-nicara-light rounded-lg text-xs text-stone-500 font-mono">
+          <div className="px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 font-mono font-bold">
             {form.clientId}
+            <div className="text-[9px] text-emerald-400 mt-0.5 font-normal">Auto-generated</div>
           </div>
         </div>
         {(
           [
             ["name", "Client Name"],
-            ["phone", "Phone"],
-            ["email", "Email"],
+            ["phone", "Phone Number"],
+            ["email", "Email ID"],
+            ["developer", "Developer Name"],
+            ["project", "Project Name"],
+            ["unit", "Unit No."],
           ] as const
         ).map(([key, lbl]) => (
           <div key={key}>
@@ -223,6 +192,7 @@ export default function ClientRequirements() {
             <input
               value={form[key]}
               onChange={(e) => upd(key, e.target.value)}
+              placeholder={lbl}
               className={inputCls}
             />
           </div>
@@ -234,14 +204,12 @@ export default function ClientRequirements() {
       <div className="grid grid-cols-4 gap-3 mb-5">
         {(
           [
-            ["developer", "Developer"],
-            ["project", "Project Name"],
-            ["unit", "Unit / Flat No"],
-            ["city", "City"],
             ["superArea", "Super Built-up Area (sqft)"],
             ["carpetArea", "Carpet Area (sqft)"],
-            ["budget", "Approx Budget"],
-            ["type", "Property Type"],
+            ["budget", "Budget (₹)"],
+            ["startDate", "Start Date"],
+            ["endDate", "End Date"],
+            ["city", "City"],
           ] as const
         ).map(([key, lbl]) => (
           <div key={key}>
@@ -249,25 +217,27 @@ export default function ClientRequirements() {
             <input
               value={form[key]}
               onChange={(e) => upd(key, e.target.value)}
+              type={key === "startDate" || key === "endDate" ? "date" : "text"}
               className={inputCls}
             />
           </div>
         ))}
-      </div>
-
-      {/* Purpose + Use */}
-      <div className="grid grid-cols-3 gap-3 mb-5">
         {(
           [
             [
               "purpose",
               "Purpose",
-              ["Primary Home", "Second Home", "Rental", "Investment"],
+              ["Residential", "Commercial", "Other"],
             ],
             [
               "use",
-              "Use",
-              ["Self Use", "For Parents", "For Tenants", "Commercial"],
+              "Self / Investment",
+              ["Self", "Investment", "Both"],
+            ],
+            [
+              "type",
+              "Property Type",
+              ["1BHK Apartment", "2BHK Apartment", "3BHK Apartment", "4BHK Apartment", "Independent Villa", "Duplex", "Penthouse", "Row House", "Commercial Office", "Commercial Retail"],
             ],
           ] as const
         ).map(([key, lbl, opts]) => (
@@ -286,10 +256,13 @@ export default function ClientRequirements() {
             </select>
           </div>
         ))}
+      </div>
 
+      {/* Style Preference */}
+      <SectionHeader title="Style Preference" />
+      <div className="grid grid-cols-3 gap-3 mb-5">
         {/* Style picker */}
         <div>
-          <div className={labelCls}>Interior Style</div>
           <button
             onClick={() => setShowStylePicker(true)}
             className="w-full px-3 py-2 border border-nicara-light rounded-lg text-[12px] bg-white text-left cursor-pointer flex items-center justify-between hover:border-nicara-gold transition-colors"
@@ -299,29 +272,26 @@ export default function ClientRequirements() {
                 <span className="text-base">{selectedStyle.emoji}</span>
               )}
               <span className="font-semibold text-nicara-dark">
-                {selectedStyle?.name || "Select…"}
+                {selectedStyle?.name || "Select style…"}
               </span>
             </span>
             <span className="text-stone-400">▼</span>
           </button>
         </div>
-      </div>
-
-      {/* Selected Style Preview */}
-      {selectedStyle && (
-        <Card className="mb-5">
-          <div className="flex items-center gap-3">
+        {/* Selected Style Preview inline */}
+        {selectedStyle && (
+          <div className="col-span-2 flex items-center gap-3 px-3 py-2 bg-nicara-dark rounded-lg">
             <div
-              className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0"
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-lg shrink-0"
               style={{ background: selectedStyle.img }}
             >
               {selectedStyle.emoji}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-bold text-nicara-dark">
+              <div className="text-[12px] font-bold text-nicara-gold">
                 {selectedStyle.name}
               </div>
-              <div className="text-[11px] text-stone-500 mt-0.5 line-clamp-1">
+              <div className="text-[10px] text-stone-500 mt-0.5 line-clamp-1">
                 {selectedStyle.desc}
               </div>
             </div>
@@ -329,88 +299,34 @@ export default function ClientRequirements() {
               {selectedStyle.palette.map((c, ci) => (
                 <div
                   key={ci}
-                  className="w-4 h-4 rounded-full border border-white shadow-sm"
+                  className="w-3.5 h-3.5 rounded-full border border-white/30 shadow-sm"
                   style={{ background: c }}
                 />
               ))}
             </div>
+            <span className="text-[10px] text-stone-500 cursor-pointer" onClick={() => setShowStylePicker(true)}>Change</span>
           </div>
-        </Card>
-      )}
-
-      {/* Room Selection */}
-      <SectionHeader title="Room Selection" />
-      <div className="flex flex-wrap gap-2 mb-5">
-        {DEFAULT_ROOMS.map((r) => {
-          const isOn = rooms[r]?.selected;
-          return (
-            <button
-              key={r}
-              onClick={() => toggleRoom(r)}
-              className={`px-3 py-1.5 rounded-full text-[11px] border cursor-pointer font-semibold transition-all chip ${
-                isOn
-                  ? "bg-nicara-gold/10 border-nicara-gold text-nicara-gold"
-                  : "bg-white border-nicara-light text-stone-500 hover:bg-nicara-cream"
-              }`}
-            >
-              {isOn ? "✓ " : ""}
-              {r}
-            </button>
-          );
-        })}
+        )}
       </div>
 
-      {/* Room Requirements */}
-      {selectedRooms.length > 0 && (
-        <>
-          <SectionHeader title="Room Requirements" />
-          <div className="grid grid-cols-2 gap-3 mb-5">
-            {selectedRooms.map(([name, data]) => (
-              <Card key={name}>
-                <div className="text-xs font-bold text-nicara-dark mb-1.5">
-                  {name}
-                </div>
-                <textarea
-                  value={data.req}
-                  onChange={(e) => setReq(name, e.target.value)}
-                  rows={2}
-                  placeholder={`Requirements for ${name}…`}
-                  className="w-full p-2 border border-nicara-light rounded-lg text-[11px] resize-y outline-none focus:border-nicara-gold"
-                />
-              </Card>
-            ))}
-          </div>
-        </>
-      )}
-
-      {/* Notes */}
+      {/* Additional Notes */}
       <SectionHeader title="Additional Notes" />
       <textarea
         value={form.notes}
         onChange={(e) => upd("notes", e.target.value)}
         rows={3}
-        placeholder="Any additional requirements, preferences, or special instructions…"
+        placeholder="Additional notes, constraints or special requests — budget splits, specific brands, phasing requirements…"
         className="w-full p-3 border border-nicara-light rounded-xl text-xs outline-none focus:border-nicara-gold mb-5 resize-y"
       />
 
-      {/* Floor Plan & References */}
-      <div className="grid grid-cols-2 gap-5">
-        <div>
-          <SectionHeader title="Floor Plan Upload" />
-          <label className="flex items-center justify-center gap-2 py-5 border-2 border-dashed border-nicara-light rounded-xl cursor-pointer hover:border-nicara-gold transition-colors">
-            <span className="text-xl">📐</span>
-            <div>
-              <div className="text-xs font-semibold text-nicara-dark">
-                Upload Floor Plan
-              </div>
-              <div className="text-[10px] text-stone-400">
-                PDF, DWG, or Image
-              </div>
-            </div>
-            <input type="file" className="hidden" />
-          </label>
+      {/* Footer */}
+      <div className="flex justify-between items-center">
+        <div className="text-[11px] text-stone-400">
+          Client ID: <strong className="font-mono text-emerald-700">{form.clientId}</strong>
         </div>
-        <RefImages label="Client Reference Images" />
+        <button className="px-6 py-2.5 bg-nicara-dark border-none rounded-xl text-nicara-cream text-[13px] font-bold cursor-pointer hover:opacity-90 transition-opacity">
+          Save & Proceed →
+        </button>
       </div>
     </div>
   );

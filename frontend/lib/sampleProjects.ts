@@ -4,7 +4,7 @@
  */
 
 // ── Project Stages ──
-export type ProjectStage = "lead" | "design" | "execution";
+export type ProjectStage = "lead" | "design" | "execution" | "completed";
 
 export interface FullProject {
   id: number;
@@ -58,6 +58,7 @@ export interface DesignReqRow {
   finishing: string;
   remarks: string;
   designRequired: boolean;
+  imageUrl?: string;
 }
 
 export interface VersionEntry {
@@ -76,6 +77,8 @@ export interface EstimateRow {
   area: string;
   item: string;
   description: string;
+  category?: string;
+  subcat?: string;
   l: string;
   b: string;
   h: string;
@@ -94,6 +97,10 @@ export interface MeasurementRoom {
   west: string;
   north: string;
   south: string;
+  eastImage?: string;
+  westImage?: string;
+  northImage?: string;
+  southImage?: string;
   other: string;
   proofCheckedBy: string;
   status: "complete" | "pending" | "issue";
@@ -436,6 +443,95 @@ export const SAMPLE_PROJECTS: FullProject[] = [
     executionStages: kapoorExecutionStages,
     paymentSchedule: kapoorPayments,
     qualityChecks: kapoorQualityChecks,
+  },
+  // ════════════════════════════════════════════════════════════
+  // PROJECT 3: Gupta Residence (Completed)
+  // ════════════════════════════════════════════════════════════
+  {
+    id: 3,
+    name: "Gupta Residence",
+    stage: "completed" as ProjectStage,
+    clientName: "Rajesh Gupta",
+    clientPhone: "+91 98765 11111",
+    clientEmail: "rajesh.gupta@email.com",
+    clientAddress: "B-204, Prestige Lakeside, Bangalore",
+    developer: "Prestige Group",
+    unitNo: "B-204",
+    city: "Bangalore",
+    state: "Karnataka",
+    pincode: "560001",
+    type: "Residential",
+    purpose: "Self",
+    interiorStyle: "Scandinavian Minimal",
+    area: "1,800 sqft",
+    projectType: "3BHK Apartment",
+    designOwner: "Meera T",
+    siteManager: "Vikram S",
+    startDate: "2025-11-01",
+    targetDate: "2026-03-31",
+    progress: 100,
+    status: "Completed",
+    budget: "₹22,50,000",
+    designRequirements: [
+      { id: 1, room: "Living Room", unit: "TV Unit", l: "7'0\"", b: "1'2\"", h: "4'0\"", finishing: "Veneer", remarks: "Oak finish", designRequired: true },
+      { id: 2, room: "Master Bedroom", unit: "Wardrobe", l: "8'0\"", b: "2'0\"", h: "8'0\"", finishing: "Laminate", remarks: "Sliding doors", designRequired: true },
+      { id: 3, room: "Kitchen", unit: "Modular Kitchen", l: "12'0\"", b: "2'0\"", h: "7'0\"", finishing: "Acrylic", remarks: "Island counter", designRequired: true },
+    ],
+    furnitureLayouts: [
+      { id: 1, date: "2025-11-15", version: "Ver 1", fileName: "gupta_fl_v1.pdf", uploadedBy: "Meera T", status: "approved", remarks: "Approved" },
+    ],
+    moodBoards: [
+      { id: 1, date: "2025-11-18", version: "Ver 1", fileName: "gupta_mb.pdf", uploadedBy: "Meera T", status: "approved", remarks: "Scandinavian theme approved" },
+    ],
+    initialEstimate: [
+      { id: 1, sno: 1, area: "Living Room", item: "TV Unit", description: "Wall-mounted TV console", l: "7'0\"", b: "1'2\"", h: "4'0\"", qty: 1, unit: "Nos", rate: 45000, amount: 45000, gstPct: 18 },
+      { id: 2, sno: 2, area: "Master Bedroom", item: "Wardrobe", description: "Sliding wardrobe", l: "8'0\"", b: "2'0\"", h: "8'0\"", qty: 1, unit: "Nos", rate: 185000, amount: 185000, gstPct: 18 },
+      { id: 3, sno: 3, area: "Kitchen", item: "Modular Kitchen", description: "Full modular kitchen with island", l: "12'0\"", b: "2'0\"", h: "7'0\"", qty: 1, unit: "Set", rate: 350000, amount: 350000, gstPct: 18 },
+    ],
+    measurements: [
+      { id: 1, room: "Living Room", plan: "✓", east: "18'2\"", west: "18'1\"", north: "14'0\"", south: "14'0\"", other: "Balcony door (S)", proofCheckedBy: "Vikram S", status: "complete" },
+      { id: 2, room: "Master Bedroom", plan: "✓", east: "14'6\"", west: "14'5\"", north: "12'0\"", south: "12'0\"", other: "Window (W)", proofCheckedBy: "Vikram S", status: "complete" },
+    ],
+    models3d: [
+      { id: 1, date: "2025-12-05", version: "Ver 1", fileName: "gupta_3d.jpg", uploadedBy: "Meera T", status: "approved", remarks: "All rooms" },
+    ],
+    intermediateEstimate: [
+      { id: 1, sno: 1, area: "Living Room", item: "TV Unit", description: "Wall-mounted TV console", l: "7'0\"", b: "1'2\"", h: "4'0\"", qty: 1, unit: "Nos", rate: 46000, amount: 46000, gstPct: 18 },
+      { id: 2, sno: 2, area: "Master Bedroom", item: "Wardrobe", description: "Sliding wardrobe", l: "8'0\"", b: "2'0\"", h: "8'0\"", qty: 1, unit: "Nos", rate: 190000, amount: 190000, gstPct: 18 },
+      { id: 3, sno: 3, area: "Kitchen", item: "Modular Kitchen", description: "Full modular kitchen with island", l: "12'0\"", b: "2'0\"", h: "7'0\"", qty: 1, unit: "Set", rate: 360000, amount: 360000, gstPct: 18 },
+    ],
+    renders: [
+      { id: 1, date: "2025-12-20", version: "Ver 1", fileName: "gupta_renders.zip", uploadedBy: "Meera T", status: "approved", remarks: "All approved" },
+    ],
+    materialSelections: [],
+    finalEstimate: [
+      { id: 1, sno: 1, area: "Living Room", item: "TV Unit", description: "Wall-mounted TV console", l: "7'0\"", b: "1'2\"", h: "4'0\"", qty: 1, unit: "Nos", rate: 47000, amount: 47000, gstPct: 18 },
+      { id: 2, sno: 2, area: "Master Bedroom", item: "Wardrobe", description: "Sliding wardrobe", l: "8'0\"", b: "2'0\"", h: "8'0\"", qty: 1, unit: "Nos", rate: 192000, amount: 192000, gstPct: 18 },
+      { id: 3, sno: 3, area: "Kitchen", item: "Modular Kitchen", description: "Full modular kitchen with island", l: "12'0\"", b: "2'0\"", h: "7'0\"", qty: 1, unit: "Set", rate: 365000, amount: 365000, gstPct: 18 },
+    ],
+    finalRenders: [
+      { id: 1, date: "2026-01-10", version: "Final", fileName: "gupta_final_renders.zip", uploadedBy: "Meera T", status: "approved", remarks: "Final approved" },
+    ],
+    workingDrawings: [
+      { id: 1, date: "2026-01-15", version: "Ver 1", fileName: "gupta_wd.dwg", uploadedBy: "Rahul M", status: "approved", remarks: "Complete set" },
+    ],
+    executionStages: [
+      { id: 1, name: "Civil Work", vendor: "BuildPro", startDate: "2026-01-20", endDate: "2026-02-10", status: "completed" as const, progress: 100, payment: 80000, paymentStatus: "paid" as const },
+      { id: 2, name: "Carpentry", vendor: "WoodCraft", startDate: "2026-02-01", endDate: "2026-03-01", status: "completed" as const, progress: 100, payment: 450000, paymentStatus: "paid" as const },
+      { id: 3, name: "Painting", vendor: "ColorMax", startDate: "2026-03-01", endDate: "2026-03-15", status: "completed" as const, progress: 100, payment: 60000, paymentStatus: "paid" as const },
+      { id: 4, name: "Deep Cleaning", vendor: "SparkClean", startDate: "2026-03-20", endDate: "2026-03-25", status: "completed" as const, progress: 100, payment: 15000, paymentStatus: "paid" as const },
+    ],
+    paymentSchedule: [
+      { id: 1, milestone: "Booking Amount", amount: 225000, dueDate: "2025-11-15", paidDate: "2025-11-14", status: "paid" as const, mode: "Bank Transfer", reference: "HDFC-9812" },
+      { id: 2, milestone: "Design Approval", amount: 337500, dueDate: "2025-12-20", paidDate: "2025-12-18", status: "paid" as const, mode: "UPI", reference: "UPI-7654" },
+      { id: 3, milestone: "Material Procurement", amount: 562500, dueDate: "2026-01-15", paidDate: "2026-01-15", status: "paid" as const, mode: "Bank Transfer", reference: "HDFC-1234" },
+      { id: 4, milestone: "Completion & Handover", amount: 1125000, dueDate: "2026-03-31", paidDate: "2026-03-30", status: "paid" as const, mode: "Bank Transfer", reference: "HDFC-5678" },
+    ],
+    qualityChecks: [
+      { id: 1, area: "Living Room", checkType: "Furniture Finish", date: "2026-03-10", inspector: "Vikram S", status: "pass" as const, remarks: "Excellent finish" },
+      { id: 2, area: "Kitchen", checkType: "Hardware Check", date: "2026-03-12", inspector: "Vikram S", status: "pass" as const, remarks: "All fittings perfect" },
+      { id: 3, area: "Master Bedroom", checkType: "Wardrobe Alignment", date: "2026-03-14", inspector: "Vikram S", status: "pass" as const, remarks: "Sliding doors smooth" },
+    ],
   },
 ];
 
