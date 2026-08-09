@@ -3,10 +3,17 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import PagePermission, User
 from vendors.models import Vendor, VendorContact
 
 PASSWORD = 'Str0ng!Passw0rd'
+
+
+def grant(user, module, level='full'):
+    """Give a non-admin test user access to a module in the IAM matrix."""
+    PagePermission.objects.update_or_create(
+        user=user, page_id=module, defaults={'level': level}
+    )
 
 
 class VendorAPITests(APITestCase):
@@ -15,6 +22,8 @@ class VendorAPITests(APITestCase):
             email='designer@nicara.design', password=PASSWORD,
             first_name='Test', last_name='User',
         )
+        grant(self.user, 'vendors_material')
+        grant(self.user, 'vendors_contract')
         self.client.force_authenticate(self.user)
 
         self.supplier = Vendor.objects.create(

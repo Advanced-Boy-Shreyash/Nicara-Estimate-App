@@ -92,6 +92,7 @@ function BookingEditor({
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [banner, setBanner] = useState("");
   const [saving, setSaving] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   const set = <K extends keyof BookingForm>(key: K, value: BookingForm[K]) =>
     setForm(f => ({ ...f, [key]: value }));
@@ -210,6 +211,23 @@ function BookingEditor({
 
       <div className="flex items-center gap-2 mt-5 flex-wrap">
         <Btn onClick={() => save()} disabled={saving}>{saving ? "Saving…" : "Save Booking Form"}</Btn>
+        <Btn variant="ghost" disabled={downloading}
+          onClick={async () => {
+            setDownloading(true);
+            setBanner("");
+            try {
+              await bookingApi.downloadPdf(project.id);
+              toast.success("Downloaded", booking.booking_number);
+            } catch (e) {
+              const msg = e instanceof ApiError ? e.message : "Could not generate the PDF.";
+              setBanner(msg);
+              toast.error("Download failed", msg);
+            } finally {
+              setDownloading(false);
+            }
+          }}>
+          {downloading ? "Preparing…" : "📄 Download PDF"}
+        </Btn>
         {booking.status === "draft" && (
           <Btn variant="ghost" disabled={saving}
             onClick={() => save({ status: "sent" }, "Marked as sent to client")}>

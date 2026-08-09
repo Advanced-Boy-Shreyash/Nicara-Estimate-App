@@ -354,13 +354,98 @@ Everything below is live against the database — no mock data.
    fields). Bad GSTIN or a rating over 5 is rejected by the backend.
 5. **Dashboard** — KPIs and progress bars from `/api/projects/dashboard/`.
 
-## 8. Still to do
+## 8. IAM — module access permissions
+
+Permissions are defined once in `Backend/accounts/modules.py` and used by three
+things, so they cannot drift apart: the `PagePermission` choices, the API
+enforcement, and the matrix the frontend renders.
+
+- **22 modules** across Main, Project Phases, Tasks, Vendors, Customers,
+  Finance, Catalogue and Admin.
+- **Four levels**, ordered: `none < view < edit < full`. Read requests need
+  `view`; writes need `edit`.
+- **Actually enforced.** `HasModulePermission` gates each endpoint — a user
+  with `view` on Items gets `200` on a list and `403` on a create.
+- **Configured by an admin, or by whoever holds it.** `IsAdminOrHasIAM` allows
+  an administrator *or* any user granted `full` on the `iam` module.
+- **Role templates** (admin / designer / supervisor / client) seed a new user's
+  matrix on invite and can be re-applied from the UI.
+- Admins hold every module implicitly — their rows are locked in the matrix.
+- The sidebar hides modules the user cannot reach; the API is still the gate.
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `GET /api/auth/iam/modules/` | Module registry + role templates |
+| `GET /api/auth/iam/my-permissions/` | The signed-in user's own map |
+| `GET / PUT /api/auth/iam/permissions/` | The full matrix |
+| `POST /api/auth/iam/apply-template/` | Reset a user to their role default |
+
+Screen: **Admin → User Permissions**.
+
+## 9. Approvals, versioning and media
+
+**FL & Mood Board** (and 3D, renders, working drawings) are fully versioned:
+
+- `version_no` increments server-side per project + type; `is_current` marks the
+  one live version, and `supersedes` chains them.
+- Workflow: `draft → submit → approve | request-revision`, recording who
+  reviewed it, when, and why. A revision requires remarks.
+- Approving an older version makes it current again.
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `POST …/deliverables/{id}/submit/` | Send for approval |
+| `POST …/deliverables/{id}/approve/` | Approve (becomes the live version) |
+| `POST …/deliverables/{id}/request-revision/` | Send back with remarks |
+
+**Media storage.** Uploads are multipart; `Backend/nicara/media.py` generates a
+400 px thumbnail and a 1600 px preview with Pillow, applies EXIF rotation and
+strips the EXIF block (it carries GPS). Galleries load the derivatives; the
+original stays downloadable. Non-images pass through untouched.
+
+## 10. Exports
+
+Rendered server-side so every copy a client receives is identical, and the
+numbers come from the same code that computes them on screen.
+
+| Endpoint | Output |
+| -------- | ------ |
+| `GET …/estimates/{id}/pdf/` | Quotation PDF — letterhead, items grouped by area, totals, payment schedule, terms, signature block |
+| `GET …/estimates/{id}/excel/` | `.xlsx` with live numbers, GST per line, and a Payment Schedule sheet |
+| `GET …/booking-form/pdf/` | Booking form with agreed value, advance, balance and signature |
+
+Buttons live on the Initial Estimate tab (**📄 PDF**, **📊 Excel**) and the
+Booking Form tab (**📄 Download PDF**).
+
+> The Excel in the repo is the *app layout* spec, not an estimate template, so
+> the export mirrors the on-screen estimate and the existing NICARA quote
+> styling. Send the real estimate template and I will match it exactly.
+
+## 11. Leads & Clients (CRM)
+
+`Backend/crm/` adds the pre-sales pipeline and the customer book.
+
+- **Lead** — 10 stages from New Enquiry through Furniture Layout, Mood Board,
+  Initial Estimate, Decision, Booking, to Won or Closed Lost. Source, priority,
+  owner, follow-up date, and an auto `LD-YYYY-NNNN` code.
+- **Convert** — a won lead creates a Client *and* a Project seeded from the
+  enquiry, then links all three. Converting twice is refused, not duplicated.
+- **Client** — billing details (GSTIN, PAN), auto `CL-` code, and the list of
+  projects attached to them.
+- **CrmNote** — activity log on either; stage changes are logged automatically.
+- Closing a lead as lost requires a reason.
+
+Screens: **Customers → Leads** and **Customers → Clients**.
+
+## 12. Still to do
 
 - Quote calculation engine (item BOM → cost → margin → rate).
-- File uploads for deliverables and booking signatures (records exist; storage
-  integration pending).
 - Design/Execution phase screens are **read-only** — measurements, material
   selections, execution stages, payments and quality render live data but have
   no edit forms yet.
-- Procurement, standalone Clients, Tasks, Finance and Raw Material screens have
-  no backend module yet and still show a placeholder.
+- Tasks, Finance, Raw Material and the Stage/Site masters have no backend
+  module yet and still show a placeholder.
+- Digital signature capture on the booking form (status and signatory are
+  recorded; a drawn/typed signature image is not).
+- Payment-gateway link generation for the booking advance (the field exists and
+  renders in the PDF; nothing generates the URL).

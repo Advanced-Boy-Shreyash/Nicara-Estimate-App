@@ -6,14 +6,17 @@ import AppShell from "@/components/auth/AppShell";
 import { useToast } from "@/components/ui/Toast";
 import Avatar from "@/components/ui/Avatar";
 import Modal from "@/components/ui/Modal";
-import { ApiError, projectsApi } from "@/lib/api";
-import type { Project, ProjectListItem, ProjectMeta } from "@/lib/apiTypes";
+import { ApiError, iamApi, projectsApi } from "@/lib/api";
+import type { MyPermissions, Project, ProjectListItem, ProjectMeta } from "@/lib/apiTypes";
 import { useApiData, inr, inrExact } from "@/lib/hooks";
 import { Btn, Field, Select, TextArea } from "@/components/ui/Form";
 import { INTERIOR_STYLES } from "@/lib/constants";
 import { EmptyState, ErrorState, Loading, StatusPill } from "@/components/ui/States";
 import VendorsPage from "@/components/vendors/VendorsPage";
 import ItemsPage from "@/components/items/ItemsPage";
+import LeadsPage from "@/components/crm/LeadsPage";
+import ClientsPage from "@/components/crm/ClientsPage";
+import IAMMatrix from "@/components/admin/IAMMatrix";
 import ClientDetails from "@/components/engagement/ClientDetails";
 import DesignRequirements from "@/components/engagement/DesignRequirements";
 import DeliverablesTab from "@/components/engagement/DeliverablesTab";
@@ -23,22 +26,33 @@ import BookingFormTab from "@/components/engagement/BookingFormTab";
 /* ═══════════════════════════════════════════════════════════════
    SIDEBAR
    ═══════════════════════════════════════════════════════════════ */
+/**
+ * Nav entries carry the IAM module that gates them. An entry with no `module`
+ * is always visible; anything else is hidden unless the signed-in user holds
+ * at least `view` on that module.
+ */
 const NAV_SECTIONS = [
-  { label: "Main", items: [{ id: "dashboard", icon: "📊", label: "Dashboard" }, { id: "projects", icon: "📁", label: "Projects" }] },
-  { label: "Tasks", items: [{ id: "tasks-planned", icon: "✅", label: "Planned Tasks" }, { id: "tasks-unplanned", icon: "⚡", label: "Unplanned Tasks" }] },
-  { label: "Vendors", items: [{ id: "vendors-material", icon: "🏭", label: "Material Suppliers" }, { id: "vendors-contractors", icon: "👷", label: "Contractors" }] },
-  { label: "Customers", items: [{ id: "customers-leads", icon: "🎯", label: "Leads" }, { id: "customers-clients", icon: "👤", label: "Clients" }] },
-  { label: "Finance", items: [{ id: "finance-transactions", icon: "💳", label: "Transactions" }, { id: "finance-vendor", icon: "📤", label: "Vendor Finance" }, { id: "finance-client", icon: "📥", label: "Client Finance" }] },
-  { label: "Catalogue", items: [{ id: "items-catalogue", icon: "📦", label: "Items" }, { id: "library-raw", icon: "🪵", label: "Raw Material" }, { id: "library-furniture", icon: "🛋️", label: "Furniture & Furnishings" }] },
-  { label: "Admin", items: [{ id: "team-users", icon: "👥", label: "Users & Roles" }, { id: "stages-lead", icon: "📋", label: "Lead Stages" }, { id: "stages-design", icon: "🎨", label: "Design Stages" }, { id: "site-master", icon: "🏗️", label: "Project Site Master" }] },
+  { label: "Main", items: [{ id: "dashboard", icon: "📊", label: "Dashboard", module: "dashboard" }, { id: "projects", icon: "📁", label: "Projects", module: "projects" }] },
+  { label: "Tasks", items: [{ id: "tasks-planned", icon: "✅", label: "Planned Tasks", module: "tasks" }, { id: "tasks-unplanned", icon: "⚡", label: "Unplanned Tasks", module: "tasks" }] },
+  { label: "Vendors", items: [{ id: "vendors-material", icon: "🏭", label: "Material Suppliers", module: "vendors_material" }, { id: "vendors-contractors", icon: "👷", label: "Contractors", module: "vendors_contract" }] },
+  { label: "Customers", items: [{ id: "customers-leads", icon: "🎯", label: "Leads", module: "leads" }, { id: "customers-clients", icon: "👤", label: "Clients", module: "clients" }] },
+  { label: "Finance", items: [{ id: "finance-transactions", icon: "💳", label: "Transactions", module: "finance" }, { id: "finance-vendor", icon: "📤", label: "Vendor Finance", module: "finance" }, { id: "finance-client", icon: "📥", label: "Client Finance", module: "finance" }] },
+  { label: "Catalogue", items: [{ id: "items-catalogue", icon: "📦", label: "Items", module: "items" }, { id: "library-raw", icon: "🪵", label: "Raw Material", module: "library" }, { id: "library-furniture", icon: "🛋️", label: "Furniture & Furnishings", module: "library" }] },
+  { label: "Admin", items: [{ id: "team-users", icon: "👥", label: "Users & Roles", module: "users" }, { id: "iam-permissions", icon: "🔐", label: "User Permissions", module: "iam" }, { id: "stages-lead", icon: "📋", label: "Lead Stages", module: "masters" }, { id: "stages-design", icon: "🎨", label: "Design Stages", module: "masters" }, { id: "site-master", icon: "🏗️", label: "Project Site Master", module: "masters" }] },
 ];
 
-function Sidebar({ view, setView, selectedProject, setSelectedProject }: {
+function Sidebar({ view, setView, selectedProject, setSelectedProject, allowed }: {
   view: string; setView: (v: string) => void;
   selectedProject: Project | null; setSelectedProject: (p: Project | null) => void;
+  allowed: (module?: string) => boolean;
 }) {
   const { user, logout } = useAuth();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  // Drop entries the user cannot reach, then drop sections left empty.
+  const sections = NAV_SECTIONS
+    .map(section => ({ ...section, items: section.items.filter(i => allowed(i.module)) }))
+    .filter(section => section.items.length > 0);
   return (
     <div className="w-[230px] min-w-[230px] sidebar-gradient flex flex-col min-h-screen border-r border-nicara-dark-deep">
       <div className="p-5 pb-3 border-b border-white/5">
@@ -48,7 +62,7 @@ function Sidebar({ view, setView, selectedProject, setSelectedProject }: {
         </div>
       </div>
       <div className="px-3 py-3 flex-1 overflow-y-auto scrollbar-thin">
-        {NAV_SECTIONS.map(section => (
+        {sections.map(section => (
           <div key={section.label} className="mb-2">
             <button onClick={() => setCollapsed(p => ({ ...p, [section.label]: !p[section.label] }))}
               className="flex items-center justify-between w-full px-2 py-1 bg-transparent border-none cursor-pointer text-left mb-0.5">
@@ -785,9 +799,17 @@ const LABELS: Record<string, string> = {
   dashboard: "Dashboard", projects: "Projects", "tasks-planned": "Planned Tasks", "tasks-unplanned": "Unplanned Tasks",
   "vendors-material": "Material Suppliers", "vendors-contractors": "Contractors", "customers-leads": "Leads", "customers-clients": "Clients",
   "finance-transactions": "Transactions", "finance-vendor": "Vendor Finance", "finance-client": "Client Finance",
-  "items-catalogue": "Items", "library-raw": "Raw Material", "library-furniture": "Furniture & Furnishings", "team-users": "Users & Roles",
+  "items-catalogue": "Items", "library-raw": "Raw Material", "library-furniture": "Furniture & Furnishings",
+  "team-users": "Users & Roles", "iam-permissions": "User Permissions",
   "stages-lead": "Lead Stages", "stages-design": "Design Stages", "site-master": "Project Site Master",
 };
+
+/** Views that render a real, API-backed screen. */
+const LIVE_VIEWS = [
+  "dashboard", "projects", "detail",
+  "vendors-material", "vendors-contractors", "items-catalogue",
+  "customers-leads", "customers-clients", "iam-permissions",
+];
 
 function EstimateAppInner() {
   const [view, setView] = useState("projects");
@@ -797,6 +819,19 @@ function EstimateAppInner() {
   const [listKey, setListKey] = useState(0);
   const { user } = useAuth();
   const { data: meta } = useApiData<ProjectMeta>(() => projectsApi.meta(), []);
+  const { data: mine } = useApiData<MyPermissions>(() => iamApi.mine(), []);
+
+  /**
+   * Whether the signed-in user may see a module. Until the permission map
+   * loads we allow everything — the API is the real gate, so a brief optimistic
+   * nav is better than the menu flickering empty on every page load.
+   */
+  const allowed = (module?: string) => {
+    if (!module || !mine) return true;
+    if (mine.is_admin) return true;
+    const level = mine.permissions[module];
+    return !!level && level !== "none";
+  };
 
   const openProject = (id: number) => { setOpenProjectId(id); setView("detail"); };
   const closeProject = () => { setOpenProjectId(null); setActiveProject(null); setView("projects"); setListKey(k => k + 1); };
@@ -805,6 +840,7 @@ function EstimateAppInner() {
     <div className="flex min-h-screen bg-[#f0eeeb]">
       <Sidebar view={view} setView={v => { setView(v); setOpenProjectId(null); }}
         selectedProject={activeProject}
+        allowed={allowed}
         setSelectedProject={p => { if (!p) { setOpenProjectId(null); setActiveProject(null); } }} />
       <div className="flex-1 overflow-auto">
         <div className="bg-white border-b border-surface-200 px-6 py-2.5 flex justify-between items-center no-print sticky top-0 z-30">
@@ -832,13 +868,16 @@ function EstimateAppInner() {
         {view === "vendors-material" && <VendorsPage kind="supplier" />}
         {view === "vendors-contractors" && <VendorsPage kind="contractor" />}
         {view === "items-catalogue" && <ItemsPage />}
+        {view === "customers-leads" && <LeadsPage onOpenProject={openProject} />}
+        {view === "customers-clients" && <ClientsPage onOpenProject={openProject} />}
+        {view === "iam-permissions" && <IAMMatrix />}
 
-        {!["dashboard", "projects", "detail", "vendors-material", "vendors-contractors", "items-catalogue"].includes(view) && (
+        {!LIVE_VIEWS.includes(view) && (
           <div className="p-6 px-8 animate-fade-in">
             <h1 className="text-xl font-bold text-nicara-dark mb-2">{LABELS[view]}</h1>
             <p className="text-[12px] text-surface-500 mb-5">Not built yet</p>
             <EmptyState icon="🚧" title={LABELS[view]}
-              hint="This screen has no backend module yet. Projects, Items, Suppliers and Contractors are live." />
+              hint="This screen has no backend module yet. Projects, Items, Suppliers, Contractors, Leads, Clients and Permissions are live." />
           </div>
         )}
       </div>

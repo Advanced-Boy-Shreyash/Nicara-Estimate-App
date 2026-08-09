@@ -13,15 +13,21 @@ GET  /api/auth/me/               → current user profile
 from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import send_mail
+from django.db import transaction
 from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from rest_framework import generics, permissions, status
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import LoginAttempt, PagePermission, User
+from .modules import MODULE_IDS, ROLE_TEMPLATES, modules_payload, satisfies, template_for
+from .permissions import (
+    IsAdminOrHasIAM, IsAdminOrHasUsers, user_level, user_permission_map,
+)
 from .serializers import (
     AcceptInviteSerializer, BulkPermissionSerializer, ChangePasswordSerializer,
     InviteUserSerializer, LoginSerializer, PasswordResetConfirmSerializer,
@@ -202,7 +208,7 @@ class UserListView(generics.ListAPIView):
     List all users (admin only).
     """
     serializer_class = UserSerializer
-    permission_classes = [IsAdmin]
+    permission_classes = [IsAdminOrHasUsers]
     queryset = User.objects.prefetch_related('page_permissions').all()
     filterset_fields = ['role', 'is_active']
     search_fields = ['first_name', 'last_name', 'email']
@@ -214,7 +220,7 @@ class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
     Manage a specific user (admin only).
     """
     serializer_class = UserSerializer
-    permission_classes = [IsAdmin]
+    permission_classes = [IsAdminOrHasUsers]
     queryset = User.objects.prefetch_related('page_permissions').all()
 
     def perform_destroy(self, instance):
@@ -232,7 +238,7 @@ class InviteUserView(APIView):
     Body: { "email", "first_name", "last_name", "role", "message" }
     Creates an inactive user with an invite token and emails the link.
     """
-    permission_classes = [IsAdmin]
+    permission_classes = [IsAdminOrHasUsers]
 
     def post(self, request):
         serializer = InviteUserSerializer(data=request.data)
@@ -248,6 +254,15 @@ class InviteUserView(APIView):
             role=data['role'],
             invited_by=request.user,
         )
+
+        # Seed the IAM matrix from the role template so an invited user is
+        # never left with zero access waiting on a manual setup step.
+        PagePermission.objects.bulk_create([
+            PagePermission(user=user, page_id=module_id, level=level)
+            for module_id, level in template_for(data['role']).items()
+            if level != 'none'
+        ])
+
         token = user.generate_invite_token()
 
         invite_url = f'{settings.FRONTEND_URL}/accept-invite?token={token}'
@@ -308,22 +323,67 @@ class AcceptInviteView(APIView):
 
 # ── IAM Permissions ─────────────────────────────────────────
 
+class ModuleListView(APIView):
+    """
+    GET /api/auth/iam/modules/
+    The module registry plus role templates — everything the IAM matrix needs
+    to render itself.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        return Response({
+            'groups': modules_payload(),
+            'levels': [
+                {'value': 'none', 'label': 'No Access'},
+                {'value': 'view', 'label': 'View Only'},
+                {'value': 'edit', 'label': 'Edit'},
+                {'value': 'full', 'label': 'Full Access'},
+            ],
+            'role_templates': ROLE_TEMPLATES,
+        })
+
+
+class MyPermissionsView(APIView):
+    """
+    GET /api/auth/iam/my-permissions/
+    What the signed-in user may see — the frontend filters its nav with this.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        return Response({
+            'is_admin': request.user.is_admin,
+            'can_manage_iam': request.user.is_admin
+                              or satisfies(user_level(request.user, 'iam'), 'full'),
+            'permissions': user_permission_map(request.user),
+        })
+
+
 class PermissionMatrixView(APIView):
     """
     GET  /api/auth/iam/permissions/  — full permissions matrix
     PUT  /api/auth/iam/permissions/  — bulk update
+
+    Open to admins and to anyone granted full access to the `iam` module.
     """
-    permission_classes = [IsAdmin]
+    permission_classes = [IsAdminOrHasIAM]
 
     def get(self, request):
         users = (User.objects
                  .filter(is_active=True)
-                 .exclude(is_superuser=True)
                  .prefetch_related('page_permissions'))
         return Response([
             {
                 'user': UserSerializer(user).data,
-                'permissions': {p.page_id: p.level for p in user.page_permissions.all()},
+                'permissions': (
+                    # Admins implicitly hold everything; show that rather than
+                    # an empty row the operator might try to "fix".
+                    {module_id: 'full' for module_id in MODULE_IDS}
+                    if user.is_admin
+                    else {p.page_id: p.level for p in user.page_permissions.all()}
+                ),
+                'is_admin': user.is_admin,
             }
             for user in users
         ])
@@ -332,11 +392,69 @@ class PermissionMatrixView(APIView):
         serializer = BulkPermissionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        for entry in serializer.validated_data['permissions']:
-            PagePermission.objects.update_or_create(
-                user_id=entry['user_id'],
-                page_id=entry['page_id'],
-                defaults={'level': entry['level']},
+        entries = serializer.validated_data['permissions']
+        with transaction.atomic():
+            for entry in entries:
+                user = User.objects.filter(pk=entry['user_id']).first()
+                if not user:
+                    raise DRFValidationError(
+                        {'detail': f"Unknown user id {entry['user_id']}."}
+                    )
+                if user.is_admin:
+                    # Admin access is implicit — storing rows would imply it can
+                    # be revoked here, which it cannot.
+                    continue
+                if entry['level'] == 'none':
+                    PagePermission.objects.filter(
+                        user=user, page_id=entry['page_id']
+                    ).delete()
+                else:
+                    PagePermission.objects.update_or_create(
+                        user=user, page_id=entry['page_id'],
+                        defaults={'level': entry['level']},
+                    )
+
+        return Response({'detail': f'{len(entries)} permission(s) updated.'})
+
+
+class ApplyRoleTemplateView(APIView):
+    """
+    POST /api/auth/iam/apply-template/
+    Body: { "user_id": 3, "role": "designer" }
+
+    Replaces a user's matrix with the template for that role — the starting
+    point an admin then fine-tunes.
+    """
+    permission_classes = [IsAdminOrHasIAM]
+
+    def post(self, request):
+        user_id = request.data.get('user_id')
+        role = request.data.get('role')
+
+        user = User.objects.filter(pk=user_id).first()
+        if not user:
+            return Response({'detail': 'Unknown user.'}, status=status.HTTP_400_BAD_REQUEST)
+        if role not in ROLE_TEMPLATES:
+            return Response(
+                {'detail': f'Unknown role template: {role}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if user.is_admin:
+            return Response(
+                {'detail': 'Admins already hold every module.'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response({'detail': 'Permissions updated.'})
+        template = template_for(role)
+        with transaction.atomic():
+            user.page_permissions.all().delete()
+            PagePermission.objects.bulk_create([
+                PagePermission(user=user, page_id=module_id, level=level)
+                for module_id, level in template.items()
+                if level != 'none'
+            ])
+
+        return Response({
+            'detail': f'Applied the {role} template to {user.email}.',
+            'permissions': {p.page_id: p.level for p in user.page_permissions.all()},
+        })

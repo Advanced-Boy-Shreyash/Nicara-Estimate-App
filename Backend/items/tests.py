@@ -6,11 +6,18 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import PagePermission, User
 from items.models import Item, ItemCategory, ItemComponent
 from library.models import MaterialBrand, MaterialCategory, MaterialItem
 
 PASSWORD = 'Str0ng!Passw0rd'
+
+
+def grant(user, module, level='full'):
+    """Give a non-admin test user access to a module in the IAM matrix."""
+    PagePermission.objects.update_or_create(
+        user=user, page_id=module, defaults={'level': level}
+    )
 
 
 class ItemCatalogueTests(APITestCase):
@@ -19,6 +26,7 @@ class ItemCatalogueTests(APITestCase):
             email='designer@nicara.design', password=PASSWORD,
             first_name='Test', last_name='User',
         )
+        grant(self.user, 'items')
         self.client.force_authenticate(self.user)
         self.category = ItemCategory.objects.create(name='Carpentry', sort_order=1)
         self.item = Item.objects.create(
@@ -93,6 +101,7 @@ class ItemComponentTests(APITestCase):
             email='designer@nicara.design', password=PASSWORD,
             first_name='Test', last_name='User',
         )
+        grant(self.user, 'items')
         self.client.force_authenticate(self.user)
         self.category = ItemCategory.objects.create(name='Carpentry')
         self.item = Item.objects.create(name='Wardrobe', category=self.category, margin_pct=50)

@@ -13,6 +13,8 @@ from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.utils import timezone
 
+from .modules import MODULE_CHOICES
+
 
 class UserManager(BaseUserManager):
     """Manager for a User whose USERNAME_FIELD is `email`."""
@@ -174,19 +176,9 @@ class PagePermission(models.Model):
         EDIT = 'edit', 'Edit'
         FULL = 'full', 'Full Access'
 
-    PAGE_CHOICES = [
-        ('clientreq', 'Client Requirements'),
-        ('furniture', 'Furniture Layout'),
-        ('moodboard', 'Mood Board'),
-        ('initial', 'Initial Estimate'),
-        ('design', 'Design'),
-        ('final', 'Final Estimate'),
-        ('pm', 'Project Management'),
-        ('handover', 'Handover'),
-        ('dashboard', 'Dashboard'),
-        ('iam', 'IAM Settings'),
-        ('users', 'User Management'),
-    ]
+    # Single source of truth lives in accounts/modules.py so the model, the
+    # API enforcement and the frontend matrix cannot drift apart.
+    PAGE_CHOICES = MODULE_CHOICES
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='page_permissions')
     page_id = models.CharField(max_length=30, choices=PAGE_CHOICES)

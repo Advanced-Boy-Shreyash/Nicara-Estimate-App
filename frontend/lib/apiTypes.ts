@@ -18,7 +18,7 @@ export type EstimateStatus = "draft" | "sent" | "approved" | "revision";
 export type DeliverableType =
   | "furniture_layout" | "mood_board" | "model_3d"
   | "render" | "final_render" | "working_drawing";
-export type DeliverableStatus = "pending" | "approved" | "revision";
+export type DeliverableStatus = "draft" | "pending" | "approved" | "revision";
 export type BookingStatus = "draft" | "sent" | "signed" | "cancelled";
 
 /* ── Projects ────────────────────────────────────────────────── */
@@ -166,11 +166,30 @@ export interface Deliverable {
   id: number;
   type: DeliverableType;
   type_display: string;
+  /** Machine-readable order within its type. */
+  version_no: number;
+  /** Human label — "Ver 2". */
   version: string;
+  /** The live version for this type — the one shown to the client. */
+  is_current: boolean;
+  supersedes: number | null;
   file: string | null;
+  file_url: string | null;
   file_name: string;
+  file_size: number;
+  file_size_display: string;
+  /** 400px derivative for grids; null for non-images. */
+  thumbnail_url: string | null;
+  /** 1600px derivative for the lightbox. */
+  preview_url: string | null;
   status: DeliverableStatus;
+  status_display: string;
   remarks: string;
+  submitted_at: string | null;
+  submitted_by_name: string;
+  reviewed_at: string | null;
+  reviewed_by_name: string;
+  review_remarks: string;
   uploaded_by_name: string;
   date: string;
   created_at: string;
@@ -313,6 +332,132 @@ export interface ItemMeta {
   rooms: string[];
   categories: ItemCategory[];
   counts: { items: number; categories: number };
+}
+
+/* ── IAM ─────────────────────────────────────────────────────── */
+
+export type PermissionLevel = "none" | "view" | "edit" | "full";
+
+export interface ModuleEntry {
+  id: string;
+  label: string;
+  icon: string;
+}
+
+export interface ModuleGroup {
+  group: string;
+  modules: ModuleEntry[];
+}
+
+export interface ModuleRegistry {
+  groups: ModuleGroup[];
+  levels: Choice[];
+  role_templates: Record<string, Record<string, PermissionLevel>>;
+}
+
+export interface MyPermissions {
+  is_admin: boolean;
+  /** Admin, or explicitly granted full access to the `iam` module. */
+  can_manage_iam: boolean;
+  permissions: Record<string, PermissionLevel>;
+}
+
+export interface PermissionMatrixRow {
+  user: {
+    id: number;
+    email: string;
+    full_name: string;
+    role: string;
+    is_active: boolean;
+  };
+  permissions: Record<string, PermissionLevel>;
+  is_admin: boolean;
+}
+
+/* ── CRM: Leads & Clients ────────────────────────────────────── */
+
+export interface CrmNote {
+  id: number;
+  lead: number | null;
+  client: number | null;
+  kind: string;
+  kind_display: string;
+  body: string;
+  follow_up_on: string | null;
+  created_by_name: string;
+  created_at: string;
+}
+
+export interface Lead {
+  id: number;
+  code: string;
+  name: string;
+  email: string;
+  phone: string;
+  project_name: string;
+  developer: string;
+  unit_no?: string;
+  city: string;
+  state?: string;
+  property_type: string;
+  area: string;
+  requirement?: string;
+  estimated_budget: string | null;
+  stage: string;
+  stage_display: string;
+  source: string;
+  source_display: string;
+  priority: string;
+  owner: number | null;
+  owner_name: string;
+  next_follow_up: string | null;
+  lost_reason?: string;
+  converted_client?: number | null;
+  converted_project: number | null;
+  converted_at?: string | null;
+  notes?: CrmNote[];
+  is_open?: boolean;
+  created_at: string;
+}
+
+export interface LeadPipeline {
+  stages: (Choice & { count: number })[];
+  open: number;
+  won: number;
+  lost: number;
+}
+
+export interface Client {
+  id: number;
+  code: string;
+  name: string;
+  client_type: string;
+  type_display: string;
+  company_name: string;
+  email: string;
+  phone: string;
+  alt_phone?: string;
+  address?: string;
+  city: string;
+  state: string;
+  pincode?: string;
+  gst_number: string;
+  pan_number?: string;
+  notes?: string;
+  is_active: boolean;
+  project_count: number;
+  projects?: { id: number; name: string; stage: string; progress: number }[];
+  crm_notes?: CrmNote[];
+  created_at: string;
+}
+
+export interface CrmMeta {
+  lead_stages: Choice[];
+  lead_sources: Choice[];
+  priorities: Choice[];
+  client_types: Choice[];
+  note_kinds: Choice[];
+  counts: { open_leads: number; clients: number };
 }
 
 /* ── Vendors ─────────────────────────────────────────────────── */

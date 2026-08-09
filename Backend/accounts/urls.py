@@ -25,4 +25,7 @@ urlpatterns = [
 
     # ── IAM ──
     path('iam/permissions/', views.PermissionMatrixView.as_view(), name='permissions'),
+    path('iam/modules/', views.ModuleListView.as_view(), name='iam-modules'),
+    path('iam/my-permissions/', views.MyPermissionsView.as_view(), name='iam-my-permissions'),
+    path('iam/apply-template/', views.ApplyRoleTemplateView.as_view(), name='iam-apply-template'),
 ]

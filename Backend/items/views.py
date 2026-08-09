@@ -12,6 +12,8 @@ from rest_framework import generics, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.permissions import HasModulePermission
+
 from .models import Item, ItemCategory, ItemComponent
 from .serializers import (
     ItemCategorySerializer, ItemComponentSerializer,
@@ -19,6 +21,14 @@ from .serializers import (
 )
 
 
+def _items_module(cls):
+    """Gate a view behind the `items` module in the IAM matrix."""
+    cls.permission_classes = [HasModulePermission]
+    cls.module = 'items'
+    return cls
+
+
+@_items_module
 class ItemCategoryListCreateView(generics.ListCreateAPIView):
     queryset = ItemCategory.objects.all()
     serializer_class = ItemCategorySerializer
@@ -26,11 +36,13 @@ class ItemCategoryListCreateView(generics.ListCreateAPIView):
     search_fields = ['name', 'code']
 
 
+@_items_module
 class ItemCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = ItemCategory.objects.all()
     serializer_class = ItemCategorySerializer
 
 
+@_items_module
 class ItemListCreateView(generics.ListCreateAPIView):
     """GET /api/items/ — catalogue, POST — add an item."""
     queryset = Item.objects.select_related('category').all()
@@ -42,6 +54,7 @@ class ItemListCreateView(generics.ListCreateAPIView):
         return ItemSerializer if self.request.method == 'POST' else ItemListSerializer
 
 
+@_items_module
 class ItemDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Item.objects.select_related('category').prefetch_related(
         'components__material_item', 'components__service_item'
@@ -54,6 +67,7 @@ class ItemDetailView(generics.RetrieveUpdateDestroyAPIView):
         instance.save(update_fields=['is_active'])
 
 
+@_items_module
 class ItemComponentListCreateView(generics.ListCreateAPIView):
     """GET/POST /api/items/{item_id}/components/"""
     serializer_class = ItemComponentSerializer
@@ -65,6 +79,7 @@ class ItemComponentListCreateView(generics.ListCreateAPIView):
         serializer.save(item_id=self.kwargs['item_id'])
 
 
+@_items_module
 class ItemComponentDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ItemComponentSerializer
 

@@ -13,6 +13,8 @@ from rest_framework import generics, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.permissions import HasModulePermission
+
 from .models import Vendor, VendorContact, VendorDocument
 from .serializers import (
     VendorContactSerializer, VendorDocumentSerializer,
@@ -24,10 +26,16 @@ COMMON_SEARCH = ['name', 'code', 'contact_person', 'phone', 'email',
                  'brands_supplied', 'specialization', 'city']
 COMMON_ORDERING = ['name', 'rating', 'created_at', 'lead_time_days']
 
+# Suppliers and contractors are separate modules in the IAM matrix.
+SUPPLIER_MODULE = 'vendors_material'
+CONTRACTOR_MODULE = 'vendors_contract'
+
 
 class VendorListCreateView(generics.ListCreateAPIView):
     """GET /api/vendors/ — list, POST — create."""
     queryset = Vendor.objects.prefetch_related('contacts', 'material_categories').all()
+    permission_classes = [HasModulePermission]
+    module = SUPPLIER_MODULE
     filterset_fields = COMMON_FILTERS
     search_fields = COMMON_SEARCH
     ordering_fields = COMMON_ORDERING
@@ -59,6 +67,7 @@ class TypedVendorListCreateView(VendorListCreateView):
 class SupplierListCreateView(TypedVendorListCreateView):
     """GET/POST /api/vendors/suppliers/ — material suppliers."""
     forced_type = Vendor.VendorType.MATERIAL_SUPPLIER
+    module = SUPPLIER_MODULE
 
     def get_queryset(self):
         return super().get_queryset().suppliers()
@@ -67,6 +76,7 @@ class SupplierListCreateView(TypedVendorListCreateView):
 class ContractorListCreateView(TypedVendorListCreateView):
     """GET/POST /api/vendors/contractors/ — contractors."""
     forced_type = Vendor.VendorType.CONTRACTOR
+    module = CONTRACTOR_MODULE
 
     def get_queryset(self):
         return super().get_queryset().contractors()
@@ -76,6 +86,15 @@ class VendorDetailView(generics.RetrieveUpdateDestroyAPIView):
     """GET/PUT/PATCH/DELETE /api/vendors/{id}/"""
     queryset = Vendor.objects.prefetch_related('contacts', 'documents', 'material_categories')
     serializer_class = VendorSerializer
+    permission_classes = [HasModulePermission]
+
+    @property
+    def module(self):
+        """Gate on whichever module matches the record being touched."""
+        vendor = Vendor.objects.filter(pk=self.kwargs.get('pk')).only('vendor_type').first()
+        if vendor and vendor.vendor_type == Vendor.VendorType.CONTRACTOR:
+            return CONTRACTOR_MODULE
+        return SUPPLIER_MODULE
 
     def perform_destroy(self, instance):
         # Vendors are referenced by historical purchase and execution records,

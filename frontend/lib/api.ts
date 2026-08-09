@@ -5,9 +5,11 @@
 // this layer transparently redeems the refresh token and replays the request.
 
 import type {
-  BookingForm, Deliverable, DeliverableType, DesignRequirement, Estimate,
-  EstimateItem, EstimateListItem, EstimateType, Item, ItemCategory, ItemMeta,
-  Project, ProjectListItem, ProjectMeta, Vendor, VendorMeta,
+  BookingForm, Client, CrmMeta, CrmNote, Deliverable, DeliverableType,
+  DesignRequirement, Estimate, EstimateItem, EstimateListItem, EstimateType,
+  Item, ItemCategory, ItemMeta, Lead, LeadPipeline, ModuleRegistry,
+  MyPermissions, PermissionMatrixRow, Project, ProjectListItem, ProjectMeta,
+  Vendor, VendorMeta,
 } from "@/lib/apiTypes";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
@@ -19,6 +21,37 @@ const USER_KEY = "nicara_user";
 /* ── Error type ──────────────────────────────────────────────
    Every backend error arrives as { detail, errors?, code? }
    (see Backend/nicara/exceptions.py). */
+
+/**
+ * Trigger a browser download for an endpoint that returns a file.
+ *
+ * Uses fetch + a blob URL rather than a plain link because the download
+ * endpoints need the Authorization header.
+ */
+export async function downloadFile(endpoint: string, fallbackName: string): Promise<void> {
+  const token = tokenStore.access();
+  const response = await fetch(`${BASE_URL}${endpoint}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+
+  if (!response.ok) throw await parseError(response);
+
+  // Prefer the server's filename from Content-Disposition.
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] || fallbackName;
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoke on the next tick so the click has definitely been handled.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 /** DRF PageNumberPagination envelope (PAGE_SIZE = 50). */
 export interface Paginated<T> {
@@ -205,6 +238,45 @@ async function apiFetch<T>(endpoint: string, options: FetchOptions = {}): Promis
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
+/**
+ * Multipart POST/PATCH for file uploads.
+ *
+ * Deliberately does not set Content-Type — the browser must add the multipart
+ * boundary itself.
+ */
+async function apiUpload<T>(
+  endpoint: string,
+  form: FormData,
+  method: "POST" | "PATCH" = "POST"
+): Promise<T> {
+  const send = (token: string | null) =>
+    fetch(`${BASE_URL}${endpoint}`, {
+      method,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+
+  let response: Response;
+  try {
+    response = await send(tokenStore.access());
+  } catch {
+    throw new ApiError("Cannot reach the server. Is the Django backend running?", 0);
+  }
+
+  if (response.status === 401 && tokenStore.refresh()) {
+    const fresh = await refreshAccessToken();
+    if (fresh) {
+      response = await send(fresh);
+    } else {
+      tokenStore.clear();
+      onSessionExpired?.();
+    }
+  }
+
+  if (!response.ok) throw await parseError(response);
+  return response.json() as Promise<T>;
+}
+
 /* ── Auth ─────────────────────────────────────────────────────*/
 
 export interface ApiUser {
@@ -368,6 +440,14 @@ export const deliverablesApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  /**
+   * Create a version with a file attached. Sent as multipart; the server
+   * stores the original and generates thumbnail + preview derivatives.
+   */
+  upload: (projectId: number, form: FormData) =>
+    apiUpload<Deliverable>(`/projects/${projectId}/deliverables/`, form),
+  uploadTo: (projectId: number, id: number, form: FormData) =>
+    apiUpload<Deliverable>(`/projects/${projectId}/deliverables/${id}/`, form, "PATCH"),
   update: (projectId: number, id: number, data: Partial<Deliverable>) =>
     apiFetch<Deliverable>(`/projects/${projectId}/deliverables/${id}/`, {
       method: "PATCH",
@@ -375,6 +455,94 @@ export const deliverablesApi = {
     }),
   delete: (projectId: number, id: number) =>
     apiFetch<void>(`/projects/${projectId}/deliverables/${id}/`, { method: "DELETE" }),
+
+  // Approval workflow
+  submit: (projectId: number, id: number) =>
+    apiFetch<Deliverable>(`/projects/${projectId}/deliverables/${id}/submit/`, {
+      method: "POST",
+    }),
+  approve: (projectId: number, id: number, remarks = "") =>
+    apiFetch<Deliverable>(`/projects/${projectId}/deliverables/${id}/approve/`, {
+      method: "POST",
+      body: JSON.stringify({ remarks }),
+    }),
+  requestRevision: (projectId: number, id: number, remarks: string) =>
+    apiFetch<Deliverable>(`/projects/${projectId}/deliverables/${id}/request-revision/`, {
+      method: "POST",
+      body: JSON.stringify({ remarks }),
+    }),
+};
+
+// ── IAM ───────────────────────────────────────────────────────
+
+export const iamApi = {
+  /** Module registry + role templates for rendering the matrix. */
+  modules: () => apiFetch<ModuleRegistry>("/auth/iam/modules/"),
+  /** The signed-in user's own map — used to filter the nav. */
+  mine: () => apiFetch<MyPermissions>("/auth/iam/my-permissions/"),
+  matrix: () => apiFetch<PermissionMatrixRow[]>("/auth/iam/permissions/"),
+  save: (permissions: { user_id: string; page_id: string; level: string }[]) =>
+    apiFetch<{ detail: string }>("/auth/iam/permissions/", {
+      method: "PUT",
+      body: JSON.stringify({ permissions }),
+    }),
+  applyTemplate: (userId: number, role: string) =>
+    apiFetch<{ detail: string; permissions: Record<string, string> }>(
+      "/auth/iam/apply-template/",
+      { method: "POST", body: JSON.stringify({ user_id: userId, role }) }
+    ),
+};
+
+// ── CRM: Leads & Clients ──────────────────────────────────────
+
+export const leadsApi = {
+  list: (params: { stage?: string; search?: string } = {}) => {
+    const query = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v) as [string, string][]
+    );
+    query.set("page_size", "200");
+    return apiFetch<Paginated<Lead>>(`/crm/leads/?${query.toString()}`);
+  },
+  get: (id: number) => apiFetch<Lead>(`/crm/leads/${id}/`),
+  create: (data: Partial<Lead>) =>
+    apiFetch<Lead>("/crm/leads/", { method: "POST", body: JSON.stringify(data) }),
+  update: (id: number, data: Partial<Lead>) =>
+    apiFetch<Lead>(`/crm/leads/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  pipeline: () => apiFetch<LeadPipeline>("/crm/leads/pipeline/"),
+  notes: (id: number) => apiFetch<Paginated<CrmNote>>(`/crm/leads/${id}/notes/`),
+  addNote: (id: number, data: { kind: string; body: string; follow_up_on?: string | null }) =>
+    apiFetch<CrmNote>(`/crm/leads/${id}/notes/`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  /** Won lead → Client + Project. */
+  convert: (id: number, data: { project_name?: string; existing_client_id?: number } = {}) =>
+    apiFetch<{ detail: string; project_id: number; client_id: number | null; lead: Lead }>(
+      `/crm/leads/${id}/convert/`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+};
+
+export const clientsApi = {
+  list: (search = "") =>
+    apiFetch<Paginated<Client>>(
+      `/crm/clients/?page_size=200${search ? `&search=${encodeURIComponent(search)}` : ""}`
+    ),
+  get: (id: number) => apiFetch<Client>(`/crm/clients/${id}/`),
+  create: (data: Partial<Client>) =>
+    apiFetch<Client>("/crm/clients/", { method: "POST", body: JSON.stringify(data) }),
+  update: (id: number, data: Partial<Client>) =>
+    apiFetch<Client>(`/crm/clients/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  delete: (id: number) => apiFetch<void>(`/crm/clients/${id}/`, { method: "DELETE" }),
+  addNote: (id: number, data: { kind: string; body: string }) =>
+    apiFetch<CrmNote>(`/crm/clients/${id}/notes/`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+};
+
+export const crmApi = {
+  meta: () => apiFetch<CrmMeta>("/crm/meta/"),
 };
 
 // ── Estimates ─────────────────────────────────────────────────
@@ -422,6 +590,12 @@ export const estimatesApi = {
       body: JSON.stringify(type ? { type } : {}),
     }),
 
+  // Downloads — rendered server-side so every copy is identical.
+  downloadPdf: (projectId: number, estimateId: number) =>
+    downloadFile(`/projects/${projectId}/estimates/${estimateId}/pdf/`, "estimate.pdf"),
+  downloadExcel: (projectId: number, estimateId: number) =>
+    downloadFile(`/projects/${projectId}/estimates/${estimateId}/excel/`, "estimate.xlsx"),
+
   // Line items
   items: (projectId: number, estimateId: number) =>
     apiFetch<Paginated<EstimateItem>>(`/projects/${projectId}/estimates/${estimateId}/items/`),
@@ -466,6 +640,8 @@ export const bookingApi = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+  downloadPdf: (projectId: number) =>
+    downloadFile(`/projects/${projectId}/booking-form/pdf/`, "booking-form.pdf"),
 };
 
 // ── Items catalogue ───────────────────────────────────────────

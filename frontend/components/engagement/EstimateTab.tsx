@@ -31,6 +31,7 @@ export default function EstimateTab({
   const [importing, setImporting] = useState(false);
   const [showGenerator, setShowGenerator] = useState(false);
   const [populating, setPopulating] = useState(false);
+  const [downloading, setDownloading] = useState<"pdf" | "excel" | null>(null);
 
   const listQuery = useApiData(() => estimatesApi.list(project.id, type), [project.id, type]);
   const versions = useMemo(() => listQuery.data?.results ?? [], [listQuery.data]);
@@ -44,6 +45,27 @@ export default function EstimateTab({
 
   const refresh = async () => {
     await Promise.all([listQuery.reload(), detailQuery.reload()]);
+  };
+
+  /** Fetch the rendered file from the API and hand it to the browser. */
+  const download = async (format: "pdf" | "excel") => {
+    if (!estimate) return;
+    setDownloading(format);
+    setBanner("");
+    try {
+      if (format === "pdf") {
+        await estimatesApi.downloadPdf(project.id, estimate.id);
+      } else {
+        await estimatesApi.downloadExcel(project.id, estimate.id);
+      }
+      toast.success("Downloaded", `${title} ${format.toUpperCase()}`);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : "Could not generate the file.";
+      setBanner(msg);
+      toast.error("Download failed", msg);
+    } finally {
+      setDownloading(null);
+    }
   };
 
   const guard = async (action: () => Promise<unknown>, successMsg: string) => {
@@ -144,6 +166,16 @@ export default function EstimateTab({
             <Btn variant="ghost" disabled={busy || locked}
               onClick={() => setShowGenerator(!showGenerator)}>
               {showGenerator ? "✕ Close Generator" : "🧠 Smart Generator"}
+            </Btn>
+
+            {/* Downloads — rendered server-side so every copy is identical. */}
+            <Btn variant="ghost" disabled={downloading !== null}
+              onClick={() => download("pdf")}>
+              {downloading === "pdf" ? "Preparing…" : "📄 PDF"}
+            </Btn>
+            <Btn variant="ghost" disabled={downloading !== null}
+              onClick={() => download("excel")}>
+              {downloading === "excel" ? "Preparing…" : "📊 Excel"}
             </Btn>
             <Btn variant="ghost" disabled={busy || locked || populating}
               onClick={async () => {

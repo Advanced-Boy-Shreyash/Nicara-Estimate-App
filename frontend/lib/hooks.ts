@@ -34,6 +34,11 @@ export function useApiData<T>(
     return () => { alive.current = false; };
   }, []);
 
+  // Collapse the caller's deps into one primitive so the dependency array is
+  // a literal — the React Compiler cannot reason about a dynamic list.
+  // Callers pass primitives (ids, search strings), which serialise cleanly.
+  const depKey = JSON.stringify(deps);
+
   const run = useCallback(async () => {
     setState(s => ({ ...s, loading: true, error: null }));
     try {
@@ -44,9 +49,12 @@ export function useApiData<T>(
       const message = err instanceof ApiError ? err.message : "Something went wrong.";
       setState({ data: null, loading: false, error: message });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps drive refetching; fetcher is captured per-run
-  }, deps);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- depKey stands in for the caller's deps; fetcher is captured per-run
+  }, [depKey]);
 
+  // A fetch hook has to flip to `loading` the moment its inputs change, which
+  // is a synchronous setState inside the effect by definition.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- inherent to fetch-on-deps-change
   useEffect(() => { void run(); }, [run]);
 
   const setData = useCallback((data: T) => {

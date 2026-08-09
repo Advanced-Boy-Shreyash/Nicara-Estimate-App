@@ -2,15 +2,23 @@
 NICARA Projects — Views
 Full CRUD for all project lifecycle resources.
 """
+import os
+import re
+
 from django.db import transaction
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, permissions, status
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from items.models import Item
 from items.serializers import AddItemsToEstimateSerializer
+from nicara.media import build_derivatives
+
+from .exports import booking_pdf, estimate_pdf, estimate_xlsx
 
 from .models import (
     BookingForm, Project, DesignRequirement, ProjectDeliverable, Estimate,
@@ -19,8 +27,8 @@ from .models import (
 )
 from .serializers import (
     BookingFormSerializer, ProjectListSerializer, ProjectDetailSerializer,
-    DesignRequirementBulkSerializer, DesignRequirementSerializer,
-    ProjectDeliverableSerializer,
+    DeliverableReviewSerializer, DesignRequirementBulkSerializer,
+    DesignRequirementSerializer, ProjectDeliverableSerializer,
     EstimateSerializer, EstimateListSerializer, EstimateItemSerializer,
     MeasurementSerializer, MaterialSelectionSerializer,
     ExecutionStageSerializer, PaymentMilestoneSerializer,
@@ -157,25 +165,144 @@ class DesignRequirementBulkView(APIView):
 # ── Deliverables (FL, MB, 3D, Renders, WD) ────────────────
 
 class DeliverableListCreateView(generics.ListCreateAPIView):
-    """GET/POST /api/projects/{project_id}/deliverables/?type=furniture_layout"""
+    """
+    GET  /api/projects/{project_id}/deliverables/?type=furniture_layout
+    POST — create a new version (multipart when a file is attached).
+
+    Version numbers are assigned server-side and the new row becomes the
+    current one for its type.
+    """
     serializer_class = ProjectDeliverableSerializer
-    filterset_fields = ['type', 'status']
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    filterset_fields = ['type', 'status', 'is_current']
 
     def get_queryset(self):
         return ProjectDeliverable.objects.filter(project_id=self.kwargs['project_id'])
 
     def perform_create(self, serializer):
-        serializer.save(
-            project_id=self.kwargs['project_id'],
+        project_id = self.kwargs['project_id']
+        deliverable_type = serializer.validated_data.get('type')
+
+        previous = (ProjectDeliverable.objects
+                    .filter(project_id=project_id, type=deliverable_type, is_current=True)
+                    .first())
+
+        deliverable = serializer.save(
+            project_id=project_id,
             uploaded_by=self.request.user,
+            version_no=ProjectDeliverable.next_version_no(project_id, deliverable_type),
+            supersedes=previous,
         )
+        _finalise_upload(deliverable)
+        deliverable.mark_current()
 
 
 class DeliverableDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ProjectDeliverableSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         return ProjectDeliverable.objects.filter(project_id=self.kwargs['project_id'])
+
+    def perform_update(self, serializer):
+        deliverable = serializer.save()
+        if 'file' in serializer.validated_data:
+            _finalise_upload(deliverable)
+
+
+def _finalise_upload(deliverable):
+    """Record the file size and build image derivatives after an upload."""
+    if not deliverable.file:
+        return
+    try:
+        deliverable.file_size = deliverable.file.size
+    except (OSError, ValueError):
+        deliverable.file_size = 0
+    if not deliverable.file_name:
+        deliverable.file_name = os.path.basename(deliverable.file.name)
+    build_derivatives(deliverable)
+    deliverable.save(update_fields=['file_size', 'file_name', 'thumbnail', 'preview'])
+
+
+class DeliverableActionView(APIView):
+    """Shared lookup for the deliverable approval endpoints."""
+
+    def get_deliverable(self):
+        return get_object_or_404(
+            ProjectDeliverable,
+            pk=self.kwargs['pk'],
+            project_id=self.kwargs['project_id'],
+        )
+
+    def responded(self, deliverable):
+        return Response(
+            ProjectDeliverableSerializer(deliverable, context={'request': self.request}).data
+        )
+
+
+class DeliverableSubmitView(DeliverableActionView):
+    """POST …/deliverables/{id}/submit/ — send this version for approval."""
+
+    def post(self, request, project_id, pk):
+        deliverable = self.get_deliverable()
+        if deliverable.status == ProjectDeliverable.Status.APPROVED:
+            return Response(
+                {'detail': 'This version is already approved.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        deliverable.status = ProjectDeliverable.Status.PENDING
+        deliverable.submitted_at = timezone.now()
+        deliverable.submitted_by = request.user
+        deliverable.save(update_fields=['status', 'submitted_at', 'submitted_by'])
+        return self.responded(deliverable)
+
+
+class DeliverableApproveView(DeliverableActionView):
+    """POST …/deliverables/{id}/approve/ — client signed off on this version."""
+
+    def post(self, request, project_id, pk):
+        deliverable = self.get_deliverable()
+        serializer = DeliverableReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        deliverable.status = ProjectDeliverable.Status.APPROVED
+        deliverable.reviewed_at = timezone.now()
+        deliverable.reviewed_by = request.user
+        deliverable.review_remarks = serializer.validated_data['remarks']
+        deliverable.save(update_fields=[
+            'status', 'reviewed_at', 'reviewed_by', 'review_remarks',
+        ])
+        # The approved version is the one the client is looking at.
+        deliverable.mark_current()
+        return self.responded(deliverable)
+
+
+class DeliverableRequestRevisionView(DeliverableActionView):
+    """
+    POST …/deliverables/{id}/request-revision/
+    Body: { "remarks": "Kitchen island position needs to change" }
+    """
+
+    def post(self, request, project_id, pk):
+        deliverable = self.get_deliverable()
+        serializer = DeliverableReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        remarks = serializer.validated_data['remarks'].strip()
+
+        if not remarks:
+            return Response(
+                {'detail': 'Say what needs changing when asking for a revision.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deliverable.status = ProjectDeliverable.Status.REVISION
+        deliverable.reviewed_at = timezone.now()
+        deliverable.reviewed_by = request.user
+        deliverable.review_remarks = remarks
+        deliverable.save(update_fields=[
+            'status', 'reviewed_at', 'reviewed_by', 'review_remarks',
+        ])
+        return self.responded(deliverable)
 
 
 # ── Estimates ──────────────────────────────────────────────
@@ -404,6 +531,50 @@ class EstimateItemDetailView(generics.RetrieveUpdateDestroyAPIView):
             estimate_id=self.kwargs['estimate_id'],
             estimate__project_id=self.kwargs['project_id'],
         )
+
+
+# ── Downloads ──────────────────────────────────────────────
+
+def _download(content, filename, content_type):
+    response = HttpResponse(content, content_type=content_type)
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    response['Content-Length'] = len(content)
+    return response
+
+
+def _safe(text):
+    """Filename-safe slug of a project name."""
+    return re.sub(r'[^A-Za-z0-9]+', '_', text or 'project').strip('_') or 'project'
+
+
+class EstimatePDFView(EstimateActionView):
+    """GET …/estimates/{id}/pdf/ — download the quotation as a PDF."""
+
+    def get(self, request, project_id, pk):
+        estimate = self.get_estimate()
+        filename = f'{_safe(estimate.project.name)}_{estimate.type}_v{estimate.version}.pdf'
+        return _download(estimate_pdf(estimate), filename, 'application/pdf')
+
+
+class EstimateExcelView(EstimateActionView):
+    """GET …/estimates/{id}/excel/ — download the estimate as .xlsx."""
+
+    def get(self, request, project_id, pk):
+        estimate = self.get_estimate()
+        filename = f'{_safe(estimate.project.name)}_{estimate.type}_v{estimate.version}.xlsx'
+        return _download(
+            estimate_xlsx(estimate), filename,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+
+
+class BookingPDFView(APIView):
+    """GET /api/projects/{project_id}/booking-form/pdf/"""
+
+    def get(self, request, project_id):
+        booking = get_object_or_404(BookingForm, project_id=project_id)
+        filename = f'{booking.booking_number}_{_safe(booking.project.name)}.pdf'
+        return _download(booking_pdf(booking), filename, 'application/pdf')
 
 
 # ── Booking Form ───────────────────────────────────────────

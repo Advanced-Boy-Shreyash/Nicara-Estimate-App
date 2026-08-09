@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'library',
     'items',
     'vendors',
+    'crm',
 ]
 
 # ── Middleware ───────────────────────────────────────────────
@@ -139,6 +140,10 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
     'http://localhost:3000,http://127.0.0.1:3000'
 ).split(',')
 CORS_ALLOW_CREDENTIALS = True
+
+# Browsers hide response headers from JS unless they are explicitly exposed.
+# The download helper reads the server-supplied filename from this header.
+CORS_EXPOSE_HEADERS = ['Content-Disposition', 'Content-Length']
 
 # ── Django REST Framework ───────────────────────────────────
 REST_FRAMEWORK = {

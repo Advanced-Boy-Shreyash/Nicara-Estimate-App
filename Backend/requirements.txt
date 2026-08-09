@@ -1,15 +1,28 @@
-asgiref==3.11.1
-certifi==2026.5.20
-charset-normalizer==3.4.7
-Django==5.2.14
-django-cors-headers==4.9.0
-django-filter==26.1
-djangorestframework==3.17.1
-djangorestframework_simplejwt==5.5.1
-idna==3.17
-pillow==12.2.0
-PyJWT==2.13.0
-requests==2.34.2
-sqlparse==0.5.5
-tzdata==2026.2
-urllib3==2.7.0
+# NICARA Backend — Python dependencies
+#
+# Install:  .venv\Scripts\python.exe -m pip install -r requirements.txt
+# (On Windows call `python -m pip`, not pip.exe — Application Control blocks the shim.)
+
+# ── Core ────────────────────────────────────────────────────
+Django==5.1
+djangorestframework==3.15.2
+django-cors-headers==4.4.0
+django-filter==24.3
+djangorestframework-simplejwt==5.3.1
+
+# ── Auth ────────────────────────────────────────────────────
+# Argon2 is first in PASSWORD_HASHERS — without it, login raises at startup.
+argon2-cffi==23.1.0
+
+# ── Config ──────────────────────────────────────────────────
+# Reads Backend/.env. Without it SECRET_KEY silently falls back to the
+# insecure development default.
+python-dotenv==1.0.1
+
+# ── Media & exports ─────────────────────────────────────────
+Pillow==11.0.0          # image thumbnails / web-sized derivatives
+openpyxl==3.1.5         # Initial Estimate .xlsx export
+reportlab==4.2.5        # Estimate and Booking Form PDF export
+
+# ── Serving ─────────────────────────────────────────────────
+gunicorn==23.0.0

@@ -54,7 +54,13 @@ class Project(models.Model):
         SELF = 'Self', 'Self'
         RENTAL = 'Rental', 'Rental'
 
-    # Client info
+    # Client info. `client` links to the CRM record once a lead is converted;
+    # the denormalised fields below stay authoritative for this project so
+    # historical quotes never change when a client's details are edited.
+    client = models.ForeignKey(
+        'crm.Client', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='projects'
+    )
     client_name = models.CharField(max_length=200)
     client_email = models.EmailField(blank=True, default='')
     client_phone = models.CharField(max_length=20, blank=True, default='')
@@ -150,17 +156,52 @@ class ProjectDeliverable(models.Model):
         WORKING_DRAWING = 'working_drawing', 'Working Drawing'
 
     class Status(models.TextChoices):
-        PENDING = 'pending', 'Pending'
+        DRAFT = 'draft', 'Draft'
+        PENDING = 'pending', 'Sent for Approval'
         APPROVED = 'approved', 'Approved'
         REVISION = 'revision', 'Revision Required'
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='deliverables')
     type = models.CharField(max_length=30, choices=DeliverableType.choices)
-    version = models.CharField(max_length=20, help_text='Ver 1, Ver 2, etc.')
+
+    # Version control. `version_no` is the machine-readable order; `version`
+    # keeps the human label ("Ver 2") the sheets and the UI use.
+    version_no = models.PositiveIntegerField(default=1)
+    # Derived from version_no on save; blank so callers never have to send it.
+    version = models.CharField(max_length=20, blank=True, help_text='Ver 1, Ver 2, etc.')
+    is_current = models.BooleanField(
+        default=True,
+        help_text='The live version for this type — the one shown to the client.'
+    )
+    supersedes = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='superseded_by'
+    )
+
     file = models.FileField(upload_to='deliverables/%Y/%m/', blank=True)
     file_name = models.CharField(max_length=200, blank=True, default='')
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    file_size = models.PositiveIntegerField(default=0, help_text='Bytes')
+    # Derivatives generated on upload so galleries never load the original.
+    thumbnail = models.ImageField(upload_to='deliverables/thumbs/%Y/%m/', blank=True, null=True)
+    preview = models.ImageField(upload_to='deliverables/preview/%Y/%m/', blank=True, null=True)
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     remarks = models.TextField(blank=True, default='')
+
+    # Approval trail
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='submitted_deliverables'
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='reviewed_deliverables'
+    )
+    review_remarks = models.TextField(
+        blank=True, default='', help_text='Why it was approved or sent back'
+    )
+
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True
     )
@@ -168,10 +209,36 @@ class ProjectDeliverable(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['type', '-date']
+        ordering = ['type', '-version_no', '-date']
+        indexes = [models.Index(fields=['project', 'type', 'is_current'])]
 
     def __str__(self):
         return f"{self.project.name} — {self.get_type_display()} {self.version}"
+
+    def save(self, *args, **kwargs):
+        if not self.version_no:
+            self.version_no = self.next_version_no(self.project_id, self.type)
+        if not self.version:
+            self.version = f'Ver {self.version_no}'
+        super().save(*args, **kwargs)
+
+    @staticmethod
+    def next_version_no(project_id, deliverable_type):
+        latest = (ProjectDeliverable.objects
+                  .filter(project_id=project_id, type=deliverable_type)
+                  .order_by('-version_no')
+                  .first())
+        return (latest.version_no if latest else 0) + 1
+
+    def mark_current(self):
+        """Make this the live version for its type, demoting the others."""
+        (ProjectDeliverable.objects
+         .filter(project_id=self.project_id, type=self.type)
+         .exclude(pk=self.pk)
+         .update(is_current=False))
+        if not self.is_current:
+            self.is_current = True
+            self.save(update_fields=['is_current'])
 
 
 # ════════════════════════════════════════════════════════════════

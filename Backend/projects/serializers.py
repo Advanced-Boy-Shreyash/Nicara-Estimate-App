@@ -26,16 +26,66 @@ class DesignRequirementBulkSerializer(serializers.Serializer):
 # ── Deliverables (FL, MB, 3D, Renders, WD) ──────────────────
 class ProjectDeliverableSerializer(serializers.ModelSerializer):
     uploaded_by_name = serializers.SerializerMethodField()
+    submitted_by_name = serializers.SerializerMethodField()
+    reviewed_by_name = serializers.SerializerMethodField()
     type_display = serializers.CharField(source='get_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    file_url = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
+    preview_url = serializers.SerializerMethodField()
+    file_size_display = serializers.SerializerMethodField()
 
     class Meta:
         model = ProjectDeliverable
         fields = '__all__'
-        # Both come from the URL / session, never the request body.
-        read_only_fields = ['project', 'uploaded_by']
+        # These come from the URL, the session or a workflow action — never
+        # straight from the request body.
+        read_only_fields = [
+            'project', 'uploaded_by', 'version_no', 'is_current', 'supersedes',
+            'file_size', 'thumbnail', 'preview',
+            'submitted_at', 'submitted_by', 'reviewed_at', 'reviewed_by',
+        ]
+        # The label is derived from version_no unless one is supplied.
+        extra_kwargs = {'version': {'required': False}}
+
+    def _abs(self, field):
+        if not field:
+            return None
+        request = self.context.get('request')
+        return request.build_absolute_uri(field.url) if request else field.url
+
+    def get_file_url(self, obj):
+        return self._abs(obj.file)
+
+    def get_thumbnail_url(self, obj):
+        return self._abs(obj.thumbnail)
+
+    def get_preview_url(self, obj):
+        return self._abs(obj.preview)
+
+    def get_file_size_display(self, obj):
+        size = obj.file_size or 0
+        if not size:
+            return ''
+        if size < 1024:
+            return f'{size} B'
+        if size < 1024 * 1024:
+            return f'{size / 1024:.1f} KB'
+        return f'{size / (1024 * 1024):.1f} MB'
 
     def get_uploaded_by_name(self, obj):
         return obj.uploaded_by.get_full_name() if obj.uploaded_by else ''
+
+    def get_submitted_by_name(self, obj):
+        return obj.submitted_by.get_full_name() if obj.submitted_by else ''
+
+    def get_reviewed_by_name(self, obj):
+        return obj.reviewed_by.get_full_name() if obj.reviewed_by else ''
+
+
+class DeliverableReviewSerializer(serializers.Serializer):
+    """Payload for approve / request-revision on a deliverable."""
+    remarks = serializers.CharField(required=False, allow_blank=True, default='')
 
 
 # ── Estimate Items ──────────────────────────────────────────

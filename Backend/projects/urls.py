@@ -23,9 +23,12 @@ urlpatterns = [
     path('<int:project_id>/design-requirements/bulk/', views.DesignRequirementBulkView.as_view(), name='design-req-bulk'),
     path('<int:project_id>/design-requirements/<int:pk>/', views.DesignRequirementDetailView.as_view(), name='design-req-detail'),
 
-    # ── Deliverables (FL, MB, 3D, Renders, WD) ──
+    # ── Deliverables (FL, MB, 3D, Renders, WD) — versioned + approvals ──
     path('<int:project_id>/deliverables/', views.DeliverableListCreateView.as_view(), name='deliverable-list'),
     path('<int:project_id>/deliverables/<int:pk>/', views.DeliverableDetailView.as_view(), name='deliverable-detail'),
+    path('<int:project_id>/deliverables/<int:pk>/submit/', views.DeliverableSubmitView.as_view(), name='deliverable-submit'),
+    path('<int:project_id>/deliverables/<int:pk>/approve/', views.DeliverableApproveView.as_view(), name='deliverable-approve'),
+    path('<int:project_id>/deliverables/<int:pk>/request-revision/', views.DeliverableRequestRevisionView.as_view(), name='deliverable-revision'),
 
     # ── Estimates ──
     path('<int:project_id>/estimates/', views.EstimateListCreateView.as_view(), name='estimate-list'),
@@ -34,12 +37,15 @@ urlpatterns = [
     path('<int:project_id>/estimates/<int:pk>/approve/', views.EstimateApproveView.as_view(), name='estimate-approve'),
     path('<int:project_id>/estimates/<int:pk>/request-revision/', views.EstimateRequestRevisionView.as_view(), name='estimate-revision'),
     path('<int:project_id>/estimates/<int:pk>/duplicate/', views.EstimateDuplicateView.as_view(), name='estimate-duplicate'),
+    path('<int:project_id>/estimates/<int:pk>/pdf/', views.EstimatePDFView.as_view(), name='estimate-pdf'),
+    path('<int:project_id>/estimates/<int:pk>/excel/', views.EstimateExcelView.as_view(), name='estimate-excel'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/', views.EstimateItemListCreateView.as_view(), name='estimate-item-list'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/add-from-catalog/', views.EstimateAddFromCatalogView.as_view(), name='estimate-item-from-catalog'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/<int:pk>/', views.EstimateItemDetailView.as_view(), name='estimate-item-detail'),
 
     # ── Booking Form ──
     path('<int:project_id>/booking-form/', views.BookingFormView.as_view(), name='booking-form'),
+    path('<int:project_id>/booking-form/pdf/', views.BookingPDFView.as_view(), name='booking-form-pdf'),
 
     # ══ DESIGN PHASE ════════════════════════════════════════
     path('<int:project_id>/measurements/', views.MeasurementListCreateView.as_view(), name='measurement-list'),
