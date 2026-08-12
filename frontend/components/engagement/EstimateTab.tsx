@@ -146,7 +146,7 @@ export default function EstimateTab({
             <div className="flex items-center gap-2">
               <button onClick={() => setImporting(true)} disabled={busy || !!locked}
                 className="flex items-center gap-1.5 px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-[11px] font-semibold cursor-pointer hover:bg-white/20 transition-colors">
-                📥 Import
+                Import
               </button>
             </div>
           </div>
@@ -165,17 +165,17 @@ export default function EstimateTab({
             </Btn>
             <Btn variant="ghost" disabled={busy || locked}
               onClick={() => setShowGenerator(!showGenerator)}>
-              {showGenerator ? "✕ Close Generator" : "🧠 Smart Generator"}
+              {showGenerator ? "Close Generator" : "Smart Generator"}
             </Btn>
 
             {/* Downloads — rendered server-side so every copy is identical. */}
             <Btn variant="ghost" disabled={downloading !== null}
               onClick={() => download("pdf")}>
-              {downloading === "pdf" ? "Preparing…" : "📄 PDF"}
+              {downloading === "pdf" ? "Preparing…" : "PDF"}
             </Btn>
             <Btn variant="ghost" disabled={downloading !== null}
               onClick={() => download("excel")}>
-              {downloading === "excel" ? "Preparing…" : "📊 Excel"}
+              {downloading === "excel" ? "Preparing…" : "Excel"}
             </Btn>
             <Btn variant="ghost" disabled={busy || locked || populating}
               onClick={async () => {
@@ -226,13 +226,13 @@ export default function EstimateTab({
                   setPopulating(false);
                 }
               }}>
-              {populating ? "Populating…" : "📋 Populate from Design Req"}
+              {populating ? "Populating…" : "Populate from Design Req"}
             </Btn>
             <div className="flex-1" />
             {estimate.status === "draft" && (
               <Btn variant="ghost" disabled={busy}
                 onClick={() => guard(() => estimatesApi.send(project.id, estimate.id), "Sent for client approval")}>
-                📤 Send for Approval
+                Send for Approval
               </Btn>
             )}
             {(estimate.status === "sent" || estimate.status === "revision") && (
@@ -242,14 +242,14 @@ export default function EstimateTab({
                     () => estimatesApi.requestRevision(project.id, estimate.id, "Client requested changes"),
                     "Marked for revision"
                   )}>
-                  ↩ Request Revision
+                  Request Revision
                 </Btn>
                 <Btn disabled={busy}
                   onClick={() => guard(
                     () => estimatesApi.approve(project.id, estimate.id, "Approved by client"),
                     "Estimate approved"
                   )}>
-                  ✓ Mark Approved
+                  Mark Approved
                 </Btn>
               </>
             )}
@@ -259,7 +259,7 @@ export default function EstimateTab({
                   const clone = await estimatesApi.duplicate(project.id, estimate.id);
                   setSelectedId(clone.id);
                 }, "Copied into a new draft")}>
-                ⧉ Duplicate to Revise
+                Duplicate to Revise
               </Btn>
             )}
           </div>
@@ -403,10 +403,10 @@ function ImportModal({ onClose, onImported, projectId, estimateId }: {
       <div className="flex gap-3">
         <button onClick={downloadTemplate}
           className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-surface-50 border border-surface-200 rounded-xl text-[12px] font-semibold text-nicara-dark cursor-pointer hover:bg-surface-100 transition-colors">
-          ⬇ Download Template
+          Download Template
         </button>
         <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-nicara-gold/10 border border-nicara-gold/30 rounded-xl text-[12px] font-semibold text-nicara-gold cursor-pointer hover:bg-nicara-gold/20 transition-colors">
-          📤 Upload CSV
+          Upload CSV
           <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleUpload} />
         </label>
       </div>
@@ -483,7 +483,7 @@ function LineItems({
 
   if (estimate.items.length === 0) {
     return (
-      <EmptyState icon="🧾" title="No line items yet"
+      <EmptyState icon="" title="No line items yet"
         hint={'Use "Add from Catalogue" to pull in items with their standard rates.'} />
     );
   }
@@ -500,7 +500,7 @@ function LineItems({
         </select>
         {fArea !== "All" && (
           <button onClick={() => setFArea("All")}
-            className="px-2.5 py-1 bg-transparent border border-surface-200 rounded-md text-[11px] text-surface-400 cursor-pointer hover:bg-surface-50">✕ Clear</button>
+            className="px-2.5 py-1 bg-transparent border border-surface-200 rounded-md text-[11px] text-surface-400 cursor-pointer hover:bg-surface-50">Clear</button>
         )}
         <span className="ml-auto text-[11px] text-surface-400">{filtered.length}/{estimate.items.length} items</span>
       </div>
@@ -510,7 +510,7 @@ function LineItems({
         <table className="w-full text-[11px] min-w-[1100px]">
           <thead>
             <tr className="bg-nicara-dark">
-              {["Area", "Category", "Sub Cat", "Item", "L", "B", "H", "Qty", "Unit", "Rate", "Amount", "GST", "▼", "🗑"].map(h => (
+              {["Area", "Category", "Sub Cat", "Item", "L", "B", "H", "Qty", "Unit", "Rate", "Amount", "GST", "Detail", "Del"].map(h => (
                 <th key={h} className={TH}>{h}</th>
               ))}
             </tr>
@@ -528,6 +528,16 @@ function LineItems({
                 remove={remove}
                 expanded={expanded}
                 setExpanded={setExpanded}
+                onAddRow={async () => {
+                  try {
+                    await estimatesApi.addItem(project.id, estimate.id, {
+                      area: group.area, item: "New line", qty: 1, rate: 0, unit: "unit", gst_pct: 18,
+                    });
+                    await onChanged();
+                  } catch (e) {
+                    onError(e instanceof ApiError ? e.message : "Could not add row.");
+                  }
+                }}
               />
             ))}
             {/* Grand total footer */}
@@ -550,7 +560,7 @@ function LineItems({
 /* ── Area group block with header + rows + expandable details ── */
 
 function GroupBlock({
-  group, locked, busy, val, setDraft, commit, remove, expanded, setExpanded,
+  group, locked, busy, val, setDraft, commit, remove, expanded, setExpanded, onAddRow,
 }: {
   group: { area: string; items: EstimateItem[]; subtotal: number };
   locked: boolean;
@@ -561,6 +571,7 @@ function GroupBlock({
   remove: (item: EstimateItem) => Promise<void>;
   expanded: Record<number, boolean>;
   setExpanded: React.Dispatch<React.SetStateAction<Record<number, boolean>>>;
+  onAddRow: () => void;
 }) {
   const BD = "border-r border-surface-200";
   return (
@@ -571,7 +582,13 @@ function GroupBlock({
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.area}</span>
             <span className="text-[10px] text-surface-400">{group.items.length} item(s)</span>
-            <span className="text-[10px] font-semibold text-nicara-gold ml-auto">{inr(String(group.subtotal))}</span>
+            <span className="text-[10px] font-semibold text-nicara-gold ml-auto mr-3">{inr(String(group.subtotal))}</span>
+            {!locked && (
+              <button onClick={onAddRow}
+                className="px-2.5 py-1 bg-white border border-surface-200 rounded-lg text-[10px] font-semibold text-nicara-gold cursor-pointer hover:bg-nicara-gold/5 hover:border-nicara-gold/30">
+                + Add Row
+              </button>
+            )}
           </div>
         </td>
       </tr>
@@ -692,7 +709,7 @@ function ItemRow({
         <td className="px-2 py-1.5 text-center">
           {!locked && (
             <button onClick={() => remove(item)} disabled={busy} title="Delete row"
-              className="bg-transparent border-none text-red-300 cursor-pointer text-[14px] p-0 hover:text-red-500 transition-colors">🗑</button>
+              className="bg-transparent border-none text-red-300 cursor-pointer text-[11px] font-semibold p-0 hover:text-red-500 transition-colors">Del</button>
           )}
         </td>
       </tr>
@@ -1044,7 +1061,7 @@ function SmartEstimateGenerator({
       {/* Header */}
       <div className="px-5 py-3 border-b border-stone-700">
         <div className="text-[14px] font-bold text-white flex items-center gap-2">
-          <span className="text-lg">🧠</span> Smart Estimate Generator
+          Smart Estimate Generator
         </div>
         <div className="text-[11px] text-stone-400 mt-0.5">
           Select your material preferences — we&apos;ll generate the estimate automatically
@@ -1056,7 +1073,7 @@ function SmartEstimateGenerator({
         {/* Plywood */}
         <div>
           <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
-            <span>🪵</span> Plywood
+            Plywood
           </div>
           <select value={selPlywood} onChange={e => setSelPlywood(e.target.value)}
             className={`${ddCls} ${selPlywood ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
@@ -1072,7 +1089,7 @@ function SmartEstimateGenerator({
         {/* Hardware */}
         <div>
           <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
-            <span>🔩</span> Hardware
+            Hardware
           </div>
           <select value={selHardware} onChange={e => setSelHardware(e.target.value)}
             className={`${ddCls} ${selHardware ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
@@ -1088,7 +1105,7 @@ function SmartEstimateGenerator({
         {/* Kitchen Accessories */}
         <div>
           <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
-            <span>🍳</span> Kitchen Acc.
+            Kitchen Acc.
           </div>
           <select value={selKitchenAcc} onChange={e => setSelKitchenAcc(e.target.value)}
             className={`${ddCls} ${selKitchenAcc ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
@@ -1104,7 +1121,7 @@ function SmartEstimateGenerator({
         {/* Finishing */}
         <div>
           <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
-            <span>✨</span> Finishing
+            Finishing
           </div>
           <select value={selFinish} onChange={e => setSelFinish(e.target.value)}
             className={`${ddCls} ${selFinish ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
@@ -1122,8 +1139,8 @@ function SmartEstimateGenerator({
       {(selPlywood || selHardware || selKitchenAcc || selFinish) && (
         <div className="px-5 pb-2">
           <div className="flex flex-wrap gap-1.5">
-            {[["🪵 Plywood", selPlywood], ["🔩 Hardware", selHardware],
-            ["🍳 Kitchen", selKitchenAcc], ["✨ Finish", selFinish]].map(([label, val]) =>
+            {[["Plywood", selPlywood], ["Hardware", selHardware],
+            ["Kitchen", selKitchenAcc], ["Finish", selFinish]].map(([label, val]) =>
               val ? (
                 <span key={label as string} className="px-2.5 py-1 bg-nicara-gold/10 border border-nicara-gold/30 rounded-full text-[9px] font-semibold text-nicara-gold">
                   {label}: {(val as string).split("—")[0]?.trim() || val}
@@ -1139,7 +1156,7 @@ function SmartEstimateGenerator({
         {canGenerate ? (
           <button onClick={generate} disabled={disabled || generating}
             className="px-6 py-2.5 bg-nicara-gold border-none rounded-xl text-white text-[12px] font-bold cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50">
-            {generating ? "⏳ Generating Estimate…" : "⚡ Generate Estimate"}
+            {generating ? "Generating Estimate\u2026" : "Generate Estimate"}
           </button>
         ) : (
           <div className="text-[11px] text-stone-500">

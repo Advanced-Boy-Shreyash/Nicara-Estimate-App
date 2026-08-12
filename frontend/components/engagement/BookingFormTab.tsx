@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ApiError, bookingApi } from "@/lib/api";
+import { ApiError, bookingApi, projectsApi } from "@/lib/api";
 import type { BookingForm, Project, ProjectMeta } from "@/lib/apiTypes";
 import { useApiData, inrExact } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
@@ -15,10 +15,11 @@ import { EmptyState, ErrorState, InlineError, Loading, StatusPill } from "@/comp
  * approved initial estimate; after that it tracks the advance and signature.
  */
 export default function BookingFormTab({
-  project, meta,
+  project, meta, onConverted,
 }: {
   project: Project;
   meta: ProjectMeta | null;
+  onConverted?: (p: Project) => void;
 }) {
   const toast = useToast();
   const [creating, setCreating] = useState(false);
@@ -65,7 +66,7 @@ export default function BookingFormTab({
       <div>
         {banner && <InlineError message={banner} />}
         <EmptyState
-          icon="📝"
+          icon=""
           title="No booking form yet"
           hint={approvedInitial
             ? `The approved initial estimate (${inrExact(String(approvedInitial.total))}) will be carried over as the agreed value.`
@@ -76,16 +77,17 @@ export default function BookingFormTab({
     );
   }
 
-  return <BookingEditor booking={data} project={project} meta={meta} onSaved={setData} />;
+  return <BookingEditor booking={data} project={project} meta={meta} onSaved={setData} onConverted={onConverted} />;
 }
 
 function BookingEditor({
-  booking, project, meta, onSaved,
+  booking, project, meta, onSaved, onConverted,
 }: {
   booking: BookingForm;
   project: Project;
   meta: ProjectMeta | null;
   onSaved: (b: BookingForm) => void;
+  onConverted?: (p: Project) => void;
 }) {
   const toast = useToast();
   const [form, setForm] = useState<Partial<BookingForm>>({ ...booking });
@@ -226,22 +228,41 @@ function BookingEditor({
               setDownloading(false);
             }
           }}>
-          {downloading ? "Preparing…" : "📄 Download PDF"}
+          {downloading ? "Preparing…" : "Download PDF"}
         </Btn>
         {booking.status === "draft" && (
           <Btn variant="ghost" disabled={saving}
             onClick={() => save({ status: "sent" }, "Marked as sent to client")}>
-            📤 Send to Client
+            Send to Client
           </Btn>
         )}
         {!signed && (
           <Btn variant="ghost" disabled={saving || !form.signed_by_name?.trim()}
             onClick={() => save({ status: "signed", terms_accepted: true }, "Booking signed")}>
-            ✍️ Mark Signed
+            Mark Signed
           </Btn>
         )}
         {!signed && !form.signed_by_name?.trim() && (
           <span className="text-[11px] text-surface-400">Enter who signed to enable sign-off</span>
+        )}
+        {project.stage === "lead" && onConverted && (
+          <>
+            <div className="flex-1" />
+            <Btn onClick={async () => {
+              setSaving(true);
+              try {
+                const updated = await projectsApi.update(project.id, { stage: "design" });
+                toast.success("Converted", "Project moved to Design phase");
+                onConverted(updated);
+              } catch (e) {
+                setBanner(e instanceof ApiError ? e.message : "Could not convert.");
+              } finally {
+                setSaving(false);
+              }
+            }} disabled={saving}>
+              Convert to Project
+            </Btn>
+          </>
         )}
       </div>
     </div>

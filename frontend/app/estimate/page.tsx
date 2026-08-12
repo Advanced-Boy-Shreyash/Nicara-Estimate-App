@@ -32,13 +32,13 @@ import BookingFormTab from "@/components/engagement/BookingFormTab";
  * at least `view` on that module.
  */
 const NAV_SECTIONS = [
-  { label: "Main", items: [{ id: "dashboard", icon: "📊", label: "Dashboard", module: "dashboard" }, { id: "projects", icon: "📁", label: "Projects", module: "projects" }] },
-  { label: "Tasks", items: [{ id: "tasks-planned", icon: "✅", label: "Planned Tasks", module: "tasks" }, { id: "tasks-unplanned", icon: "⚡", label: "Unplanned Tasks", module: "tasks" }] },
-  { label: "Vendors", items: [{ id: "vendors-material", icon: "🏭", label: "Material Suppliers", module: "vendors_material" }, { id: "vendors-contractors", icon: "👷", label: "Contractors", module: "vendors_contract" }] },
-  { label: "Customers", items: [{ id: "customers-leads", icon: "🎯", label: "Leads", module: "leads" }, { id: "customers-clients", icon: "👤", label: "Clients", module: "clients" }] },
-  { label: "Finance", items: [{ id: "finance-transactions", icon: "💳", label: "Transactions", module: "finance" }, { id: "finance-vendor", icon: "📤", label: "Vendor Finance", module: "finance" }, { id: "finance-client", icon: "📥", label: "Client Finance", module: "finance" }] },
-  { label: "Catalogue", items: [{ id: "items-catalogue", icon: "📦", label: "Items", module: "items" }, { id: "library-raw", icon: "🪵", label: "Raw Material", module: "library" }, { id: "library-furniture", icon: "🛋️", label: "Furniture & Furnishings", module: "library" }] },
-  { label: "Admin", items: [{ id: "team-users", icon: "👥", label: "Users & Roles", module: "users" }, { id: "iam-permissions", icon: "🔐", label: "User Permissions", module: "iam" }, { id: "stages-lead", icon: "📋", label: "Lead Stages", module: "masters" }, { id: "stages-design", icon: "🎨", label: "Design Stages", module: "masters" }, { id: "site-master", icon: "🏗️", label: "Project Site Master", module: "masters" }] },
+  { label: "Main", items: [{ id: "dashboard", icon: "", label: "Dashboard", module: "dashboard" }, { id: "projects", icon: "", label: "Projects", module: "projects" }] },
+  { label: "Tasks", items: [{ id: "tasks-planned", icon: "", label: "Planned Tasks", module: "tasks" }, { id: "tasks-unplanned", icon: "", label: "Unplanned Tasks", module: "tasks" }] },
+  { label: "Vendors", items: [{ id: "vendors-material", icon: "", label: "Material Suppliers", module: "vendors_material" }, { id: "vendors-contractors", icon: "", label: "Contractors", module: "vendors_contract" }] },
+  { label: "Customers", items: [{ id: "customers-leads", icon: "", label: "Leads", module: "leads" }, { id: "customers-clients", icon: "", label: "Clients", module: "clients" }] },
+  { label: "Finance", items: [{ id: "finance-transactions", icon: "", label: "Transactions", module: "finance" }, { id: "finance-vendor", icon: "", label: "Vendor Finance", module: "finance" }, { id: "finance-client", icon: "", label: "Client Finance", module: "finance" }] },
+  { label: "Catalogue", items: [{ id: "items-catalogue", icon: "", label: "Items", module: "items" }, { id: "library-raw", icon: "", label: "Raw Material", module: "library" }, { id: "library-furniture", icon: "", label: "Furniture & Furnishings", module: "library" }] },
+  { label: "Admin", items: [{ id: "team-users", icon: "", label: "Users & Roles", module: "users" }, { id: "iam-permissions", icon: "", label: "User Permissions", module: "iam" }, { id: "stages-lead", icon: "", label: "Lead Stages", module: "masters" }, { id: "stages-design", icon: "", label: "Design Stages", module: "masters" }, { id: "site-master", icon: "", label: "Project Site Master", module: "masters" }] },
 ];
 
 function Sidebar({ view, setView, selectedProject, setSelectedProject, allowed }: {
@@ -137,7 +137,7 @@ function ProjectsList({ onOpen, onNewLead }: { onOpen: (id: number) => void; onN
       </div>
 
       <div className="grid grid-cols-5 gap-3 mb-5">
-        {([["Ongoing", projects.length - completed.length, "📁", "#C9A96E"], ["Completed", completed.length, "✅", "#2dd4a8"], ["Lead", leads.length, "🎯", "#3b82f6"], ["Design", designs.length, "🎨", "#7B4FA6"], ["Execution", execs.length, "🏗️", "#F59E0B"]] as const).map(([l, v, ic, c]) => (
+        {([["Ongoing", projects.length - completed.length, "", "#C9A96E"], ["Completed", completed.length, "", "#2dd4a8"], ["Lead", leads.length, "", "#3b82f6"], ["Design", designs.length, "", "#7B4FA6"], ["Execution", execs.length, "", "#F59E0B"]] as const).map(([l, v, ic, c]) => (
           <div key={l} className="kpi-card"><div className="flex justify-between items-start"><div><div className="text-[10px] text-surface-400 uppercase tracking-wider">{l}</div><div className="text-2xl font-extrabold text-nicara-dark mt-1">{v}</div></div><div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg" style={{ background: c + "15" }}>{ic}</div></div></div>
         ))}
       </div>
@@ -148,7 +148,7 @@ function ProjectsList({ onOpen, onNewLead }: { onOpen: (id: number) => void; onN
             <button key={k} onClick={() => setTab(k)} className={`px-4 py-2 rounded-lg text-[12px] font-semibold border-none cursor-pointer transition-all ${tab === k ? "bg-white text-nicara-dark shadow-sm" : "bg-transparent text-surface-500"}`}>{l} <span className="text-[9px] ml-0.5 opacity-50">({k === "ongoing" ? ongoing.length : k === "completed" ? completed.length : k === "all" ? projects.length : k === "lead" ? leads.length : k === "design" ? designs.length : execs.length})</span></button>
           ))}
         </div>
-        <div className="relative min-w-[250px]"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400 text-sm">🔍</span>
+        <div className="relative min-w-[250px]"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400 text-[11px] font-bold">Search</span>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search projects..." className="w-full pl-9 pr-3 py-2.5 border border-surface-200 rounded-xl text-[12px] bg-white outline-none focus:border-nicara-gold" />
         </div>
       </div>
@@ -159,15 +159,15 @@ function ProjectsList({ onOpen, onNewLead }: { onOpen: (id: number) => void; onN
       {!loading && !error && (
         <>
           {/* Ongoing = all non-completed */}
-          {tab === "ongoing" && <><SectionHead icon="📁" title="Ongoing Projects" count={ongoing.length} tone="bg-nicara-gold/10 text-nicara-gold" /><ProjectTable rows={ongoing} stage="all" onOpen={onOpen} /></>}
+          {tab === "ongoing" && <><SectionHead icon="" title="Ongoing Projects" count={ongoing.length} tone="bg-nicara-gold/10 text-nicara-gold" /><ProjectTable rows={ongoing} stage="all" onOpen={onOpen} /></>}
           {/* Completed */}
-          {tab === "completed" && <><SectionHead icon="✅" title="Completed Projects" count={completed.length} tone="bg-green-50 text-green-700" /><ProjectTable rows={completed} stage="completed" onOpen={onOpen} /></>}
+          {tab === "completed" && <><SectionHead icon="" title="Completed Projects" count={completed.length} tone="bg-green-50 text-green-700" /><ProjectTable rows={completed} stage="completed" onOpen={onOpen} /></>}
           {/* All */}
-          {tab === "all" && <><SectionHead icon="📁" title="All Projects" count={projects.length} tone="bg-surface-100 text-surface-600" /><ProjectTable rows={projects} stage="all" onOpen={onOpen} /></>}
+          {tab === "all" && <><SectionHead icon="" title="All Projects" count={projects.length} tone="bg-surface-100 text-surface-600" /><ProjectTable rows={projects} stage="all" onOpen={onOpen} /></>}
           {/* Individual stages */}
-          {tab === "lead" && <><SectionHead icon="🎯" title="Lead Projects" count={leads.length} tone="bg-blue-50 text-blue-700" /><ProjectTable rows={leads} stage="lead" onOpen={onOpen} /></>}
-          {tab === "design" && <><SectionHead icon="🎨" title="Design Projects" count={designs.length} tone="bg-purple-50 text-purple-700" /><ProjectTable rows={designs} stage="design" onOpen={onOpen} /></>}
-          {tab === "execution" && <><SectionHead icon="🏗️" title="Execution Projects" count={execs.length} tone="bg-amber-50 text-amber-700" /><ProjectTable rows={execs} stage="execution" onOpen={onOpen} /></>}
+          {tab === "lead" && <><SectionHead icon="" title="Lead Projects" count={leads.length} tone="bg-blue-50 text-blue-700" /><ProjectTable rows={leads} stage="lead" onOpen={onOpen} /></>}
+          {tab === "design" && <><SectionHead icon="" title="Design Projects" count={designs.length} tone="bg-purple-50 text-purple-700" /><ProjectTable rows={designs} stage="design" onOpen={onOpen} /></>}
+          {tab === "execution" && <><SectionHead icon="" title="Execution Projects" count={execs.length} tone="bg-amber-50 text-amber-700" /><ProjectTable rows={execs} stage="execution" onOpen={onOpen} /></>}
         </>
       )}
     </div>
@@ -466,9 +466,9 @@ function AddLeadModal({ open, onClose, meta, onCreated }: {
 type Phase = "engagement" | "design" | "execution";
 
 const PHASE_TABS = [
-  { id: "engagement" as Phase, label: "Initial Engagement", icon: "🎯" },
-  { id: "design" as Phase, label: "Design", icon: "🎨" },
-  { id: "execution" as Phase, label: "Execution", icon: "🏗️" },
+  { id: "engagement" as Phase, label: "Initial Engagement", icon: "" },
+  { id: "design" as Phase, label: "Design", icon: "" },
+  { id: "execution" as Phase, label: "Execution", icon: "" },
 ];
 const ENG_SUBS = [
   { id: "client-basic", label: "Client Details" }, { id: "design-req", label: "Design Requirements" },
@@ -521,7 +521,7 @@ function ProjectDetail({ projectId, meta, onBack, onProject }: {
       case "initial-est":
         return <EstimateTab project={project} type="initial" title="Initial Estimate" />;
       case "booking":
-        return <BookingFormTab project={project} meta={meta} />;
+        return <BookingFormTab project={project} meta={meta} onConverted={(p) => { applyProject(p); reload(); }} />;
 
       /* ── Design ── */
       case "measurements": return <MeasurementsTab project={project} />;
@@ -568,8 +568,10 @@ function ProjectDetail({ projectId, meta, onBack, onProject }: {
           </div>
         </div>
         <div className="flex gap-1 mb-0">
-          {PHASE_TABS.map(t => (
-            <button key={t.id} onClick={() => handlePhase(t.id)} className={`px-5 py-2.5 rounded-t-xl text-[12px] font-semibold border-none cursor-pointer transition-all ${phase === t.id ? "bg-nicara-dark text-nicara-gold" : "bg-surface-100 text-surface-500 hover:bg-surface-200"}`}>{t.icon} {t.label}</button>
+          {PHASE_TABS
+            .filter(t => t.id === "engagement" || project.stage !== "lead")
+            .map(t => (
+            <button key={t.id} onClick={() => handlePhase(t.id)} className={`px-5 py-2.5 rounded-t-xl text-[12px] font-semibold border-none cursor-pointer transition-all ${phase === t.id ? "bg-nicara-dark text-nicara-gold" : "bg-surface-100 text-surface-500 hover:bg-surface-200"}`}>{t.label}</button>
           ))}
         </div>
       </div>

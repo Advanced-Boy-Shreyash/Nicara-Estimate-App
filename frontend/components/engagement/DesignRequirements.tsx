@@ -23,24 +23,24 @@ const BD = "border-r border-surface-200";
 /* ── Room definitions with pre-filled sub-items ──────────────── */
 
 const ROOMS: { name: string; icon: string; items: { unit: string; finishing: string }[] }[] = [
-  { name: "Foyer", icon: "🚪", items: [
+  { name: "Foyer", icon: "", items: [
     { unit: "Shoe Rack", finishing: "Laminate" },
     { unit: "Console Unit", finishing: "Laminate" },
     { unit: "False Ceiling", finishing: "Gypsum" },
   ]},
-  { name: "Living Room", icon: "🛋️", items: [
+  { name: "Living Room", icon: "", items: [
     { unit: "TV Console", finishing: "Veneer" },
     { unit: "Wall Panel", finishing: "Veneer" },
     { unit: "Display Unit", finishing: "Laminate" },
     { unit: "False Ceiling", finishing: "Gypsum" },
     { unit: "Painting", finishing: "Paint" },
   ]},
-  { name: "Dining Room", icon: "🍽️", items: [
+  { name: "Dining Room", icon: "", items: [
     { unit: "Crockery Unit", finishing: "Laminate" },
     { unit: "Bar Unit", finishing: "Veneer" },
     { unit: "False Ceiling", finishing: "Gypsum" },
   ]},
-  { name: "Kitchen", icon: "🍳", items: [
+  { name: "Kitchen", icon: "", items: [
     { unit: "Base Unit", finishing: "Acrylic" },
     { unit: "Wall Unit", finishing: "Acrylic" },
     { unit: "Loft Unit", finishing: "Laminate" },
@@ -48,7 +48,7 @@ const ROOMS: { name: string; icon: string; items: { unit: string; finishing: str
     { unit: "Countertop", finishing: "Granite" },
     { unit: "Backsplash", finishing: "Tile" },
   ]},
-  { name: "Master Bedroom", icon: "🛏️", items: [
+  { name: "Master Bedroom", icon: "", items: [
     { unit: "Wardrobe", finishing: "Laminate" },
     { unit: "Walk-in Closet", finishing: "Laminate" },
     { unit: "Dressing Unit", finishing: "Veneer" },
@@ -56,54 +56,54 @@ const ROOMS: { name: string; icon: string; items: { unit: string; finishing: str
     { unit: "Bed Back Wall", finishing: "Veneer" },
     { unit: "False Ceiling", finishing: "Gypsum" },
   ]},
-  { name: "Bedroom 2", icon: "🛏️", items: [
+  { name: "Bedroom 2", icon: "", items: [
     { unit: "Wardrobe", finishing: "Laminate" },
     { unit: "Study Table", finishing: "Laminate" },
     { unit: "TV Unit", finishing: "Laminate" },
     { unit: "False Ceiling", finishing: "Gypsum" },
   ]},
-  { name: "Bedroom 3", icon: "🛏️", items: [
+  { name: "Bedroom 3", icon: "", items: [
     { unit: "Wardrobe", finishing: "Laminate" },
     { unit: "Study Table", finishing: "Laminate" },
     { unit: "False Ceiling", finishing: "Gypsum" },
   ]},
-  { name: "Master Bathroom", icon: "🚿", items: [
+  { name: "Master Bathroom", icon: "", items: [
     { unit: "Vanity Unit", finishing: "Acrylic" },
     { unit: "Glass Partition", finishing: "Glass" },
   ]},
-  { name: "Common Bathroom", icon: "🚿", items: [
+  { name: "Common Bathroom", icon: "", items: [
     { unit: "Vanity Unit", finishing: "Laminate" },
     { unit: "Glass Partition", finishing: "Glass" },
   ]},
-  { name: "Balcony", icon: "🌿", items: [
+  { name: "Balcony", icon: "", items: [
     { unit: "Planter Box", finishing: "Paint" },
     { unit: "Railing", finishing: "Glass" },
   ]},
-  { name: "Study", icon: "📚", items: [
+  { name: "Study", icon: "", items: [
     { unit: "Study Table", finishing: "Veneer" },
     { unit: "Bookshelf", finishing: "Laminate" },
     { unit: "False Ceiling", finishing: "Gypsum" },
   ]},
-  { name: "Pooja Room", icon: "🪔", items: [
+  { name: "Pooja Room", icon: "", items: [
     { unit: "Pooja Unit", finishing: "Veneer" },
     { unit: "Backdrop", finishing: "Veneer" },
   ]},
-  { name: "Kids Room", icon: "🧸", items: [
+  { name: "Kids Room", icon: "", items: [
     { unit: "Wardrobe", finishing: "Laminate" },
     { unit: "Study Table", finishing: "Laminate" },
     { unit: "Bookshelf", finishing: "Laminate" },
     { unit: "False Ceiling", finishing: "Gypsum" },
   ]},
-  { name: "Utility", icon: "🧹", items: [
+  { name: "Utility", icon: "", items: [
     { unit: "Storage Unit", finishing: "Laminate" },
     { unit: "Countertop", finishing: "Granite" },
   ]},
-  { name: "Bar Unit", icon: "🍸", items: [
+  { name: "Bar Unit", icon: "", items: [
     { unit: "Bar Cabinet", finishing: "Veneer" },
     { unit: "Bar Counter", finishing: "Granite" },
     { unit: "Glass Shelf", finishing: "Glass" },
   ]},
-  { name: "Home Theatre", icon: "🎬", items: [
+  { name: "Home Theatre", icon: "", items: [
     { unit: "TV Console", finishing: "Veneer" },
     { unit: "Acoustic Panel", finishing: "Upholstery" },
     { unit: "False Ceiling", finishing: "Gypsum" },
@@ -129,6 +129,8 @@ export default function DesignRequirements({ project }: { project: Project }) {
   const [fRoom, setFRoom] = useState("All");
   const [fFinishing, setFFinishing] = useState("All");
   const [viewingImage, setViewingImage] = useState<string | null>(null);
+  const [floorPlan, setFloorPlan] = useState<{ url: string; name: string; size: string } | null>(null);
+  const floorPlanRef = useRef<HTMLInputElement>(null);
 
   const serverRows = data?.results ?? [];
   const working: Row[] = rows ?? serverRows;
@@ -178,6 +180,10 @@ export default function DesignRequirements({ project }: { project: Project }) {
   };
 
   const addRow = () => setRows([...(rows ?? serverRows), { ...BLANK_ROW }]);
+
+  const addRowToRoom = (roomName: string) => {
+    setRows([...(rows ?? serverRows), { ...BLANK_ROW, room: roomName }]);
+  };
 
   const addRoomRows = (room: typeof ROOMS[number]) => {
     const newRows: Row[] = room.items.map(item => ({
@@ -250,7 +256,6 @@ export default function DesignRequirements({ project }: { project: Project }) {
                     ? "bg-nicara-gold/10 border-nicara-gold text-nicara-gold shadow-sm"
                     : "bg-white border-surface-200 text-surface-600 hover:border-nicara-gold/50 hover:bg-nicara-gold/5"
                 }`}>
-                <span className="text-sm">{room.icon}</span>
                 <span>{room.name}</span>
                 {count > 0 && (
                   <span className="text-[9px] bg-nicara-gold text-white rounded-full w-4 h-4 flex items-center justify-center font-bold">{count}</span>
@@ -260,6 +265,44 @@ export default function DesignRequirements({ project }: { project: Project }) {
             );
           })}
         </div>
+      </div>
+
+      {/* -- Upload Floor Plan -- */}
+      <div className="bg-white border border-surface-200 rounded-2xl p-4 mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <div className="text-[10px] font-bold text-nicara-gold uppercase tracking-wider">Floor Plan</div>
+            <div className="text-[10px] text-surface-400">Upload a floor plan reference (PDF, Images)</div>
+          </div>
+          <input type="file" ref={floorPlanRef} accept=".pdf,.png,.jpg,.jpeg,.gif,.dxf,.dwg" className="hidden"
+            onChange={e => {
+              const f = e.target.files?.[0];
+              if (f) {
+                const sz = f.size < 1024 ? `${f.size} B` : f.size < 1048576 ? `${(f.size / 1024).toFixed(1)} KB` : `${(f.size / 1048576).toFixed(1)} MB`;
+                setFloorPlan({ url: URL.createObjectURL(f), name: f.name, size: sz });
+              }
+            }} />
+          <button onClick={() => floorPlanRef.current?.click()}
+            className="px-3 py-1.5 bg-surface-50 border border-dashed border-surface-300 rounded-lg text-[11px] font-semibold text-surface-500 cursor-pointer hover:border-nicara-gold hover:text-nicara-gold">
+            Upload Floor Plan
+          </button>
+        </div>
+        {floorPlan && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-surface-50 border border-surface-100 rounded-lg">
+            <span className="text-[11px] font-semibold text-nicara-dark flex-1 truncate">{floorPlan.name}</span>
+            <span className="text-[9px] text-surface-400">{floorPlan.size}</span>
+            {floorPlan.name.match(/\.(png|jpg|jpeg|gif)$/i) ? (
+              <button onClick={() => setViewingImage(floorPlan.url)}
+                className="px-2 py-1 bg-blue-50 border border-blue-200 rounded text-[10px] font-semibold text-blue-600 cursor-pointer hover:bg-blue-100">
+                View
+              </button>
+            ) : null}
+            <a href={floorPlan.url} download={floorPlan.name}
+              className="px-2 py-1 bg-surface-50 border border-surface-200 rounded text-[10px] font-semibold text-surface-600 no-underline hover:bg-surface-100">
+              Download
+            </a>
+          </div>
+        )}
       </div>
 
       {/* ── Filter Bar ── */}
@@ -283,7 +326,7 @@ export default function DesignRequirements({ project }: { project: Project }) {
         <table className="w-full text-[11px] min-w-[1000px]">
           <thead>
             <tr className="bg-nicara-dark">
-              {["Unit Selection", "L", "B", "H", "Finishing", "Remarks", "Design Ref.", "🗑"].map(h => (
+              {["Unit Selection", "L", "B", "H", "Finishing", "Remarks", "Design Ref.", "Del"].map(h => (
                 <th key={h} className={TH}>{h}</th>
               ))}
             </tr>
@@ -297,6 +340,7 @@ export default function DesignRequirements({ project }: { project: Project }) {
                 removeByRef={removeByRef}
                 onImageUpload={handleImageUpload}
                 onViewImage={setViewingImage}
+                onAddRow={() => addRowToRoom(group.room)}
               />
             ))}
             {filtered.length === 0 && (
@@ -345,23 +389,26 @@ export default function DesignRequirements({ project }: { project: Project }) {
 
 /* ── Room group with heading row (like Initial Estimate area grouping) ── */
 
-function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage }: {
+function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, onAddRow }: {
   group: { room: string; items: Row[] };
   editByRef: (row: Row, key: keyof Row, value: string | boolean) => void;
   removeByRef: (row: Row) => void;
   onImageUpload: (row: Row, file: File) => void;
   onViewImage: (url: string) => void;
+  onAddRow: () => void;
 }) {
-  const roomDef = ROOMS.find(r => r.name === group.room);
   return (
     <>
       {/* Room heading */}
       <tr className="bg-nicara-gold/10">
         <td colSpan={8} className="px-3 py-2">
           <div className="flex items-center gap-2">
-            <span className="text-sm">{roomDef?.icon || "📁"}</span>
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.room}</span>
             <span className="text-[10px] text-surface-400">{group.items.length} item(s)</span>
+            <button onClick={onAddRow}
+              className="ml-auto px-2.5 py-1 bg-white border border-surface-200 rounded-lg text-[10px] font-semibold text-nicara-gold cursor-pointer hover:bg-nicara-gold/5 hover:border-nicara-gold/30">
+              + Add Row
+            </button>
           </div>
         </td>
       </tr>
@@ -430,13 +477,13 @@ function DesignRow({ row, ri, editByRef, removeByRef, onImageUpload, onViewImage
             <img src={row.designImage} alt="Design" className="w-6 h-6 rounded object-cover border border-surface-200" />
             <button onClick={() => onViewImage(row.designImage!)}
               className="px-1.5 py-0.5 bg-blue-50 border border-blue-200 rounded text-[9px] font-semibold text-blue-600 cursor-pointer hover:bg-blue-100">
-              👁 View
+              View
             </button>
           </div>
         ) : (
           <button onClick={() => fileRef.current?.click()}
             className="px-2 py-1 bg-surface-50 border border-dashed border-surface-300 rounded text-[10px] text-surface-500 cursor-pointer hover:border-nicara-gold hover:text-nicara-gold">
-            📷 Upload
+            Upload
           </button>
         )}
       </td>
@@ -444,7 +491,7 @@ function DesignRow({ row, ri, editByRef, removeByRef, onImageUpload, onViewImage
       {/* Delete */}
       <td className="px-2 py-1.5 text-center">
         <button onClick={() => removeByRef(row)} title="Remove row"
-          className="bg-transparent border-none text-red-300 cursor-pointer text-[14px] p-0 hover:text-red-500 transition-colors">🗑</button>
+          className="bg-transparent border-none text-red-300 cursor-pointer text-[11px] font-semibold p-0 hover:text-red-500 transition-colors">Del</button>
       </td>
     </tr>
   );
