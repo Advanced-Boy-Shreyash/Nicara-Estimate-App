@@ -8,6 +8,11 @@ import { useToast } from "@/components/ui/Toast";
 import Modal from "@/components/ui/Modal";
 import { Btn } from "@/components/ui/Form";
 import { EmptyState, ErrorState, InlineError, Loading, StatusPill } from "@/components/ui/States";
+import {
+  Download, Upload, FileText, FileSpreadsheet, Send,
+  RotateCcw, CheckCircle, Copy, Brain, Plus, Trash2, ChevronDown, ChevronUp,
+  ClipboardList, X,
+} from "lucide-react";
 
 const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
 const TH = "px-2 py-2 text-stone-200 font-semibold text-[10px] text-left whitespace-nowrap border-r border-stone-700";
@@ -146,14 +151,14 @@ export default function EstimateTab({
             <div className="flex items-center gap-2">
               <button onClick={() => setImporting(true)} disabled={busy || !!locked}
                 className="flex items-center gap-1.5 px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white text-[11px] font-semibold cursor-pointer hover:bg-white/20 transition-colors">
-                Import
+                <Upload size={13} /> Import
               </button>
             </div>
           </div>
 
           {/* Actions */}
           <div className="flex items-center gap-2 mb-4 flex-wrap">
-            <Btn onClick={() => setPicking(true)} disabled={busy || locked}>+ Add from Catalogue</Btn>
+            <Btn onClick={() => setPicking(true)} disabled={busy || locked}><Plus size={13} /> Add from Catalogue</Btn>
             <Btn variant="ghost" disabled={busy || locked}
               onClick={() => guard(
                 () => estimatesApi.addItem(project.id, estimate.id, {
@@ -161,21 +166,21 @@ export default function EstimateTab({
                 }),
                 "Blank line added"
               )}>
-              + Blank Line
+              <Plus size={13} /> Blank Line
             </Btn>
             <Btn variant="ghost" disabled={busy || locked}
               onClick={() => setShowGenerator(!showGenerator)}>
-              {showGenerator ? "Close Generator" : "Smart Generator"}
+              {showGenerator ? <><X size={13} /> Close Generator</> : <><Brain size={13} /> Smart Generator</>}
             </Btn>
 
             {/* Downloads — rendered server-side so every copy is identical. */}
             <Btn variant="ghost" disabled={downloading !== null}
               onClick={() => download("pdf")}>
-              {downloading === "pdf" ? "Preparing…" : "PDF"}
+              {downloading === "pdf" ? "Preparing…" : <><FileText size={13} /> PDF</>}
             </Btn>
             <Btn variant="ghost" disabled={downloading !== null}
               onClick={() => download("excel")}>
-              {downloading === "excel" ? "Preparing…" : "Excel"}
+              {downloading === "excel" ? "Preparing…" : <><FileSpreadsheet size={13} /> Excel</>}
             </Btn>
             <Btn variant="ghost" disabled={busy || locked || populating}
               onClick={async () => {
@@ -226,13 +231,13 @@ export default function EstimateTab({
                   setPopulating(false);
                 }
               }}>
-              {populating ? "Populating…" : "Populate from Design Req"}
+              {populating ? "Populating…" : <><ClipboardList size={13} /> Populate from Design Req</>}
             </Btn>
             <div className="flex-1" />
             {estimate.status === "draft" && (
               <Btn variant="ghost" disabled={busy}
                 onClick={() => guard(() => estimatesApi.send(project.id, estimate.id), "Sent for client approval")}>
-                Send for Approval
+                <Send size={13} /> Send for Approval
               </Btn>
             )}
             {(estimate.status === "sent" || estimate.status === "revision") && (
@@ -242,14 +247,14 @@ export default function EstimateTab({
                     () => estimatesApi.requestRevision(project.id, estimate.id, "Client requested changes"),
                     "Marked for revision"
                   )}>
-                  Request Revision
+                  <RotateCcw size={13} /> Request Revision
                 </Btn>
                 <Btn disabled={busy}
                   onClick={() => guard(
                     () => estimatesApi.approve(project.id, estimate.id, "Approved by client"),
                     "Estimate approved"
                   )}>
-                  Mark Approved
+                  <CheckCircle size={13} /> Mark Approved
                 </Btn>
               </>
             )}
@@ -259,7 +264,7 @@ export default function EstimateTab({
                   const clone = await estimatesApi.duplicate(project.id, estimate.id);
                   setSelectedId(clone.id);
                 }, "Copied into a new draft")}>
-                Duplicate to Revise
+                <Copy size={13} /> Duplicate to Revise
               </Btn>
             )}
           </div>
@@ -403,10 +408,10 @@ function ImportModal({ onClose, onImported, projectId, estimateId }: {
       <div className="flex gap-3">
         <button onClick={downloadTemplate}
           className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-surface-50 border border-surface-200 rounded-xl text-[12px] font-semibold text-nicara-dark cursor-pointer hover:bg-surface-100 transition-colors">
-          Download Template
+          <Download size={14} /> Download Template
         </button>
         <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-nicara-gold/10 border border-nicara-gold/30 rounded-xl text-[12px] font-semibold text-nicara-gold cursor-pointer hover:bg-nicara-gold/20 transition-colors">
-          Upload CSV
+          <Upload size={14} /> Upload CSV
           <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleUpload} />
         </label>
       </div>
@@ -702,14 +707,14 @@ function ItemRow({
           <button onClick={onToggle}
             className={`px-2 py-0.5 rounded-md text-[10px] cursor-pointer border ${isOpen ? "bg-nicara-gold/10 border-nicara-gold text-nicara-gold" : "bg-surface-50 border-surface-200 text-surface-500"
               }`}>
-            {isOpen ? "▲" : "▼"}
+            {isOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           </button>
         </td>
         {/* Delete */}
         <td className="px-2 py-1.5 text-center">
           {!locked && (
             <button onClick={() => remove(item)} disabled={busy} title="Delete row"
-              className="bg-transparent border-none text-red-300 cursor-pointer text-[11px] font-semibold p-0 hover:text-red-500 transition-colors">Del</button>
+              className="bg-transparent border-none text-red-300 cursor-pointer p-0 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
           )}
         </td>
       </tr>

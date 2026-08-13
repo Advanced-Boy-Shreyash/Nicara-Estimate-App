@@ -22,6 +22,27 @@ import DesignRequirements from "@/components/engagement/DesignRequirements";
 import DeliverablesTab from "@/components/engagement/DeliverablesTab";
 import EstimateTab from "@/components/engagement/EstimateTab";
 import BookingFormTab from "@/components/engagement/BookingFormTab";
+import {
+  LayoutDashboard, FolderKanban, ClipboardCheck, Zap,
+  Factory, HardHat, Target, UserCircle,
+  CreditCard, ArrowUpFromLine, ArrowDownToLine,
+  Package, TreePine, Armchair,
+  Users, ShieldCheck, List, Palette, Building,
+  FolderOpen, CheckCircle, Crosshair, PenTool, Hammer,
+  Handshake, Ruler, type LucideIcon,
+} from "lucide-react";
+
+/* ── Icon map for sidebar nav items ── */
+const NAV_ICONS: Record<string, LucideIcon> = {
+  dashboard: LayoutDashboard, projects: FolderKanban,
+  "tasks-planned": ClipboardCheck, "tasks-unplanned": Zap,
+  "vendors-material": Factory, "vendors-contractors": HardHat,
+  "customers-leads": Target, "customers-clients": UserCircle,
+  "finance-transactions": CreditCard, "finance-vendor": ArrowUpFromLine, "finance-client": ArrowDownToLine,
+  "items-catalogue": Package, "library-raw": TreePine, "library-furniture": Armchair,
+  "team-users": Users, "iam-permissions": ShieldCheck, "stages-lead": List,
+  "stages-design": Palette, "site-master": Building,
+};
 
 /* ═══════════════════════════════════════════════════════════════
    SIDEBAR
@@ -74,7 +95,7 @@ function Sidebar({ view, setView, selectedProject, setSelectedProject, allowed }
                 className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-[11px] text-left border-none cursor-pointer sidebar-item ${
                   view === item.id && !selectedProject ? "sidebar-item-active font-semibold" : "bg-transparent text-surface-400 hover:text-surface-200"
                 }`}>
-                <span className="text-[13px] w-4 text-center">{item.icon}</span><span>{item.label}</span>
+                {(() => { const Icon = NAV_ICONS[item.id]; return Icon ? <Icon size={14} className="shrink-0 opacity-70" /> : <span className="w-3.5" />; })()}<span>{item.label}</span>
               </button>
             ))}
           </div>
@@ -137,8 +158,8 @@ function ProjectsList({ onOpen, onNewLead }: { onOpen: (id: number) => void; onN
       </div>
 
       <div className="grid grid-cols-5 gap-3 mb-5">
-        {([["Ongoing", projects.length - completed.length, "", "#C9A96E"], ["Completed", completed.length, "", "#2dd4a8"], ["Lead", leads.length, "", "#3b82f6"], ["Design", designs.length, "", "#7B4FA6"], ["Execution", execs.length, "", "#F59E0B"]] as const).map(([l, v, ic, c]) => (
-          <div key={l} className="kpi-card"><div className="flex justify-between items-start"><div><div className="text-[10px] text-surface-400 uppercase tracking-wider">{l}</div><div className="text-2xl font-extrabold text-nicara-dark mt-1">{v}</div></div><div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg" style={{ background: c + "15" }}>{ic}</div></div></div>
+        {([["Ongoing", projects.length - completed.length, FolderOpen, "#C9A96E"], ["Completed", completed.length, CheckCircle, "#2dd4a8"], ["Lead", leads.length, Crosshair, "#3b82f6"], ["Design", designs.length, PenTool, "#7B4FA6"], ["Execution", execs.length, Hammer, "#F59E0B"]] as [string, number, LucideIcon, string][]).map(([l, v, Ic, c]) => (
+          <div key={l} className="kpi-card"><div className="flex justify-between items-start"><div><div className="text-[10px] text-surface-400 uppercase tracking-wider">{l}</div><div className="text-2xl font-extrabold text-nicara-dark mt-1">{v}</div></div><div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: c + "15" }}><Ic size={20} style={{ color: c }} /></div></div></div>
         ))}
       </div>
 
@@ -159,15 +180,15 @@ function ProjectsList({ onOpen, onNewLead }: { onOpen: (id: number) => void; onN
       {!loading && !error && (
         <>
           {/* Ongoing = all non-completed */}
-          {tab === "ongoing" && <><SectionHead icon="" title="Ongoing Projects" count={ongoing.length} tone="bg-nicara-gold/10 text-nicara-gold" /><ProjectTable rows={ongoing} stage="all" onOpen={onOpen} /></>}
+          {tab === "ongoing" && <><SectionHead icon={<FolderOpen size={15} />} title="Ongoing Projects" count={ongoing.length} tone="bg-nicara-gold/10 text-nicara-gold" /><ProjectTable rows={ongoing} stage="all" onOpen={onOpen} /></>}
           {/* Completed */}
-          {tab === "completed" && <><SectionHead icon="" title="Completed Projects" count={completed.length} tone="bg-green-50 text-green-700" /><ProjectTable rows={completed} stage="completed" onOpen={onOpen} /></>}
+          {tab === "completed" && <><SectionHead icon={<CheckCircle size={15} />} title="Completed Projects" count={completed.length} tone="bg-green-50 text-green-700" /><ProjectTable rows={completed} stage="completed" onOpen={onOpen} /></>}
           {/* All */}
-          {tab === "all" && <><SectionHead icon="" title="All Projects" count={projects.length} tone="bg-surface-100 text-surface-600" /><ProjectTable rows={projects} stage="all" onOpen={onOpen} /></>}
+          {tab === "all" && <><SectionHead icon={<FolderKanban size={15} />} title="All Projects" count={projects.length} tone="bg-surface-100 text-surface-600" /><ProjectTable rows={projects} stage="all" onOpen={onOpen} /></>}
           {/* Individual stages */}
-          {tab === "lead" && <><SectionHead icon="" title="Lead Projects" count={leads.length} tone="bg-blue-50 text-blue-700" /><ProjectTable rows={leads} stage="lead" onOpen={onOpen} /></>}
-          {tab === "design" && <><SectionHead icon="" title="Design Projects" count={designs.length} tone="bg-purple-50 text-purple-700" /><ProjectTable rows={designs} stage="design" onOpen={onOpen} /></>}
-          {tab === "execution" && <><SectionHead icon="" title="Execution Projects" count={execs.length} tone="bg-amber-50 text-amber-700" /><ProjectTable rows={execs} stage="execution" onOpen={onOpen} /></>}
+          {tab === "lead" && <><SectionHead icon={<Crosshair size={15} />} title="Lead Projects" count={leads.length} tone="bg-blue-50 text-blue-700" /><ProjectTable rows={leads} stage="lead" onOpen={onOpen} /></>}
+          {tab === "design" && <><SectionHead icon={<PenTool size={15} />} title="Design Projects" count={designs.length} tone="bg-purple-50 text-purple-700" /><ProjectTable rows={designs} stage="design" onOpen={onOpen} /></>}
+          {tab === "execution" && <><SectionHead icon={<Hammer size={15} />} title="Execution Projects" count={execs.length} tone="bg-amber-50 text-amber-700" /><ProjectTable rows={execs} stage="execution" onOpen={onOpen} /></>}
         </>
       )}
     </div>
@@ -202,10 +223,10 @@ function ProjectTable({ rows, stage, onOpen }: {
   );
 }
 
-function SectionHead({ icon, title, count, tone }: { icon: string; title: string; count: number; tone: string }) {
+function SectionHead({ icon, title, count, tone }: { icon: React.ReactNode; title: string; count: number; tone: string }) {
   return (
     <div className="flex items-center gap-2 mb-2">
-      <span className="text-[13px]">{icon}</span>
+      <span className="text-surface-400">{icon}</span>
       <h2 className="text-[14px] font-bold text-nicara-dark m-0">{title}</h2>
       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${tone}`}>{count}</span>
     </div>
@@ -465,10 +486,11 @@ function AddLeadModal({ open, onClose, meta, onCreated }: {
    ═══════════════════════════════════════════════════════════════ */
 type Phase = "engagement" | "design" | "execution";
 
+const PHASE_ICONS: Record<Phase, LucideIcon> = { engagement: Handshake, design: Ruler, execution: Hammer };
 const PHASE_TABS = [
-  { id: "engagement" as Phase, label: "Initial Engagement", icon: "" },
-  { id: "design" as Phase, label: "Design", icon: "" },
-  { id: "execution" as Phase, label: "Execution", icon: "" },
+  { id: "engagement" as Phase, label: "Initial Engagement" },
+  { id: "design" as Phase, label: "Design" },
+  { id: "execution" as Phase, label: "Execution" },
 ];
 const ENG_SUBS = [
   { id: "client-basic", label: "Client Details" }, { id: "design-req", label: "Design Requirements" },
@@ -570,15 +592,18 @@ function ProjectDetail({ projectId, meta, onBack, onProject }: {
         <div className="flex gap-1 mb-0">
           {PHASE_TABS
             .filter(t => t.id === "engagement" || project.stage !== "lead")
-            .map(t => (
-            <button key={t.id} onClick={() => handlePhase(t.id)} className={`px-5 py-2.5 rounded-t-xl text-[12px] font-semibold border-none cursor-pointer transition-all ${phase === t.id ? "bg-nicara-dark text-nicara-gold" : "bg-surface-100 text-surface-500 hover:bg-surface-200"}`}>{t.label}</button>
+            .map(t => {
+              const PhIcon = PHASE_ICONS[t.id];
+              return (
+                <button key={t.id} onClick={() => handlePhase(t.id)} className={`flex items-center gap-1.5 px-5 py-2.5 rounded-t-xl text-[12px] font-semibold border-none cursor-pointer transition-all ${phase === t.id ? "bg-nicara-dark text-nicara-gold" : "bg-surface-100 text-surface-500 hover:bg-surface-200"}`}><PhIcon size={14} />{t.label}</button>
+              );
+            })}
+        </div>
+        <div className="bg-nicara-dark px-6 py-0 flex overflow-x-auto">
+          {subs.map(s => (
+            <button key={s.id} onClick={() => setSubTab(s.id)} className={`px-4 py-2.5 bg-transparent border-none text-[11px] cursor-pointer whitespace-nowrap transition-all ${subTab === s.id ? "text-nicara-gold border-b-2 border-nicara-gold font-bold" : "text-surface-400 border-b-2 border-transparent hover:text-surface-200"}`}>{s.label}</button>
           ))}
         </div>
-      </div>
-      <div className="bg-nicara-dark px-6 py-0 flex overflow-x-auto">
-        {subs.map(s => (
-          <button key={s.id} onClick={() => setSubTab(s.id)} className={`px-4 py-2.5 bg-transparent border-none text-[11px] cursor-pointer whitespace-nowrap transition-all ${subTab === s.id ? "text-nicara-gold border-b-2 border-nicara-gold font-bold" : "text-surface-400 border-b-2 border-transparent hover:text-surface-200"}`}>{s.label}</button>
-        ))}
       </div>
       <div className="p-5 px-6">{renderContent()}</div>
     </div>

@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/Toast";
 import { Btn } from "@/components/ui/Form";
 import Modal from "@/components/ui/Modal";
 import { ErrorState, InlineError, Loading } from "@/components/ui/States";
+import { Upload, Eye, Download, Trash2, Plus, X } from "lucide-react";
 
 type Row = Omit<DesignRequirement, "id" | "sort_order"> & { id?: number; designImage?: string };
 
@@ -18,7 +19,7 @@ const BLANK_ROW: Row = {
 
 const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
 const TH = "px-2 py-2 text-stone-200 font-semibold text-[10px] text-left whitespace-nowrap border-r border-stone-700";
-const BD = "border-r border-surface-200";
+const BD = "border-r border-surface-200";   
 
 /* ── Room definitions with pre-filled sub-items ──────────────── */
 
