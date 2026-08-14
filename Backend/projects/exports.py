@@ -217,7 +217,12 @@ def estimate_pdf(estimate):
             ]
 
         index += 1
-        description = item.item
+        # Item name, with its room area (zone) and finish when present.
+        heading = item.item
+        tags = ' · '.join(t for t in [item.zone, item.finishing] if t)
+        if tags:
+            heading += f'  <font size=7 color="#C9A96E">[{tags}]</font>'
+        description = heading
         if item.description:
             description += f'<br/><font size=7 color="#6B7280">{item.description}</font>'
 
@@ -232,6 +237,24 @@ def estimate_pdf(estimate):
             Paragraph(rupees(item.rate), s['right']),
             Paragraph(f'<b>{rupees(item.amount)}</b>', s['right']),
         ])
+
+        # Component breakdown, indented under the line, when present.
+        components = list(item.components.all())
+        if components:
+            muted = ParagraphStyle('m', parent=s['small'], leftIndent=8)
+            for comp in components:
+                spec = ' '.join(b for b in [comp.basic_component, comp.detail,
+                                            comp.brand, comp.model] if b)
+                rows.append([
+                    Paragraph('', s['small']),
+                    Paragraph(f'<font color="#6B7280">‣ {spec}</font>', muted),
+                    Paragraph('', s['small']), Paragraph('', s['small']),
+                    Paragraph('', s['small']),
+                    Paragraph(f'<font size=7 color="#6B7280">{comp.qty:g}</font>', s['small']),
+                    Paragraph(f'<font size=7 color="#6B7280">{comp.unit}</font>', s['small']),
+                    Paragraph(f'<font size=7 color="#6B7280">{rupees(comp.price)}</font>', s['right']),
+                    Paragraph(f'<font size=7 color="#6B7280">{rupees(comp.amount)}</font>', s['right']),
+                ])
 
     if index == 0:
         rows.append([Paragraph('No line items on this estimate.', s['cell'])]
@@ -435,10 +458,9 @@ def estimate_xlsx(estimate):
     ws.title = 'Estimate'
 
     columns = [
-        ('S.No', 7), ('Area', 20), ('Item', 30), ('Description', 40),
-        ('L', 10), ('B', 10), ('H', 10), ('Qty', 9), ('Unit', 9),
-        ('Rate', 14), ('Amount', 16), ('GST %', 8), ('GST Amount', 14),
-        ('Total', 16),
+        ('S.No', 7), ('Area', 18), ('Room Area', 14), ('Item', 26), ('Finishing', 12),
+        ('Description', 30), ('L', 8), ('B', 8), ('H', 8), ('Qty', 9), ('Unit', 9),
+        ('Rate', 14), ('Amount', 16), ('GST %', 8), ('GST Amount', 14), ('Total', 16),
     ]
     for index, (_, width) in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(index)].width = width
@@ -495,20 +517,35 @@ def estimate_xlsx(estimate):
         index += 1
         gst_amount = item.amount * item.gst_pct / Decimal('100')
         values = [
-            index, item.area, item.item, item.description,
+            index, item.area, item.zone, item.item, item.finishing, item.description,
             item.length, item.breadth, item.height,
             float(item.qty), item.unit,
             float(item.rate), float(item.amount),
             float(item.gst_pct), float(gst_amount), float(item.amount + gst_amount),
         ]
+        money_columns = {12, 13, 15, 16}
         for column, value in enumerate(values, start=1):
             cell = ws.cell(row=row, column=column, value=value)
             cell.border = BORDER
             cell.font = Font(size=9)
-            cell.alignment = Alignment(vertical='top', wrap_text=column == 4)
-            if column in (10, 11, 13, 14):
+            cell.alignment = Alignment(vertical='top', wrap_text=column == 6)
+            if column in money_columns:
                 cell.number_format = MONEY
         row += 1
+
+        # Component breakdown rows, indented under the line.
+        for comp in item.components.all():
+            spec = ' '.join(b for b in [comp.basic_component, comp.detail,
+                                        comp.brand, comp.model] if b)
+            sub = ['', '', '', f'   ‣ {spec}', '', '', '', '', '',
+                   float(comp.qty), comp.unit, float(comp.price), float(comp.amount),
+                   '', '', '']
+            for column, value in enumerate(sub, start=1):
+                cell = ws.cell(row=row, column=column, value=value if value != '' else None)
+                cell.font = Font(size=8, color='6B7280', italic=True)
+                if column in {12, 13}:
+                    cell.number_format = MONEY
+            row += 1
 
     if index == 0:
         ws.merge_cells(f'A{row}:{last_column}{row}')
@@ -526,9 +563,10 @@ def estimate_xlsx(estimate):
     if not estimate.total_discount:
         totals = [t for t in totals if t[0] not in ('Discount', 'Taxable Amount')]
 
+    label_span_end = get_column_letter(len(columns) - 1)
     for label, value in totals:
         is_grand = label == 'GRAND TOTAL'
-        ws.merge_cells(f'A{row}:M{row}')
+        ws.merge_cells(f'A{row}:{label_span_end}{row}')
         label_cell = ws.cell(row=row, column=1, value=label)
         label_cell.alignment = Alignment(horizontal='right')
         label_cell.font = Font(bold=True, size=11 if is_grand else 9,

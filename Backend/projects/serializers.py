@@ -5,8 +5,8 @@ Full project lifecycle serializers.
 from rest_framework import serializers
 from .models import (
     BookingForm, Project, DesignRequirement, ProjectDeliverable, Estimate,
-    EstimateItem, Measurement, MaterialSelection, ExecutionStage,
-    PaymentMilestone, QualityCheck,
+    EstimateItem, EstimateItemComponent, Measurement, MaterialSelection,
+    ExecutionStage, PaymentMilestone, QualityCheck,
 )
 
 
@@ -89,11 +89,37 @@ class DeliverableReviewSerializer(serializers.Serializer):
 
 
 # ── Estimate Items ──────────────────────────────────────────
+class EstimateItemComponentSerializer(serializers.ModelSerializer):
+    """One row of a line's material breakdown; `amount` is qty × price."""
+
+    class Meta:
+        model = EstimateItemComponent
+        fields = ['id', 'estimate_item', 'sno', 'basic_component', 'detail',
+                  'brand', 'model', 'qty', 'unit', 'price', 'amount',
+                  'catalog_material', 'catalog_option']
+        read_only_fields = ['estimate_item', 'amount']
+
+    def validate_qty(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError('Quantity cannot be negative.')
+        return value
+
+    def validate_price(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError('Price cannot be negative.')
+        return value
+
+
 class EstimateItemSerializer(serializers.ModelSerializer):
-    """`amount` is derived from qty × rate, so it is never accepted as input."""
+    """
+    `amount` is derived — from the component breakdown when present, else from
+    qty × rate — so it is never accepted as input.
+    """
     gst_amount = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     total_with_gst = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     catalog_item_code = serializers.CharField(source='catalog_item.code', read_only=True)
+    components = EstimateItemComponentSerializer(many=True, read_only=True)
+    has_components = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = EstimateItem

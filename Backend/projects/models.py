@@ -358,7 +358,16 @@ class EstimateItem(models.Model):
         help_text='Master item this line was created from, if any'
     )
     sno = models.IntegerField(default=0)
-    area = models.CharField(max_length=100, help_text='Room/area name')
+    area = models.CharField(max_length=100, help_text='Room name, e.g. Master Bedroom')
+    # The Excel columns: a room area (zone) the item sits on, and its finish.
+    zone = models.CharField(max_length=100, blank=True, default='',
+                            help_text='Room area, e.g. East Wall')
+    finishing = models.CharField(max_length=100, blank=True, default='',
+                                 help_text='e.g. Laminate, Veneer')
+    # Kept because the estimate grid already edits these.
+    category = models.CharField(max_length=100, blank=True, default='')
+    subcategory = models.CharField(max_length=100, blank=True, default='')
+
     item = models.CharField(max_length=200)
     description = models.TextField(blank=True, default='')
     length = models.CharField(max_length=20, blank=True, default='')
@@ -367,8 +376,10 @@ class EstimateItem(models.Model):
     qty = models.DecimalField(max_digits=10, decimal_places=2, default=1)
     unit = models.CharField(max_length=20, default='unit')
     rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0,
-                                 help_text='Auto-computed as qty × rate')
+    amount = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        help_text='Sum of the component breakdown when present, else qty × rate'
+    )
     gst_pct = models.DecimalField(max_digits=5, decimal_places=2, default=18)
     remarks = models.CharField(max_length=300, blank=True, default='')
 
@@ -379,12 +390,28 @@ class EstimateItem(models.Model):
         return f"#{self.sno} {self.area} — {self.item}"
 
     def save(self, *args, **kwargs):
-        # qty × rate is the single source of truth for a line total.
-        self.amount = money((self.qty or Decimal('0')) * (self.rate or Decimal('0')))
         if not self.sno:
             last = EstimateItem.objects.filter(estimate=self.estimate).order_by('-sno').first()
             self.sno = (last.sno if last else 0) + 1
+        # A saved (has-pk) line with a component breakdown takes its amount from
+        # the components; otherwise qty × rate is the source of truth.
+        if self.pk and self.components.exists():
+            self.amount = money(sum((c.amount for c in self.components.all()), Decimal('0')))
+        else:
+            self.amount = money((self.qty or Decimal('0')) * (self.rate or Decimal('0')))
         super().save(*args, **kwargs)
+
+    def recompute_amount(self):
+        """Refresh `amount` from the component breakdown (or qty × rate)."""
+        if self.components.exists():
+            self.amount = money(sum((c.amount for c in self.components.all()), Decimal('0')))
+        else:
+            self.amount = money((self.qty or Decimal('0')) * (self.rate or Decimal('0')))
+        self.save(update_fields=['amount'])
+
+    @property
+    def has_components(self):
+        return self.components.exists()
 
     @property
     def gst_amount(self):
@@ -393,6 +420,63 @@ class EstimateItem(models.Model):
     @property
     def total_with_gst(self):
         return money(self.amount + self.gst_amount)
+
+
+class EstimateItemComponent(models.Model):
+    """
+    One row of a line item's material breakdown (its bill of materials).
+
+    Mirrors the shared sheet's detail block:
+        Basic Component | Detail | Brand | Model | Qty | Unit | Price | Amount
+
+    e.g.  Plywood | 18mm | Austin | Lincoln | 64 | sft | 100 | 6400
+    The parent line's amount is the sum of these.
+    """
+    estimate_item = models.ForeignKey(
+        EstimateItem, on_delete=models.CASCADE, related_name='components'
+    )
+    sno = models.IntegerField(default=0)
+
+    basic_component = models.CharField(max_length=150, help_text='e.g. Plywood, Laminate, Hinges')
+    detail = models.CharField(max_length=150, blank=True, default='', help_text='e.g. 18mm')
+    brand = models.CharField(max_length=120, blank=True, default='')
+    model = models.CharField(max_length=120, blank=True, default='')
+    qty = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    unit = models.CharField(max_length=20, blank=True, default='')
+    price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0,
+                                 help_text='Auto-computed as qty × price')
+
+    # Optional trace back to the catalogue this was pulled from.
+    catalog_material = models.ForeignKey(
+        'catalog.Material', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+',
+    )
+    catalog_option = models.ForeignKey(
+        'catalog.MaterialOption', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+',
+    )
+
+    class Meta:
+        ordering = ['sno', 'id']
+
+    def __str__(self):
+        return f'{self.basic_component} {self.detail} — {self.amount}'
+
+    def save(self, *args, **kwargs):
+        self.amount = money((self.qty or Decimal('0')) * (self.price or Decimal('0')))
+        if not self.sno:
+            last = (EstimateItemComponent.objects
+                    .filter(estimate_item=self.estimate_item).order_by('-sno').first())
+            self.sno = (last.sno if last else 0) + 1
+        super().save(*args, **kwargs)
+        # Keep the parent line total in step with its breakdown.
+        self.estimate_item.recompute_amount()
+
+    def delete(self, *args, **kwargs):
+        parent = self.estimate_item
+        super().delete(*args, **kwargs)
+        parent.recompute_amount()
 
 
 # ════════════════════════════════════════════════════════════════

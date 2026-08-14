@@ -4,8 +4,8 @@ NICARA Projects — Admin Configuration
 from django.contrib import admin
 from .models import (
     BookingForm, Project, DesignRequirement, ProjectDeliverable, Estimate,
-    EstimateItem, Measurement, MaterialSelection, ExecutionStage,
-    PaymentMilestone, QualityCheck,
+    EstimateItem, EstimateItemComponent, Measurement, MaterialSelection,
+    ExecutionStage, PaymentMilestone, QualityCheck,
 )
 
 
@@ -44,11 +44,26 @@ class ProjectDeliverableAdmin(admin.ModelAdmin):
     list_filter = ['type', 'status']
 
 
+class EstimateItemComponentInline(admin.TabularInline):
+    model = EstimateItemComponent
+    extra = 0
+    readonly_fields = ['amount']
+
+
 class EstimateItemInline(admin.TabularInline):
     model = EstimateItem
     extra = 0
     autocomplete_fields = ['catalog_item']
     readonly_fields = ['amount']
+
+
+@admin.register(EstimateItem)
+class EstimateItemAdmin(admin.ModelAdmin):
+    list_display = ['sno', 'estimate', 'area', 'zone', 'item', 'finishing', 'amount']
+    list_filter = ['estimate__type']
+    search_fields = ['area', 'zone', 'item']
+    readonly_fields = ['amount']
+    inlines = [EstimateItemComponentInline]
 
 
 @admin.register(Estimate)

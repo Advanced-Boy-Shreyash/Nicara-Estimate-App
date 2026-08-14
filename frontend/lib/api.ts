@@ -7,7 +7,7 @@
 import type {
   BookingForm, CatalogMaterial, CatalogMeta, CatalogRoom, CatalogZone, Client,
   CrmMeta, CrmNote, Deliverable, DeliverableType, DesignRequirement, Estimate,
-  EstimateItem, EstimateListItem, EstimateType, Furniture, FurniturePart, Item,
+  EstimateItem, EstimateItemComponent, EstimateListItem, EstimateType, Furniture, FurniturePart, Item,
   ItemCategory, ItemMeta, Lead, LeadPipeline, MaterialOption, ModuleRegistry,
   MyPermissions, PartMaterial, PermissionMatrixRow, Project, ProjectListItem,
   ProjectMeta, Vendor, VendorMeta,
@@ -629,8 +629,14 @@ export const catalogApi = {
 // ── Estimates ─────────────────────────────────────────────────
 
 export type EstimateItemInput = Partial<
-  Pick<EstimateItem, "area" | "item" | "description" | "length" | "breadth" |
-       "height" | "unit" | "remarks"> & { qty: number | string; rate: number | string; gst_pct: number | string }
+  Pick<EstimateItem, "area" | "zone" | "finishing" | "category" | "subcategory" |
+       "item" | "description" | "length" | "breadth" | "height" | "unit" | "remarks">
+  & { qty: number | string; rate: number | string; gst_pct: number | string }
+>;
+
+export type ComponentInput = Partial<
+  Pick<EstimateItemComponent, "basic_component" | "detail" | "brand" | "model" | "unit">
+  & { qty: number | string; price: number | string; catalog_material: number | null; catalog_option: number | null }
 >;
 
 export const estimatesApi = {
@@ -704,6 +710,33 @@ export const estimatesApi = {
     apiFetch<void>(`/projects/${projectId}/estimates/${estimateId}/items/${itemId}/`, {
       method: "DELETE",
     }),
+
+  // ── Line breakdown (bill of materials) ──
+  components: (projectId: number, estimateId: number, itemId: number) =>
+    apiFetch<Paginated<EstimateItemComponent>>(
+      `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/components/`
+    ),
+  addComponent: (projectId: number, estimateId: number, itemId: number, data: ComponentInput) =>
+    apiFetch<EstimateItemComponent>(
+      `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/components/`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+  updateComponent: (projectId: number, estimateId: number, itemId: number, componentId: number, data: ComponentInput) =>
+    apiFetch<EstimateItemComponent>(
+      `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/components/${componentId}/`,
+      { method: "PATCH", body: JSON.stringify(data) }
+    ),
+  deleteComponent: (projectId: number, estimateId: number, itemId: number, componentId: number) =>
+    apiFetch<void>(
+      `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/components/${componentId}/`,
+      { method: "DELETE" }
+    ),
+  /** Fill a line's breakdown from a catalogue furniture's bill of materials. */
+  populateFromFurniture: (projectId: number, estimateId: number, itemId: number, furnitureId: number) =>
+    apiFetch<{ detail: string; item: EstimateItem }>(
+      `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/populate-from-furniture/`,
+      { method: "POST", body: JSON.stringify({ furniture_id: furnitureId, replace: true }) }
+    ),
 };
 
 // ── Initial Engagement: Booking Form ──────────────────────────

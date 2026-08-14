@@ -1,12 +1,17 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ApiError, designRequirementsApi, estimatesApi, itemsApi } from "@/lib/api";
-import type { Estimate, EstimateItem, EstimateType, Item, Project } from "@/lib/apiTypes";
+import {
+  ApiError, catalogApi, designRequirementsApi, estimatesApi, itemsApi,
+  type ComponentInput,
+} from "@/lib/api";
+import type {
+  Estimate, EstimateItem, EstimateItemComponent, EstimateType, Item, Project,
+} from "@/lib/apiTypes";
 import { useApiData, inr, inrExact } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
 import Modal from "@/components/ui/Modal";
-import { Btn } from "@/components/ui/Form";
+import { Btn, Field } from "@/components/ui/Form";
 import { EmptyState, ErrorState, InlineError, Loading, StatusPill } from "@/components/ui/States";
 import {
   Download, Upload, FileText, FileSpreadsheet, Send,
@@ -525,6 +530,8 @@ function LineItems({
               <GroupBlock
                 key={group.area}
                 group={group}
+                project={project}
+                estimate={estimate}
                 locked={locked}
                 busy={busy}
                 val={val}
@@ -533,6 +540,8 @@ function LineItems({
                 remove={remove}
                 expanded={expanded}
                 setExpanded={setExpanded}
+                onChanged={onChanged}
+                onError={onError}
                 onAddRow={async () => {
                   try {
                     await estimatesApi.addItem(project.id, estimate.id, {
@@ -565,9 +574,12 @@ function LineItems({
 /* ── Area group block with header + rows + expandable details ── */
 
 function GroupBlock({
-  group, locked, busy, val, setDraft, commit, remove, expanded, setExpanded, onAddRow,
+  group, project, estimate, locked, busy, val, setDraft, commit, remove,
+  expanded, setExpanded, onChanged, onError, onAddRow,
 }: {
   group: { area: string; items: EstimateItem[]; subtotal: number };
+  project: Project;
+  estimate: Estimate;
   locked: boolean;
   busy: boolean;
   val: (item: EstimateItem, key: string) => string;
@@ -576,6 +588,8 @@ function GroupBlock({
   remove: (item: EstimateItem) => Promise<void>;
   expanded: Record<number, boolean>;
   setExpanded: React.Dispatch<React.SetStateAction<Record<number, boolean>>>;
+  onChanged: () => Promise<void>;
+  onError: (msg: string) => void;
   onAddRow: () => void;
 }) {
   const BD = "border-r border-surface-200";
@@ -606,12 +620,16 @@ function GroupBlock({
             item={item}
             ri={ri}
             isOpen={isOpen}
+            project={project}
+            estimate={estimate}
             locked={locked}
             busy={busy}
             val={val}
             setDraft={setDraft}
             commit={commit}
             remove={remove}
+            onChanged={onChanged}
+            onError={onError}
             onToggle={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))}
             BD={BD}
           />
@@ -624,17 +642,22 @@ function GroupBlock({
 /* ── Single item row + collapsible detail sub-table ── */
 
 function ItemRow({
-  item, ri, isOpen, locked, busy, val, setDraft, commit, remove, onToggle, BD,
+  item, ri, isOpen, project, estimate, locked, busy, val, setDraft, commit, remove,
+  onChanged, onError, onToggle, BD,
 }: {
   item: EstimateItem;
   ri: number;
   isOpen: boolean;
+  project: Project;
+  estimate: Estimate;
   locked: boolean;
   busy: boolean;
   val: (item: EstimateItem, key: string) => string;
   setDraft: React.Dispatch<React.SetStateAction<Record<number, Record<string, unknown>>>>;
   commit: (item: EstimateItem) => Promise<void>;
   remove: (item: EstimateItem) => Promise<void>;
+  onChanged: () => Promise<void>;
+  onError: (msg: string) => void;
   onToggle: () => void;
   BD: string;
 }) {
@@ -718,47 +741,258 @@ function ItemRow({
           )}
         </td>
       </tr>
-      {/* Collapsible detail row */}
+      {/* Collapsible detail row — live material breakdown */}
       {isOpen && (
         <tr>
           <td colSpan={14} className="p-0">
-            <div className="bg-amber-50 border-l-[3px] border-l-nicara-gold px-4 py-3">
-              <div className="text-[10px] font-bold text-amber-800 mb-2">📋 Item Breakdown — {val(item, "item")}</div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-[10px] min-w-[700px] border border-amber-200 rounded-lg overflow-hidden">
-                  <thead>
-                    <tr className="bg-amber-100">
-                      {["Type", "Specification", "Brand", "Model", "Qty", "Unit", "Price", "Cost", "GST%", "Total"].map(h => (
-                        <th key={h} className="px-2 py-1.5 text-amber-800 font-semibold text-left text-[9px] uppercase">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-t border-amber-200">
-                      <td className="px-2 py-1.5 text-surface-500">Procurement</td>
-                      <td className="px-2 py-1.5 font-semibold">{val(item, "item")}</td>
-                      <td className="px-2 py-1.5 text-surface-500">—</td>
-                      <td className="px-2 py-1.5 text-surface-500">—</td>
-                      <td className="px-2 py-1.5 font-mono">{val(item, "qty") || 1}</td>
-                      <td className="px-2 py-1.5">{val(item, "unit") || "Nos"}</td>
-                      <td className="px-2 py-1.5 font-mono">{inr(val(item, "rate") || "0")}</td>
-                      <td className="px-2 py-1.5 font-mono">{inr(item.amount)}</td>
-                      <td className="px-2 py-1.5">{parseFloat(item.gst_pct)}%</td>
-                      <td className="px-2 py-1.5 font-bold text-nicara-gold font-mono">{inr(item.amount)}</td>
-                    </tr>
-                    <tr className="border-t border-amber-200 text-surface-400 italic">
-                      <td colSpan={10} className="px-2 py-1.5 text-[9px]">
-                        Detail breakdown will be auto-populated when linked to catalogue items with BOMs.
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <ComponentBreakdown
+              item={item} project={project} estimate={estimate}
+              locked={locked} onChanged={onChanged} onError={onError} />
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/* ── Live material breakdown (bill of materials) ──────────────── */
+
+function ComponentBreakdown({
+  item, project, estimate, locked, onChanged, onError,
+}: {
+  item: EstimateItem;
+  project: Project;
+  estimate: Estimate;
+  locked: boolean;
+  onChanged: () => Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const toast = useToast();
+  const components = item.components ?? [];
+  const [editing, setEditing] = useState<EstimateItemComponent | "new" | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [showPull, setShowPull] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const removeComponent = async (id: number) => {
+    setBusy(true);
+    try {
+      await estimatesApi.deleteComponent(project.id, estimate.id, item.id, id);
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Could not remove the component.");
+    } finally { setBusy(false); }
+  };
+
+  const pull = async (furnitureId: number) => {
+    setPulling(true);
+    try {
+      const res = await estimatesApi.populateFromFurniture(project.id, estimate.id, item.id, furnitureId);
+      setShowPull(false);
+      toast.success("Breakdown pulled", res.detail);
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Could not pull the breakdown.");
+    } finally { setPulling(false); }
+  };
+
+  return (
+    <div className="bg-amber-50 border-l-[3px] border-l-nicara-gold px-4 py-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[10px] font-bold text-amber-800">
+          📋 Material Breakdown — {item.item || "line"}
+          {components.length > 0 && (
+            <span className="ml-2 text-amber-600 font-normal">
+              amount rolls up from these {components.length} component(s)
+            </span>
+          )}
+        </div>
+        {!locked && (
+          <div className="flex items-center gap-2">
+            <button onClick={() => setShowPull(true)} disabled={pulling}
+              className="px-2.5 py-1 bg-white border border-amber-300 rounded-lg text-[10px] font-semibold text-amber-700 cursor-pointer hover:bg-amber-100">
+              {pulling ? "Pulling…" : "⇊ Pull from Catalogue"}
+            </button>
+            <button onClick={() => setEditing("new")}
+              className="px-2.5 py-1 bg-nicara-gold border-none rounded-lg text-[10px] font-bold text-white cursor-pointer">
+              + Basic Component
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-[10px] min-w-[760px] border border-amber-200 rounded-lg overflow-hidden bg-white">
+          <thead>
+            <tr className="bg-amber-100">
+              {["Basic Component", "Detail", "Brand", "Model", "Qty", "Unit", "Price", "Amount", ""].map(h => (
+                <th key={h} className="px-2 py-1.5 text-amber-800 font-semibold text-left text-[9px] uppercase">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {components.map(c => (
+              <tr key={c.id} className="border-t border-amber-200">
+                <td className="px-2 py-1.5 font-semibold text-nicara-dark">{c.basic_component}</td>
+                <td className="px-2 py-1.5 text-surface-600">{c.detail || "—"}</td>
+                <td className="px-2 py-1.5 text-surface-600">{c.brand || "—"}</td>
+                <td className="px-2 py-1.5 text-surface-600">{c.model || "—"}</td>
+                <td className="px-2 py-1.5 font-mono text-right">{parseFloat(c.qty)}</td>
+                <td className="px-2 py-1.5">{c.unit || "—"}</td>
+                <td className="px-2 py-1.5 font-mono text-right">{inr(c.price)}</td>
+                <td className="px-2 py-1.5 font-mono text-right font-semibold text-nicara-dark">{inr(c.amount)}</td>
+                <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                  {!locked && (
+                    <>
+                      <button onClick={() => setEditing(c)}
+                        className="text-amber-700 hover:text-nicara-gold bg-transparent border-none cursor-pointer text-[10px] mr-2">edit</button>
+                      <button onClick={() => removeComponent(c.id)} disabled={busy}
+                        className="text-red-300 hover:text-red-500 bg-transparent border-none cursor-pointer text-[11px]">✕</button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {components.length === 0 && (
+              <tr className="border-t border-amber-200">
+                <td colSpan={9} className="px-2 py-3 text-center text-surface-400 text-[10px] italic">
+                  No breakdown yet. Add a basic component, or pull one from the catalogue.
+                  {" "}Until then the line uses qty × rate.
+                </td>
+              </tr>
+            )}
+          </tbody>
+          {components.length > 0 && (
+            <tfoot>
+              <tr className="bg-amber-100 border-t-2 border-amber-300">
+                <td colSpan={7} className="px-2 py-1.5 text-right font-bold text-amber-800 text-[10px]">Line Total</td>
+                <td className="px-2 py-1.5 text-right font-extrabold text-nicara-gold font-mono">{inr(item.amount)}</td>
+                <td />
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+
+      {editing && (
+        <ComponentModal
+          component={editing === "new" ? null : editing}
+          project={project} estimate={estimate} itemId={item.id}
+          onClose={() => setEditing(null)}
+          onSaved={async () => { setEditing(null); toast.success("Saved", "Breakdown updated"); await onChanged(); }} />
+      )}
+      {showPull && (
+        <PullFromCatalogueModal onClose={() => setShowPull(false)} onPick={pull} busy={pulling} />
+      )}
+    </div>
+  );
+}
+
+function ComponentModal({
+  component, project, estimate, itemId, onClose, onSaved,
+}: {
+  component: EstimateItemComponent | null;
+  project: Project;
+  estimate: Estimate;
+  itemId: number;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState<ComponentInput>(
+    component ? { ...component } : { basic_component: "", detail: "", brand: "", model: "", qty: "1", unit: "sft", price: "0" });
+  const [errors, setErrors] = useState<Record<string, string[]>>({});
+  const [banner, setBanner] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const set = (k: keyof ComponentInput, v: string) => setForm(f => ({ ...f, [k]: v }));
+  const previewAmount = (parseFloat(String(form.qty)) || 0) * (parseFloat(String(form.price)) || 0);
+
+  const save = async () => {
+    if (!String(form.basic_component ?? "").trim()) { setErrors({ basic_component: ["Required."] }); return; }
+    setSaving(true); setBanner(""); setErrors({});
+    try {
+      if (component) await estimatesApi.updateComponent(project.id, estimate.id, itemId, component.id, form);
+      else await estimatesApi.addComponent(project.id, estimate.id, itemId, form);
+      onSaved();
+    } catch (e) {
+      if (e instanceof ApiError) { setErrors(e.errors); setBanner(e.message); } else setBanner("Could not save.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose} size="md"
+      title={component ? "Edit Component" : "Add Basic Component"}
+      subtitle="Amount is quantity × price"
+      footer={<>
+        <Btn variant="ghost" onClick={onClose} disabled={saving}>Cancel</Btn>
+        <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Btn>
+      </>}>
+      {banner && <InlineError message={banner} />}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2">
+          <Field label="Basic Component" value={String(form.basic_component ?? "")}
+            onChange={v => set("basic_component", v)} required error={errors.basic_component?.[0]}
+            placeholder="Plywood, Laminate, Hinges…" />
+        </div>
+        <Field label="Detail" value={String(form.detail ?? "")} onChange={v => set("detail", v)} placeholder="18mm" />
+        <Field label="Brand" value={String(form.brand ?? "")} onChange={v => set("brand", v)} placeholder="Austin" />
+        <Field label="Model" value={String(form.model ?? "")} onChange={v => set("model", v)} placeholder="Lincoln" />
+        <Field label="Unit" value={String(form.unit ?? "")} onChange={v => set("unit", v)} placeholder="sft" />
+        <Field label="Qty" type="number" value={String(form.qty ?? "0")} onChange={v => set("qty", v)} error={errors.qty?.[0]} />
+        <Field label="Price (₹)" type="number" value={String(form.price ?? "0")} onChange={v => set("price", v)} error={errors.price?.[0]} />
+      </div>
+      <div className="mt-3 text-right text-[12px] text-surface-500">
+        Amount: <span className="font-bold text-nicara-dark">{inr(String(previewAmount))}</span>
+      </div>
+    </Modal>
+  );
+}
+
+function PullFromCatalogueModal({
+  onClose, onPick, busy,
+}: {
+  onClose: () => void;
+  onPick: (furnitureId: number) => void;
+  busy: boolean;
+}) {
+  const [search, setSearch] = useState("");
+  const { data, loading, error, reload } = useApiData(() => catalogApi.furniture(), []);
+  const furniture = (data?.results ?? []).filter(f =>
+    !search || f.name.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <Modal open onClose={onClose} size="md" title="Pull Breakdown from Catalogue"
+      subtitle="Copies the furniture's bill of materials into this line's breakdown"
+      footer={<Btn variant="ghost" onClick={onClose} disabled={busy}>Cancel</Btn>}>
+      <div className="relative mb-3">
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-surface-400">🔍</span>
+        <input value={search} onChange={e => setSearch(e.target.value)} autoFocus
+          placeholder="Search wardrobe, kitchen base unit…"
+          className="w-full pl-9 pr-3 py-2.5 border border-surface-200 rounded-xl text-[12px] outline-none focus:border-nicara-gold" />
+      </div>
+      {loading && <Loading />}
+      {error && <ErrorState message={error} onRetry={reload} />}
+      {!loading && (
+        <div className="max-h-[360px] overflow-y-auto border border-surface-200 rounded-xl">
+          {furniture.map(f => (
+            <button key={f.id} onClick={() => onPick(f.id)} disabled={busy}
+              className="w-full flex items-center justify-between px-3 py-2.5 border-b border-surface-100 last:border-0 cursor-pointer hover:bg-nicara-gold/5 text-left bg-white">
+              <div>
+                <div className="text-[12px] font-semibold text-nicara-dark">{f.name}</div>
+                <div className="text-[10px] text-surface-400">
+                  {f.room_names.length ? f.room_names.join(", ") : "All rooms"} · {f.part_count} part(s)
+                </div>
+              </div>
+              <span className="text-[11px] text-nicara-gold font-semibold">Pull →</span>
+            </button>
+          ))}
+          {furniture.length === 0 && (
+            <div className="px-3 py-6 text-center text-surface-400 text-[12px]">No furniture matches</div>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }
 

@@ -14,6 +14,9 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from decimal import Decimal
+
+from catalog.models import Furniture as CatalogFurniture
 from items.models import Item
 from items.serializers import AddItemsToEstimateSerializer
 from nicara.media import build_derivatives
@@ -22,14 +25,15 @@ from .exports import booking_pdf, estimate_pdf, estimate_xlsx
 
 from .models import (
     BookingForm, Project, DesignRequirement, ProjectDeliverable, Estimate,
-    EstimateItem, Measurement, MaterialSelection, ExecutionStage,
-    PaymentMilestone, QualityCheck,
+    EstimateItem, EstimateItemComponent, Measurement, MaterialSelection,
+    ExecutionStage, PaymentMilestone, QualityCheck,
 )
 from .serializers import (
     BookingFormSerializer, ProjectListSerializer, ProjectDetailSerializer,
     DeliverableReviewSerializer, DesignRequirementBulkSerializer,
     DesignRequirementSerializer, ProjectDeliverableSerializer,
     EstimateSerializer, EstimateListSerializer, EstimateItemSerializer,
+    EstimateItemComponentSerializer,
     MeasurementSerializer, MaterialSelectionSerializer,
     ExecutionStageSerializer, PaymentMilestoneSerializer,
     QualityCheckSerializer,
@@ -530,7 +534,104 @@ class EstimateItemDetailView(generics.RetrieveUpdateDestroyAPIView):
         return EstimateItem.objects.filter(
             estimate_id=self.kwargs['estimate_id'],
             estimate__project_id=self.kwargs['project_id'],
+        ).prefetch_related('components')
+
+
+# ── Estimate line breakdown (bill of materials) ────────────
+
+def _get_line(kwargs):
+    return get_object_or_404(
+        EstimateItem,
+        pk=kwargs['item_id'],
+        estimate_id=kwargs['estimate_id'],
+        estimate__project_id=kwargs['project_id'],
+    )
+
+
+class EstimateItemComponentListCreateView(generics.ListCreateAPIView):
+    """
+    GET/POST …/estimates/{estimate_id}/items/{item_id}/components/
+    The material breakdown for one line. Adding a component makes the line's
+    amount roll up from the breakdown instead of qty × rate.
+    """
+    serializer_class = EstimateItemComponentSerializer
+
+    def get_queryset(self):
+        return EstimateItemComponent.objects.filter(
+            estimate_item_id=self.kwargs['item_id'],
+            estimate_item__estimate_id=self.kwargs['estimate_id'],
+            estimate_item__estimate__project_id=self.kwargs['project_id'],
         )
+
+    def perform_create(self, serializer):
+        serializer.save(estimate_item=_get_line(self.kwargs))
+
+
+class EstimateItemComponentDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = EstimateItemComponentSerializer
+
+    def get_queryset(self):
+        return EstimateItemComponent.objects.filter(
+            estimate_item_id=self.kwargs['item_id'],
+            estimate_item__estimate_id=self.kwargs['estimate_id'],
+            estimate_item__estimate__project_id=self.kwargs['project_id'],
+        )
+
+
+class EstimatePopulateFromFurnitureView(APIView):
+    """
+    POST …/estimates/{estimate_id}/items/{item_id}/populate-from-furniture/
+    Body: { "furniture_id": 5, "replace": true }
+
+    Fills the line's component breakdown from a catalogue Furniture's bill of
+    materials — every part's materials become rows (Basic Component | Detail |
+    Brand | Model | Qty | Unit | Price | Amount), pricing against each
+    material's chosen or cheapest option. The line amount then rolls up from
+    the breakdown.
+    """
+    def post(self, request, project_id, estimate_id, item_id):
+        line = _get_line({'project_id': project_id, 'estimate_id': estimate_id, 'item_id': item_id})
+        furniture_id = request.data.get('furniture_id')
+
+        furniture = CatalogFurniture.objects.filter(pk=furniture_id).first()
+        if not furniture:
+            return Response({'detail': 'Unknown catalogue furniture.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            if request.data.get('replace', True):
+                line.components.all().delete()
+
+            created = 0
+            for part in furniture.parts.filter(is_active=True):
+                for pm in part.materials.all():
+                    option = pm.effective_option
+                    wastage = pm.wastage_pct or Decimal('0')
+                    qty = (pm.qty_per_unit or Decimal('0')) * (Decimal('1') + wastage / Decimal('100'))
+                    EstimateItemComponent.objects.create(
+                        estimate_item=line,
+                        basic_component=pm.material.name,
+                        detail=option.detail if option else '',
+                        brand=option.brand if option else '',
+                        model=option.model_no if option else '',
+                        qty=qty,
+                        unit=pm.unit or (option.unit if option else pm.material.default_unit),
+                        price=option.price if option else Decimal('0'),
+                        catalog_material=pm.material,
+                        catalog_option=option,
+                    )
+                    created += 1
+
+            if not line.item:
+                line.item = furniture.name
+                line.save(update_fields=['item'])
+            line.recompute_amount()
+
+        line.refresh_from_db()
+        return Response({
+            'detail': f'{created} component(s) added from {furniture.name}.',
+            'item': EstimateItemSerializer(line).data,
+        }, status=status.HTTP_201_CREATED)
 
 
 # ── Downloads ──────────────────────────────────────────────

@@ -195,12 +195,33 @@ export interface Deliverable {
   created_at: string;
 }
 
+/** One row of a line item's material breakdown (bill of materials). */
+export interface EstimateItemComponent {
+  id: number;
+  estimate_item: number;
+  sno: number;
+  basic_component: string;
+  detail: string;
+  brand: string;
+  model: string;
+  qty: string;
+  unit: string;
+  price: string;
+  amount: string;
+  catalog_material: number | null;
+  catalog_option: number | null;
+}
+
 export interface EstimateItem {
   id: number;
   catalog_item: number | null;
   catalog_item_code: string | null;
   sno: number;
   area: string;
+  zone: string;
+  finishing: string;
+  category: string;
+  subcategory: string;
   item: string;
   description: string;
   length: string;
@@ -214,6 +235,9 @@ export interface EstimateItem {
   gst_amount: string;
   total_with_gst: string;
   remarks: string;
+  /** The material breakdown; when present, `amount` is its sum. */
+  components: EstimateItemComponent[];
+  has_components: boolean;
 }
 
 export interface Estimate {

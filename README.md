@@ -479,7 +479,31 @@ with tabs for Furniture (drill into the build sheet), Materials (drill into
 options) and Rooms & Zones. Seed with
 `python manage.py seed_catalog` (mirrors the shared components sheet).
 
-## 13. Still to do
+## 13. Estimate line breakdown (bill of materials)
+
+Each Initial Estimate line can expand to a material breakdown, matching the
+shared sheet: **Basic Component | Detail | Brand | Model | Qty | Unit | Price |
+Amount**, each row editable.
+
+- The line's **amount rolls up from its components** when a breakdown exists
+  (Wardrobe = 6400 + 960 + 2560 = **₹9,920**); otherwise it stays qty × rate.
+  Estimate subtotal/GST/grand total follow automatically.
+- **Pull from Catalogue** fills the breakdown from a catalogue Furniture's BOM —
+  every part's materials become component rows, priced against each material's
+  chosen (or cheapest) option, with wastage applied.
+- Lines also carry **Room Area** (zone) and **Finishing** to match the sheet's
+  columns; both appear in the PDF and Excel exports, with the component
+  breakdown shown as indented sub-rows.
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `GET/POST …/items/{id}/components/` | The line's breakdown |
+| `PATCH/DELETE …/items/{id}/components/{cid}/` | Edit / remove a component |
+| `POST …/items/{id}/populate-from-furniture/` | Fill from a catalogue furniture BOM |
+
+In the UI: open the Initial Estimate, expand a line's **Detail** chevron.
+
+## 14. Still to do
 
 - Quote calculation engine (item BOM → cost → margin → rate).
 - Design/Execution phase screens are **read-only** — measurements, material
