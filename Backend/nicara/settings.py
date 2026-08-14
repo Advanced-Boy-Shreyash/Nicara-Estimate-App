@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'items',
     'vendors',
     'crm',
+    'catalog',
 ]
 
 # ── Middleware ───────────────────────────────────────────────

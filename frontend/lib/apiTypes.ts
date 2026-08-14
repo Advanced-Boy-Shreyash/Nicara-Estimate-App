@@ -460,6 +460,117 @@ export interface CrmMeta {
   counts: { open_leads: number; clients: number };
 }
 
+/* ── Catalogue (Rooms → Furniture → Materials) ───────────────── */
+
+export interface CatalogRoom {
+  id: number;
+  code: string;
+  name: string;
+  icon: string;
+  description: string;
+  sort_order: number;
+  is_active: boolean;
+  furniture_count: number;
+}
+
+export interface CatalogZone {
+  id: number;
+  code: string;
+  name: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface MaterialOption {
+  id: number;
+  material: number;
+  material_name?: string;
+  detail: string;
+  brand: string;
+  model_no: string;
+  size: string;
+  price: string;
+  unit: string;
+  notes?: string;
+  library_item?: number | null;
+  label: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface CatalogMaterial {
+  id: number;
+  code: string;
+  name: string;
+  default_unit: string;
+  icon: string;
+  option_count: number;
+  price_from?: number | null;
+  options?: MaterialOption[];
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface PartMaterial {
+  id: number;
+  part: number;
+  material: number;
+  material_name: string;
+  default_option: number | null;
+  option_label: string;
+  qty_per_unit: string;
+  unit: string;
+  wastage_pct: string;
+  unit_price: string;
+  line_cost: string;
+  notes: string;
+  sort_order: number;
+}
+
+export interface FurniturePart {
+  id: number;
+  furniture: number;
+  name: string;
+  notes: string;
+  materials: PartMaterial[];
+  material_cost: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface Furniture {
+  id: number;
+  code: string;
+  name: string;
+  description: string;
+  rooms: number[];
+  room_names: string[];
+  default_unit: string;
+  default_length?: string;
+  default_breadth?: string;
+  default_height?: string;
+  base_rate: string;
+  gst_pct: string;
+  margin_pct: string;
+  part_count: number;
+  parts?: FurniturePart[];
+  material_cost?: string;
+  suggested_rate?: string;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface CatalogMeta {
+  units: Choice[];
+  counts: {
+    rooms: number;
+    zones: number;
+    furniture: number;
+    materials: number;
+    options: number;
+  };
+}
+
 /* ── Vendors ─────────────────────────────────────────────────── */
 
 export type VendorType = "material_supplier" | "contractor";

@@ -42,6 +42,7 @@ MODULES = [
     ('finance',          'Finance',                'Finance',          '💳'),
 
     # Catalogue
+    ('catalog',          'Furniture Catalogue',    'Catalogue',        '🗂️'),
     ('items',            'Items Catalogue',        'Catalogue',        '📦'),
     ('library',          'Material Library',       'Catalogue',        '🪵'),
 
@@ -90,7 +91,7 @@ ROLE_TEMPLATES = {
         'booking': 'view', 'pm': 'view', 'handover': 'view',
         'tasks': 'edit', 'leads': 'edit', 'clients': 'view',
         'vendors_material': 'view', 'vendors_contract': 'view',
-        'items': 'view', 'library': 'view',
+        'catalog': 'edit', 'items': 'view', 'library': 'view',
     },
     'supervisor': {
         **_all('none'),
@@ -98,7 +99,7 @@ ROLE_TEMPLATES = {
         'furniture': 'view', 'initial': 'view', 'design': 'view', 'final': 'view',
         'pm': 'full', 'handover': 'full', 'tasks': 'full',
         'vendors_material': 'view', 'vendors_contract': 'edit',
-        'items': 'view', 'library': 'view',
+        'catalog': 'view', 'items': 'view', 'library': 'view',
     },
     'client': {
         **_all('none'),

@@ -5,11 +5,12 @@
 // this layer transparently redeems the refresh token and replays the request.
 
 import type {
-  BookingForm, Client, CrmMeta, CrmNote, Deliverable, DeliverableType,
-  DesignRequirement, Estimate, EstimateItem, EstimateListItem, EstimateType,
-  Item, ItemCategory, ItemMeta, Lead, LeadPipeline, ModuleRegistry,
-  MyPermissions, PermissionMatrixRow, Project, ProjectListItem, ProjectMeta,
-  Vendor, VendorMeta,
+  BookingForm, CatalogMaterial, CatalogMeta, CatalogRoom, CatalogZone, Client,
+  CrmMeta, CrmNote, Deliverable, DeliverableType, DesignRequirement, Estimate,
+  EstimateItem, EstimateListItem, EstimateType, Furniture, FurniturePart, Item,
+  ItemCategory, ItemMeta, Lead, LeadPipeline, MaterialOption, ModuleRegistry,
+  MyPermissions, PartMaterial, PermissionMatrixRow, Project, ProjectListItem,
+  ProjectMeta, Vendor, VendorMeta,
 } from "@/lib/apiTypes";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
@@ -543,6 +544,86 @@ export const clientsApi = {
 
 export const crmApi = {
   meta: () => apiFetch<CrmMeta>("/crm/meta/"),
+};
+
+// ── Catalogue: Rooms → Furniture → Materials ──────────────────
+
+export const catalogApi = {
+  meta: () => apiFetch<CatalogMeta>("/catalog/meta/"),
+
+  // Rooms
+  rooms: () => apiFetch<Paginated<CatalogRoom>>("/catalog/rooms/?page_size=200"),
+  createRoom: (data: Partial<CatalogRoom>) =>
+    apiFetch<CatalogRoom>("/catalog/rooms/", { method: "POST", body: JSON.stringify(data) }),
+  updateRoom: (id: number, data: Partial<CatalogRoom>) =>
+    apiFetch<CatalogRoom>(`/catalog/rooms/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteRoom: (id: number) => apiFetch<void>(`/catalog/rooms/${id}/`, { method: "DELETE" }),
+
+  // Zones
+  zones: () => apiFetch<Paginated<CatalogZone>>("/catalog/zones/?page_size=200"),
+  createZone: (data: Partial<CatalogZone>) =>
+    apiFetch<CatalogZone>("/catalog/zones/", { method: "POST", body: JSON.stringify(data) }),
+  updateZone: (id: number, data: Partial<CatalogZone>) =>
+    apiFetch<CatalogZone>(`/catalog/zones/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteZone: (id: number) => apiFetch<void>(`/catalog/zones/${id}/`, { method: "DELETE" }),
+
+  // Materials + their priced options
+  materials: (withOptions = false) =>
+    apiFetch<Paginated<CatalogMaterial>>(
+      `/catalog/materials/?page_size=200${withOptions ? "&with_options=1" : ""}`
+    ),
+  material: (id: number) => apiFetch<CatalogMaterial>(`/catalog/materials/${id}/`),
+  createMaterial: (data: Partial<CatalogMaterial>) =>
+    apiFetch<CatalogMaterial>("/catalog/materials/", { method: "POST", body: JSON.stringify(data) }),
+  updateMaterial: (id: number, data: Partial<CatalogMaterial>) =>
+    apiFetch<CatalogMaterial>(`/catalog/materials/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteMaterial: (id: number) => apiFetch<void>(`/catalog/materials/${id}/`, { method: "DELETE" }),
+
+  options: (materialId: number) =>
+    apiFetch<Paginated<MaterialOption>>(`/catalog/materials/${materialId}/options/?page_size=200`),
+  createOption: (materialId: number, data: Partial<MaterialOption>) =>
+    apiFetch<MaterialOption>(`/catalog/materials/${materialId}/options/`, {
+      method: "POST", body: JSON.stringify(data),
+    }),
+  updateOption: (materialId: number, id: number, data: Partial<MaterialOption>) =>
+    apiFetch<MaterialOption>(`/catalog/materials/${materialId}/options/${id}/`, {
+      method: "PATCH", body: JSON.stringify(data),
+    }),
+  deleteOption: (materialId: number, id: number) =>
+    apiFetch<void>(`/catalog/materials/${materialId}/options/${id}/`, { method: "DELETE" }),
+
+  // Furniture → parts → part-materials
+  furniture: (roomId?: number) =>
+    apiFetch<Paginated<Furniture>>(
+      `/catalog/furniture/?page_size=200${roomId ? `&room=${roomId}` : ""}`
+    ),
+  furnitureDetail: (id: number) => apiFetch<Furniture>(`/catalog/furniture/${id}/`),
+  createFurniture: (data: Partial<Furniture>) =>
+    apiFetch<Furniture>("/catalog/furniture/", { method: "POST", body: JSON.stringify(data) }),
+  updateFurniture: (id: number, data: Partial<Furniture>) =>
+    apiFetch<Furniture>(`/catalog/furniture/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteFurniture: (id: number) => apiFetch<void>(`/catalog/furniture/${id}/`, { method: "DELETE" }),
+
+  createPart: (furnitureId: number, data: Partial<FurniturePart>) =>
+    apiFetch<FurniturePart>(`/catalog/furniture/${furnitureId}/parts/`, {
+      method: "POST", body: JSON.stringify(data),
+    }),
+  updatePart: (id: number, data: Partial<FurniturePart>) =>
+    apiFetch<FurniturePart>(`/catalog/furniture/parts/${id}/`, {
+      method: "PATCH", body: JSON.stringify(data),
+    }),
+  deletePart: (id: number) => apiFetch<void>(`/catalog/furniture/parts/${id}/`, { method: "DELETE" }),
+
+  addPartMaterial: (partId: number, data: Partial<PartMaterial>) =>
+    apiFetch<PartMaterial>(`/catalog/furniture/parts/${partId}/materials/`, {
+      method: "POST", body: JSON.stringify(data),
+    }),
+  updatePartMaterial: (id: number, data: Partial<PartMaterial>) =>
+    apiFetch<PartMaterial>(`/catalog/furniture/part-materials/${id}/`, {
+      method: "PATCH", body: JSON.stringify(data),
+    }),
+  deletePartMaterial: (id: number) =>
+    apiFetch<void>(`/catalog/furniture/part-materials/${id}/`, { method: "DELETE" }),
 };
 
 // ── Estimates ─────────────────────────────────────────────────

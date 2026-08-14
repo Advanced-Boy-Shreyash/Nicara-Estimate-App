@@ -54,6 +54,8 @@ copy .env.example .env
 .venv\Scripts\python.exe manage.py bootstrap_admin
 .venv\Scripts\python.exe manage.py seed_items
 .venv\Scripts\python.exe manage.py seed_vendors
+.venv\Scripts\python.exe manage.py seed_crm
+.venv\Scripts\python.exe manage.py seed_catalog
 ```
 
 ```bash
@@ -437,7 +439,47 @@ Booking Form tab (**📄 Download PDF**).
 
 Screens: **Customers → Leads** and **Customers → Clients**.
 
-## 12. Still to do
+## 12. Furniture Catalogue (master data)
+
+`Backend/catalog/` models the room → furniture → material hierarchy the team
+maintains, so estimates are built from a consistent palette. The spreadsheet's
+vague column names were renamed for clarity:
+
+| Spreadsheet column | Clear name | What it is | Example |
+| ------------------ | ---------- | ---------- | ------- |
+| Rooms | **Room** | A room type | Kitchen, Master Bedroom |
+| Sub category in rooms | **Zone** | A part/area of a room | East Wall, Island, Walk-in Closet |
+| Item Names | **Furniture** | The product installed | Wardrobe, Kitchen Base Unit |
+| Item Type | **Part** | A build element of furniture | Cabinet, Shutter, Panel, Light |
+| Basic components | **Material** | A material type | Plywood, Hardware, Laminate |
+| Detail / Brand / Model / Size / Price / Unit | **Material Option** | A priced material SKU | 18mm Plywood · Austin Lincoln · 8×4 · ₹100/sft |
+
+Read plainly: **a Room has Zones; on a Zone you place Furniture; Furniture is
+built from Parts; each Part uses Materials; each Material has priced Options.**
+
+- **Room scoping** — Furniture links to rooms via a many-to-many, so Kitchen
+  Base Unit only shows for Kitchen. Leaving the rooms empty makes a piece
+  universal (Paint, Lights).
+- **Cost roll-up** — a `PartMaterial` records qty-per-unit, wastage and which
+  option to price against (cheapest active if unpinned). That rolls up:
+  material → part → furniture, then `+ margin` gives a suggested rate. Seeded
+  Wardrobe = ₹10,679.20 material cost → ₹14,416.92 at 35%.
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `GET/POST /api/catalog/rooms/` · `zones/` | Rooms and zones |
+| `GET/POST /api/catalog/materials/` (`?with_options=1`) | Materials, options nested on request |
+| `…/materials/{id}/options/` | Priced options |
+| `GET/POST /api/catalog/furniture/` (`?room=<id>`) | Furniture, room-scoped |
+| `…/furniture/{id}/parts/` · `…/parts/{id}/materials/` | Build sheet |
+| `GET /api/catalog/tree/?room=<id>` | Whole hierarchy in one call |
+
+Gated by the `catalog` IAM module. Screen: **Catalogue → Furniture Catalogue**,
+with tabs for Furniture (drill into the build sheet), Materials (drill into
+options) and Rooms & Zones. Seed with
+`python manage.py seed_catalog` (mirrors the shared components sheet).
+
+## 13. Still to do
 
 - Quote calculation engine (item BOM → cost → margin → rate).
 - Design/Execution phase screens are **read-only** — measurements, material

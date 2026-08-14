@@ -17,6 +17,7 @@ import ItemsPage from "@/components/items/ItemsPage";
 import LeadsPage from "@/components/crm/LeadsPage";
 import ClientsPage from "@/components/crm/ClientsPage";
 import IAMMatrix from "@/components/admin/IAMMatrix";
+import CatalogPage from "@/components/catalog/CatalogPage";
 import ClientDetails from "@/components/engagement/ClientDetails";
 import DesignRequirements from "@/components/engagement/DesignRequirements";
 import DeliverablesTab from "@/components/engagement/DeliverablesTab";
@@ -29,7 +30,7 @@ import {
   Package, TreePine, Armchair,
   Users, ShieldCheck, List, Palette, Building,
   FolderOpen, CheckCircle, Crosshair, PenTool, Hammer,
-  Handshake, Ruler, type LucideIcon,
+  Handshake, Ruler, LibraryBig, type LucideIcon,
 } from "lucide-react";
 
 /* ── Icon map for sidebar nav items ── */
@@ -39,7 +40,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "vendors-material": Factory, "vendors-contractors": HardHat,
   "customers-leads": Target, "customers-clients": UserCircle,
   "finance-transactions": CreditCard, "finance-vendor": ArrowUpFromLine, "finance-client": ArrowDownToLine,
-  "items-catalogue": Package, "library-raw": TreePine, "library-furniture": Armchair,
+  catalog: LibraryBig, "items-catalogue": Package, "library-raw": TreePine, "library-furniture": Armchair,
   "team-users": Users, "iam-permissions": ShieldCheck, "stages-lead": List,
   "stages-design": Palette, "site-master": Building,
 };
@@ -58,7 +59,7 @@ const NAV_SECTIONS = [
   { label: "Vendors", items: [{ id: "vendors-material", icon: "", label: "Material Suppliers", module: "vendors_material" }, { id: "vendors-contractors", icon: "", label: "Contractors", module: "vendors_contract" }] },
   { label: "Customers", items: [{ id: "customers-leads", icon: "", label: "Leads", module: "leads" }, { id: "customers-clients", icon: "", label: "Clients", module: "clients" }] },
   { label: "Finance", items: [{ id: "finance-transactions", icon: "", label: "Transactions", module: "finance" }, { id: "finance-vendor", icon: "", label: "Vendor Finance", module: "finance" }, { id: "finance-client", icon: "", label: "Client Finance", module: "finance" }] },
-  { label: "Catalogue", items: [{ id: "items-catalogue", icon: "", label: "Items", module: "items" }, { id: "library-raw", icon: "", label: "Raw Material", module: "library" }, { id: "library-furniture", icon: "", label: "Furniture & Furnishings", module: "library" }] },
+  { label: "Catalogue", items: [{ id: "catalog", icon: "", label: "Furniture Catalogue", module: "catalog" }, { id: "items-catalogue", icon: "", label: "Items", module: "items" }, { id: "library-raw", icon: "", label: "Raw Material", module: "library" }, { id: "library-furniture", icon: "", label: "Furniture & Furnishings", module: "library" }] },
   { label: "Admin", items: [{ id: "team-users", icon: "", label: "Users & Roles", module: "users" }, { id: "iam-permissions", icon: "", label: "User Permissions", module: "iam" }, { id: "stages-lead", icon: "", label: "Lead Stages", module: "masters" }, { id: "stages-design", icon: "", label: "Design Stages", module: "masters" }, { id: "site-master", icon: "", label: "Project Site Master", module: "masters" }] },
 ];
 
@@ -826,7 +827,7 @@ const LABELS: Record<string, string> = {
   dashboard: "Dashboard", projects: "Projects", "tasks-planned": "Planned Tasks", "tasks-unplanned": "Unplanned Tasks",
   "vendors-material": "Material Suppliers", "vendors-contractors": "Contractors", "customers-leads": "Leads", "customers-clients": "Clients",
   "finance-transactions": "Transactions", "finance-vendor": "Vendor Finance", "finance-client": "Client Finance",
-  "items-catalogue": "Items", "library-raw": "Raw Material", "library-furniture": "Furniture & Furnishings",
+  catalog: "Furniture Catalogue", "items-catalogue": "Items", "library-raw": "Raw Material", "library-furniture": "Furniture & Furnishings",
   "team-users": "Users & Roles", "iam-permissions": "User Permissions",
   "stages-lead": "Lead Stages", "stages-design": "Design Stages", "site-master": "Project Site Master",
 };
@@ -834,7 +835,7 @@ const LABELS: Record<string, string> = {
 /** Views that render a real, API-backed screen. */
 const LIVE_VIEWS = [
   "dashboard", "projects", "detail",
-  "vendors-material", "vendors-contractors", "items-catalogue",
+  "vendors-material", "vendors-contractors", "items-catalogue", "catalog",
   "customers-leads", "customers-clients", "iam-permissions",
 ];
 
@@ -895,6 +896,7 @@ function EstimateAppInner() {
         {view === "vendors-material" && <VendorsPage kind="supplier" />}
         {view === "vendors-contractors" && <VendorsPage kind="contractor" />}
         {view === "items-catalogue" && <ItemsPage />}
+        {view === "catalog" && <CatalogPage />}
         {view === "customers-leads" && <LeadsPage onOpenProject={openProject} />}
         {view === "customers-clients" && <ClientsPage onOpenProject={openProject} />}
         {view === "iam-permissions" && <IAMMatrix />}
