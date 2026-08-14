@@ -37,6 +37,7 @@ urlpatterns = [
     path('<int:project_id>/estimates/<int:pk>/approve/', views.EstimateApproveView.as_view(), name='estimate-approve'),
     path('<int:project_id>/estimates/<int:pk>/request-revision/', views.EstimateRequestRevisionView.as_view(), name='estimate-revision'),
     path('<int:project_id>/estimates/<int:pk>/duplicate/', views.EstimateDuplicateView.as_view(), name='estimate-duplicate'),
+    path('<int:project_id>/estimates/<int:pk>/apply-smart-materials/', views.EstimateApplySmartMaterialsView.as_view(), name='estimate-apply-materials'),
     path('<int:project_id>/estimates/<int:pk>/pdf/', views.EstimatePDFView.as_view(), name='estimate-pdf'),
     path('<int:project_id>/estimates/<int:pk>/excel/', views.EstimateExcelView.as_view(), name='estimate-excel'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/', views.EstimateItemListCreateView.as_view(), name='estimate-item-list'),

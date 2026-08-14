@@ -16,7 +16,7 @@ from rest_framework.views import APIView
 
 from decimal import Decimal
 
-from catalog.models import Furniture as CatalogFurniture
+from catalog.models import Furniture as CatalogFurniture, MaterialOption
 from items.models import Item
 from items.serializers import AddItemsToEstimateSerializer
 from nicara.media import build_derivatives
@@ -309,7 +309,7 @@ class DeliverableRequestRevisionView(DeliverableActionView):
         return self.responded(deliverable)
 
 
-# ── Estimates ──────────────────────────────────────────────
+# ── Estimate Items ──────────────────────────────────────────────
 
 class EstimateListCreateView(generics.ListCreateAPIView):
     """
@@ -462,6 +462,63 @@ class EstimateDuplicateView(EstimateActionView):
             ])
 
         return Response(EstimateSerializer(clone).data, status=status.HTTP_201_CREATED)
+
+
+class EstimateApplySmartMaterialsView(EstimateActionView):
+    """
+    POST …/estimates/{id}/apply-smart-materials/
+    Body:
+    {
+      "materials": [
+        {"basic_component": "Plywood", "brand": "Austin", "model": "Lincoln"},
+        ...
+      ]
+    }
+    """
+    def post(self, request, project_id, pk):
+        estimate = self.get_estimate()
+        materials_pref = request.data.get('materials', [])
+
+        with transaction.atomic():
+            components = EstimateItemComponent.objects.filter(estimate_item__estimate=estimate)
+
+            for pref in materials_pref:
+                basic = pref.get('basic_component')
+                brand = pref.get('brand')
+                model = pref.get('model')
+
+                if not basic or not brand or not model:
+                    continue
+                
+                matching_comps = components.filter(basic_component__iexact=basic)
+                for comp in matching_comps:
+                    comp.brand = brand
+                    comp.model = model
+                    
+                    option = MaterialOption.objects.filter(
+                        material__name__iexact=basic,
+                        brand__iexact=brand,
+                        model_no__iexact=model,
+                        detail__icontains=comp.detail
+                    ).order_by('price').first()
+                    
+                    if not option:
+                        option = MaterialOption.objects.filter(
+                            material__name__iexact=basic,
+                            brand__iexact=brand,
+                            model_no__iexact=model
+                        ).order_by('price').first()
+
+                    if option:
+                        comp.price = option.price
+                        comp.catalog_option = option
+                    
+                    comp.save()
+            
+            for item in estimate.items.all():
+                item.recompute_amount()
+
+        return self.responded(estimate)
 
 
 class EstimateItemListCreateView(generics.ListCreateAPIView):

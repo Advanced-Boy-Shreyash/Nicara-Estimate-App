@@ -304,7 +304,16 @@ export default function EstimateTab({
             locked={!!locked}
             busy={busy}
             onChanged={refresh}
-            onError={setBanner}
+            onSilentUpdate={async () => {
+              if (!estimate) return;
+              try {
+                const updated = await estimatesApi.get(project.id, estimate.id);
+                detailQuery.setData(updated);
+              } catch {
+                await refresh();
+              }
+            }}
+            onError={msg => { setBanner(msg); toast.error("Error", msg); }}
           />
 
           <Totals estimate={estimate} />
@@ -434,15 +443,17 @@ function ImportModal({ onClose, onImported, projectId, estimateId }: {
    ══════════════════════════════════════════════════════════════════ */
 
 function LineItems({
-  project, estimate, locked, busy, onChanged, onError,
+  project, estimate, locked, busy, onChanged, onSilentUpdate, onError,
 }: {
   project: Project;
   estimate: Estimate;
   locked: boolean;
   busy: boolean;
   onChanged: () => Promise<void>;
+  onSilentUpdate: () => Promise<void>;
   onError: (msg: string) => void;
 }) {
+  const toast = useToast();
   const [draft, setDraft] = useState<Record<number, Record<string, unknown>>>({});
   const [fArea, setFArea] = useState("All");
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
@@ -451,6 +462,11 @@ function LineItems({
   const catalogOptions = useMemo(() => {
     return (catData?.results || []).map(f => ({ value: f.name, label: f.name }));
   }, [catData]);
+
+  const { data: zoneData, reload: reloadZones } = useApiData(() => catalogApi.zones(), []);
+  const zoneOptions = useMemo(() => {
+    return (zoneData?.results || []).map(z => ({ value: z.name, label: z.name }));
+  }, [zoneData]);
 
   const [addFurnOpen, setAddFurnOpen] = useState(false);
   const [addFurnName, setAddFurnName] = useState("");
@@ -478,6 +494,19 @@ function LineItems({
     reloadCat();
   };
 
+  const handleAddZone = async (name: string, targetItem: EstimateItem) => {
+    try {
+      await catalogApi.createZone({ name });
+      toast.success("Zone Added", `Added ${name} to Catalogue`);
+      await reloadZones();
+      const nextDraft = { ...draft, [targetItem.id]: { ...draft[targetItem.id], zone: name } };
+      setDraft(nextDraft);
+      await estimatesApi.updateItem(project.id, estimate!.id, targetItem.id, { zone: name });
+      await onSilentUpdate();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not add zone");
+    }
+  };
   const commit = async (item: EstimateItem) => {
     const changes = draft[item.id];
     if (!changes) return;
@@ -588,7 +617,11 @@ function LineItems({
                   }
                 }}
                 catalogOptions={catalogOptions}
+                zoneOptions={zoneOptions}
                 onAddFurniture={handleAddFurniture}
+                onAddZone={handleAddZone}
+                onSilentUpdate={onSilentUpdate}
+                catData={catData}
               />
             ))}
             {/* Grand total footer */}
@@ -620,7 +653,7 @@ function LineItems({
 function GroupBlock({
   group, project, estimate, locked, busy, val, setDraft, commit, remove,
   expanded, setExpanded, onChanged, onError, onAddRow,
-  catalogOptions, onAddFurniture,
+  catalogOptions, zoneOptions, onAddFurniture, onAddZone, onSilentUpdate, catData,
 }: {
   group: { area: string; items: EstimateItem[]; subtotal: number };
   project: Project;
@@ -637,8 +670,13 @@ function GroupBlock({
   onError: (msg: string) => void;
   onAddRow: () => void;
   catalogOptions: { value: string, label: string }[];
+  zoneOptions: { value: string, label: string }[];
   onAddFurniture: (name: string, item: EstimateItem) => void;
+  onAddZone: (name: string, item: EstimateItem) => void;
+  onSilentUpdate: () => Promise<void>;
+  catData: any;
 }) {
+  const [addingFurniture, setAddingFurniture] = useState<{ id: number; name: string } | null>(null);
   const BD = "border-r border-surface-200";
   return (
     <>
@@ -680,7 +718,11 @@ function GroupBlock({
             onToggle={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))}
             BD={BD}
             catalogOptions={catalogOptions}
+            zoneOptions={zoneOptions}
             onAddFurniture={onAddFurniture}
+            onAddZone={onAddZone}
+            onSilentUpdate={onSilentUpdate}
+            catData={catData}
           />
         );
       })}
@@ -692,7 +734,7 @@ function GroupBlock({
 
 function ItemRow({
   item, ri, isOpen, project, estimate, locked, busy, val, setDraft, commit, remove,
-  onChanged, onError, onToggle, BD, catalogOptions, onAddFurniture,
+  onChanged, onError, onToggle, BD, catalogOptions, zoneOptions, onAddFurniture, onAddZone, onSilentUpdate, catData,
 }: {
   item: EstimateItem;
   ri: number;
@@ -710,29 +752,49 @@ function ItemRow({
   onToggle: () => void;
   BD: string;
   catalogOptions: { value: string, label: string }[];
+  zoneOptions: { value: string, label: string }[];
   onAddFurniture: (name: string, item: EstimateItem) => void;
+  onAddZone: (name: string, item: EstimateItem) => void;
+  onSilentUpdate: () => Promise<void>;
+  catData: any;
 }) {
   return (
     <>
       <tr className={`border-b border-surface-100 ${isOpen ? "bg-nicara-gold/5 border-l-[3px] border-l-nicara-gold" : ri % 2 === 0 ? "bg-white" : "bg-surface-50/50"}`}>
-        {/* Area */}
-        <td className={`px-2 py-1.5 font-semibold text-nicara-dark ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "area")}
-            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], area: v } }))}
-            onCommit={() => commit(item)} placeholder="Room" />
+        {/* Area / Zone */}
+        <td className={`px-2 py-1.5 font-semibold text-nicara-dark min-w-[120px] ${BD}`}>
+          {!locked ? (
+            <SearchableSelect
+              value={val(item, "zone")}
+              onChange={v => {
+                setDraft(d => ({ ...d, [item.id]: { ...d[item.id], zone: v } }));
+                estimatesApi.updateItem(project.id, estimate.id, item.id, { zone: v }).then(() => onSilentUpdate());
+              }}
+              options={zoneOptions}
+              onAdd={searchTerm => onAddZone(searchTerm, item)}
+              placeholder="Zone (e.g. East Wall)"
+            />
+          ) : (
+            <div className="px-2 py-1.5 text-[11px] font-semibold text-nicara-dark">{val(item, "zone")}</div>
+          )}
         </td>
         {/* Item */}
         <td className={`px-2 py-1.5 min-w-[200px] font-semibold text-nicara-dark ${BD}`}>
           {!locked ? (
             <SearchableSelect
               value={val(item, "item")}
-              onChange={v => {
+              onChange={async v => {
                 setDraft(d => ({ ...d, [item.id]: { ...d[item.id], item: v } }));
-                // Manually trigger commit since SearchableSelect onChange is an immediate blur/select
-                // We'll wrap it in a setTimeout so the state updates first, but ideally we'd pass it.
-                // Or we let the user blur the container... well SearchableSelect doesn't have onBlur.
-                // Let's just update the backend directly here for better UX:
-                estimatesApi.updateItem(project.id, estimate.id, item.id, { item: v }).then(() => onChanged());
+                try {
+                  await estimatesApi.updateItem(project.id, estimate.id, item.id, { item: v });
+                  const match = (catData?.results || []).find((f: any) => f.name === v);
+                  if (match) {
+                    await estimatesApi.populateFromFurniture(project.id, estimate.id, item.id, match.id);
+                  }
+                  await onSilentUpdate();
+                } catch (e) {
+                  onError(e instanceof ApiError ? e.message : "Failed to update item");
+                }
               }}
               options={catalogOptions}
               onAdd={searchTerm => onAddFurniture(searchTerm, item)}
@@ -1245,37 +1307,32 @@ function CatalogPicker({
    ══════════════════════════════════════════════════════════════════ */
 
 const PLYWOOD_OPTIONS = [
-  { label: "Austin Lincoln BWP 16mm", brand: "Austin", model: "Lincoln BWP", thick: "16mm", price: 3520, perUnit: "sheet" },
-  { label: "Austin Lincoln BWP 8mm", brand: "Austin", model: "Lincoln BWP", thick: "8mm", price: 2560, perUnit: "sheet" },
-  { label: "Century BWP 16mm", brand: "Century", model: "BWP Marine", thick: "16mm", price: 3800, perUnit: "sheet" },
-  { label: "Greenply MR 16mm", brand: "Greenply", model: "Green Club MR", thick: "16mm", price: 2800, perUnit: "sheet" },
-  { label: "Kitply BWP 16mm", brand: "Kitply", model: "Kit Club", thick: "16mm", price: 3200, perUnit: "sheet" },
+  { label: "Austin Lincoln", brand: "Austin", model: "Lincoln" },
+  { label: "Austin Gold", brand: "Austin", model: "Gold" },
+  { label: "Century BWP Marine", brand: "Century", model: "BWP Marine" },
+  { label: "Greenply Green Club MR", brand: "Greenply", model: "Green Club MR" },
+  { label: "Kitply Kit Club", brand: "Kitply", model: "Kit Club" },
 ];
 
 const HARDWARE_OPTIONS = [
-  { label: "Hettich — Onsys Soft Close Hinges", brand: "Hettich", model: "Onsys 0-Crank", unitCost: 260 },
-  { label: "Hettich — Quadro Draw Channels", brand: "Hettich", model: "Quadro 18\" Soft Close", unitCost: 2600 },
-  { label: "Hafele — Full Hardware Set", brand: "Hafele", model: "Matrix Box + H-Box", unitCost: 12000 },
-  { label: "Ebco — Tandem Drawer System", brand: "Ebco", model: "Tandem Drawer", unitCost: 3500 },
-  { label: "Godrej — Locks + Accessories", brand: "Godrej", model: "Nuovo Draw Locks 25mm", unitCost: 650 },
+  { label: "Hettich — Onsys 0-Crank", brand: "Hettich", model: "Onsys 0-Crank" },
+  { label: "Hettich — Sensys 8-Crank", brand: "Hettich", model: "Sensys 8-Crank" },
+  { label: "Hafele — Matrix Box", brand: "Hafele", model: "Matrix Box + H-Box" },
+  { label: "Ebco — Tandem Drawer", brand: "Ebco", model: "Tandem Drawer" },
 ];
 
 const KITCHEN_ACC_OPTIONS = [
-  { label: "Hettich — Tandem Baskets (4 nos)", brand: "Hettich", model: "Architech Tandem Basket", qty: 4, unitCost: 3650, total: 14600 },
-  { label: "Hafele — Full Modular Kitchen Set", brand: "Hafele", model: "Modular Kitchen Accessories", qty: 1, unitCost: 45000, total: 45000 },
-  { label: "Ebco — Corner Unit + Basket", brand: "Ebco", model: "Corner Magic + Pull-out", qty: 1, unitCost: 8500, total: 8500 },
-  { label: "Hettich — Cutlery + Thali Tray", brand: "Hettich", model: "Cutlery + Thali Tray", qty: 2, unitCost: 850, total: 1700 },
-  { label: "Sincore — Sink & Tap (upto ₹35,000)", brand: "Sincore", model: "Sink & Tap Set", qty: 1, unitCost: 35000, total: 35000 },
+  { label: "Hettich — Architech Tandem Basket", brand: "Hettich", model: "Architech Tandem Basket" },
+  { label: "Hafele — Modular Kitchen Accessories", brand: "Hafele", model: "Modular Kitchen Accessories" },
+  { label: "Ebco — Corner Magic + Pull-out", brand: "Ebco", model: "Corner Magic + Pull-out" },
 ];
 
 const FINISH_OPTIONS = [
-  { label: "Greenlam Laminate — Matt White", brand: "Greenlam", model: "White Matt", finish: "Laminate", pricePerSheet: 3000 },
-  { label: "Greenlam Laminate — Wooden Oak", brand: "Greenlam", model: "Wooden Oak", finish: "Laminate", pricePerSheet: 3000 },
-  { label: "Merino Laminate — Off White", brand: "Merino", model: "Off White", finish: "Laminate", pricePerSheet: 3200 },
-  { label: "Merino Acrylic — High Gloss White", brand: "Merino", model: "High Gloss White", finish: "Acrylic", pricePerSheet: 4500 },
-  { label: "Rehau Acrylic — Champagne", brand: "Rehau", model: "Champagne Gloss", finish: "Acrylic", pricePerSheet: 5200 },
-  { label: "Thermo Laminate — Off White", brand: "Thermo", model: "Off White", finish: "Thermo Laminate", pricePerSheet: 5500 },
-  { label: "Duropal HPL — Anthracite", brand: "Duropal", model: "Anthracite", finish: "HPL", pricePerSheet: 4800 },
+  { label: "Greenlam Laminate — Suede", brand: "Greenlam", model: "Suede" },
+  { label: "Greenlam Laminate — SU", brand: "Greenlam", model: "SU" },
+  { label: "Virgo Laminate — SU", brand: "Virgo", model: "SU" },
+  { label: "Merino Acrylic — Hi-Gloss", brand: "Merino", model: "Hi-Gloss" },
+  { label: "Rehau Acrylic — Champagne Gloss", brand: "Rehau", model: "Champagne Gloss" },
 ];
 
 function SmartEstimateGenerator({
@@ -1304,41 +1361,15 @@ function SmartEstimateGenerator({
       const kac = KITCHEN_ACC_OPTIONS.find(o => o.label === selKitchenAcc)!;
       const fin = FINISH_OPTIONS.find(o => o.label === selFinish)!;
 
-      // Generate plywood items for common areas
-      const rooms = ["Living Room", "Kitchen", "Master Bedroom", "Bedroom 2", "Bedroom 3"];
-      for (const room of rooms) {
-        const sheets = room === "Kitchen" ? 11 : room === "Master Bedroom" ? 8 : 4;
-        await estimatesApi.addItem(projectId, estimateId, {
-          area: room, item: `Core Material ${ply.thick} BWP Ply - ${ply.brand} ${ply.model}`,
-          qty: sheets, unit: "Sheets", rate: ply.price, gst_pct: 18,
-        });
-      }
+      const materialsToApply = [
+        { basic_component: "Plywood", brand: ply.brand, model: ply.model },
+        { basic_component: "Hardware", brand: hw.brand, model: hw.model },
+        { basic_component: "Kitchen Accessories", brand: kac.brand, model: kac.model },
+        { basic_component: "Laminate", brand: fin.brand, model: fin.model },
+        { basic_component: "Acrylic", brand: fin.brand, model: fin.model },
+      ];
 
-      // Hardware items
-      const hwRooms = ["Kitchen", "Master Bedroom", "Bedroom 2", "Living Room"];
-      for (const room of hwRooms) {
-        const qty = room === "Kitchen" ? 20 : room === "Master Bedroom" ? 12 : 6;
-        await estimatesApi.addItem(projectId, estimateId, {
-          area: room, item: `${hw.brand} ${hw.model}`,
-          qty, unit: "Sets", rate: hw.unitCost, gst_pct: 18,
-        });
-      }
-
-      // Kitchen accessories
-      await estimatesApi.addItem(projectId, estimateId, {
-        area: "Kitchen", item: `${kac.brand} ${kac.model}`,
-        qty: kac.qty, unit: "Nos", rate: kac.unitCost, gst_pct: 18,
-      });
-
-      // Finishing for all rooms
-      for (const room of rooms) {
-        const sheets = room === "Kitchen" ? 6 : room === "Master Bedroom" ? 4 : 2;
-        await estimatesApi.addItem(projectId, estimateId, {
-          area: room, item: `Finishing ${fin.finish} - ${fin.brand} ${fin.model}`,
-          qty: sheets, unit: "Sheets", rate: fin.pricePerSheet, gst_pct: 18,
-        });
-      }
-
+      await estimatesApi.applySmartMaterials(projectId, estimateId, materialsToApply);
       await onGenerated();
     } catch (e) {
       onError(e instanceof ApiError ? e.message : "Failed to generate estimate.");
@@ -1373,10 +1404,7 @@ function SmartEstimateGenerator({
             <option className="text-gray-500 bg-white" value="">Select plywood…</option>
             {PLYWOOD_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
           </select>
-          {selPlywood && (() => {
-            const o = PLYWOOD_OPTIONS.find(p => p.label === selPlywood);
-            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.price.toLocaleString()}/{o.perUnit}</div> : null;
-          })()}
+          {selPlywood && <div className="text-[9px] text-nicara-gold mt-1">Pricing dynamically applies per component size.</div>}
         </div>
 
         {/* Hardware */}
@@ -1389,10 +1417,7 @@ function SmartEstimateGenerator({
             <option className="text-gray-500 bg-white" value="">Select hardware…</option>
             {HARDWARE_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
           </select>
-          {selHardware && (() => {
-            const o = HARDWARE_OPTIONS.find(p => p.label === selHardware);
-            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.unitCost.toLocaleString()}/set</div> : null;
-          })()}
+          {selHardware && <div className="text-[9px] text-nicara-gold mt-1">Hardware specs updated globally.</div>}
         </div>
 
         {/* Kitchen Accessories */}
@@ -1405,10 +1430,7 @@ function SmartEstimateGenerator({
             <option className="text-gray-500 bg-white" value="">Select kitchen accessories…</option>
             {KITCHEN_ACC_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
           </select>
-          {selKitchenAcc && (() => {
-            const o = KITCHEN_ACC_OPTIONS.find(p => p.label === selKitchenAcc);
-            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.total.toLocaleString()} total</div> : null;
-          })()}
+          {selKitchenAcc && <div className="text-[9px] text-nicara-gold mt-1">Kitchen accessories updated.</div>}
         </div>
 
         {/* Finishing */}
@@ -1421,10 +1443,7 @@ function SmartEstimateGenerator({
             <option className="text-gray-500 bg-white" value="">Select finish…</option>
             {FINISH_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
           </select>
-          {selFinish && (() => {
-            const o = FINISH_OPTIONS.find(p => p.label === selFinish);
-            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.pricePerSheet.toLocaleString()}/sheet</div> : null;
-          })()}
+          {selFinish && <div className="text-[9px] text-nicara-gold mt-1">Pricing dynamically applies.</div>}
         </div>
       </div>
 

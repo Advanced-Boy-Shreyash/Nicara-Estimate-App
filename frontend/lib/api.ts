@@ -683,6 +683,13 @@ export const estimatesApi = {
   downloadExcel: (projectId: number, estimateId: number) =>
     downloadFile(`/projects/${projectId}/estimates/${estimateId}/excel/`, "estimate.xlsx"),
 
+  // Smart Materials
+  applySmartMaterials: (projectId: number, estimateId: number, materials: { basic_component: string; brand: string; model: string }[]) =>
+    apiFetch<Estimate>(`/projects/${projectId}/estimates/${estimateId}/apply-smart-materials/`, {
+      method: "POST",
+      body: JSON.stringify({ materials }),
+    }),
+
   // Line items
   items: (projectId: number, estimateId: number) =>
     apiFetch<Paginated<EstimateItem>>(`/projects/${projectId}/estimates/${estimateId}/items/`),

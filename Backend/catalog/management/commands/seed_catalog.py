@@ -43,6 +43,8 @@ MATERIALS = {
     ]),
     'Laminate': ('nos', [
         ('1mm Laminate', 'Greenlam', 'Suede', '8x4', 1450, 'nos'),
+        ('1mm Laminate', 'Greenlam', 'SU', '8x4', 100, 'sft'),
+        ('1mm Laminate', 'Virgo', 'SU', '8x4', 80, 'sft'),
     ]),
     'Acrylic': ('nos', [
         ('Acrylic Sheet', 'Merino', 'Hi-Gloss', '8x4', 3200, 'nos'),
@@ -64,16 +66,20 @@ MATERIALS = {
 # furniture → rooms (empty = every room) → parts → [ (material, qty, unit, wastage) ]
 FURNITURE = [
     ('Wardrobe', ['Master Bedroom', 'Bedroom 2', 'Bedroom 3'], 'nos', {
-        'Cabinet': [('Plywood', 32, 'sft', 8), ('Hardware', 12, 'nos', 0), ('Adhesive', 1, 'litre', 0)],
-        'Shutter': [('Plywood', 16, 'sft', 8), ('Laminate', 4, 'nos', 5)],
-        'Ledge': [('Plywood', 6, 'sft', 8)],
+        'Cabinet (18mm)': [('Plywood', 64, 'sft', 0)],
+        'Back Panel (8mm)': [('Plywood', 16, 'sft', 0)],
+        'Finish': [('Laminate', 32, 'sft', 0)],
+        'Hardware': [('Hardware', 4, 'nos', 0)],
+    }),
+    ('Study Unit', ['Master Bedroom', 'Bedroom 2', 'Bedroom 3'], 'nos', {
+        'Cabinet (18mm)': [('Plywood', 32, 'sft', 0)],
+        'Back Panel (8mm)': [('Plywood', 8, 'sft', 0)],
+        'Finish': [('Laminate', 16, 'sft', 0)],
+        'Hardware': [('Hardware', 4, 'nos', 0)],
     }),
     ('TV Unit', ['Master Bedroom', 'Living Room'], 'nos', {
         'Cabinet': [('Plywood', 18, 'sft', 8), ('Hardware', 6, 'nos', 0)],
         'Panel': [('Plywood', 12, 'sft', 8), ('Veneer', 12, 'sft', 5)],
-    }),
-    ('Study Table', ['Bedroom 2', 'Bedroom 3'], 'nos', {
-        'Cabinet': [('Plywood', 14, 'sft', 8), ('Hardware', 4, 'nos', 0)],
     }),
     ('Wall Décor', [], 'nos', {
         'Wallpaper': [('Wallpaper', 40, 'sft', 10)],
