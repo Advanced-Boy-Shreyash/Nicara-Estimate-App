@@ -1,14 +1,16 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { ApiError, designRequirementsApi } from "@/lib/api";
-import type { DesignRequirement, Project } from "@/lib/apiTypes";
+import { ApiError, designRequirementsApi, catalogApi } from "@/lib/api";
+import type { DesignRequirement, Project, Furniture } from "@/lib/apiTypes";
 import { useApiData } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
 import { Btn } from "@/components/ui/Form";
 import Modal from "@/components/ui/Modal";
 import { ErrorState, InlineError, Loading } from "@/components/ui/States";
 import { Upload, Eye, Download, Trash2, Plus, X } from "lucide-react";
+import { SearchableSelect } from "@/components/ui/SearchableSelect";
+import { AddFurnitureModal } from "@/components/catalog/AddFurnitureModal";
 
 type Row = Omit<DesignRequirement, "id" | "sort_order"> & { id?: number; designImage?: string };
 
@@ -132,6 +134,31 @@ export default function DesignRequirements({ project }: { project: Project }) {
   const [viewingImage, setViewingImage] = useState<string | null>(null);
   const [floorPlan, setFloorPlan] = useState<{ url: string; name: string; size: string } | null>(null);
   const floorPlanRef = useRef<HTMLInputElement>(null);
+
+  // Fetch catalogue furniture to populate the Unit dropdowns
+  const { data: catData, reload: reloadCat } = useApiData(() => catalogApi.furniture(), []);
+  const catalogOptions = useMemo(() => {
+    return (catData?.results || []).map(f => ({ value: f.name, label: f.name }));
+  }, [catData]);
+
+  // Modal state for adding new Furniture
+  const [addFurnOpen, setAddFurnOpen] = useState(false);
+  const [addFurnName, setAddFurnName] = useState("");
+  const [addFurnTargetRow, setAddFurnTargetRow] = useState<Row | null>(null);
+
+  const handleAddFurniture = (name: string, row: Row) => {
+    setAddFurnName(name);
+    setAddFurnTargetRow(row);
+    setAddFurnOpen(true);
+  };
+
+  const handleFurnitureAdded = (furniture: Furniture) => {
+    if (addFurnTargetRow) {
+      editByRef(addFurnTargetRow, "unit", furniture.name);
+    }
+    setAddFurnOpen(false);
+    reloadCat();
+  };
 
   const serverRows = data?.results ?? [];
   const working: Row[] = rows ?? serverRows;
@@ -342,6 +369,8 @@ export default function DesignRequirements({ project }: { project: Project }) {
                 onImageUpload={handleImageUpload}
                 onViewImage={setViewingImage}
                 onAddRow={() => addRowToRoom(group.room)}
+                catalogOptions={catalogOptions}
+                onAddFurniture={handleAddFurniture}
               />
             ))}
             {filtered.length === 0 && (
@@ -384,19 +413,29 @@ export default function DesignRequirements({ project }: { project: Project }) {
           </div>
         </Modal>
       )}
+
+      {/* ── Add Furniture Modal ── */}
+      <AddFurnitureModal
+        open={addFurnOpen}
+        onClose={() => setAddFurnOpen(false)}
+        initialName={addFurnName}
+        onSuccess={handleFurnitureAdded}
+      />
     </div>
   );
 }
 
 /* ── Room group with heading row (like Initial Estimate area grouping) ── */
 
-function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, onAddRow }: {
+function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, onAddRow, catalogOptions, onAddFurniture }: {
   group: { room: string; items: Row[] };
   editByRef: (row: Row, key: keyof Row, value: string | boolean) => void;
   removeByRef: (row: Row) => void;
   onImageUpload: (row: Row, file: File) => void;
   onViewImage: (url: string) => void;
   onAddRow: () => void;
+  catalogOptions: { value: string, label: string }[];
+  onAddFurniture: (name: string, row: Row) => void;
 }) {
   return (
     <>
@@ -423,6 +462,8 @@ function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, 
           removeByRef={removeByRef}
           onImageUpload={onImageUpload}
           onViewImage={onViewImage}
+          catalogOptions={catalogOptions}
+          onAddFurniture={onAddFurniture}
         />
       ))}
     </>
@@ -431,13 +472,15 @@ function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, 
 
 /* ── Single design requirement row ── */
 
-function DesignRow({ row, ri, editByRef, removeByRef, onImageUpload, onViewImage }: {
+function DesignRow({ row, ri, editByRef, removeByRef, onImageUpload, onViewImage, catalogOptions, onAddFurniture }: {
   row: Row;
   ri: number;
   editByRef: (row: Row, key: keyof Row, value: string | boolean) => void;
   removeByRef: (row: Row) => void;
   onImageUpload: (row: Row, file: File) => void;
   onViewImage: (url: string) => void;
+  catalogOptions: { value: string, label: string }[];
+  onAddFurniture: (name: string, row: Row) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -445,8 +488,13 @@ function DesignRow({ row, ri, editByRef, removeByRef, onImageUpload, onViewImage
     <tr className={`border-b border-surface-100 ${ri % 2 === 0 ? "bg-white" : "bg-surface-50/50"}`}>
       {/* Unit Selection */}
       <td className={`px-2 py-1.5 min-w-[140px] ${BD}`}>
-        <input className={CELL} value={row.unit}
-          onChange={e => editByRef(row, "unit", e.target.value)} placeholder="Wardrobe" />
+        <SearchableSelect
+          value={row.unit}
+          onChange={v => editByRef(row, "unit", v)}
+          options={catalogOptions}
+          onAdd={searchTerm => onAddFurniture(searchTerm, row)}
+          placeholder="Wardrobe"
+        />
       </td>
       {/* L B H */}
       <td className={`px-2 py-1.5 w-[60px] ${BD}`}><input className={`${CELL} font-mono`} value={row.length}

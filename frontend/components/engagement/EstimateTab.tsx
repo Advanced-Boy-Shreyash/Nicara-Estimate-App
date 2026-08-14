@@ -6,7 +6,7 @@ import {
   type ComponentInput,
 } from "@/lib/api";
 import type {
-  Estimate, EstimateItem, EstimateItemComponent, EstimateType, Item, Project,
+  Estimate, EstimateItem, EstimateItemComponent, EstimateType, Item, Project, Furniture,
 } from "@/lib/apiTypes";
 import { useApiData, inr, inrExact } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
@@ -18,6 +18,8 @@ import {
   RotateCcw, CheckCircle, Copy, Brain, Plus, Trash2, ChevronDown, ChevronUp,
   ClipboardList, X,
 } from "lucide-react";
+import { SearchableSelect } from "@/components/ui/SearchableSelect";
+import { AddFurnitureModal } from "@/components/catalog/AddFurnitureModal";
 
 const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
 const TH = "px-2 py-2 text-stone-200 font-semibold text-[10px] text-left whitespace-nowrap border-r border-stone-700";
@@ -349,11 +351,10 @@ function ImportModal({ onClose, onImported, projectId, estimateId }: {
   estimateId: number;
 }) {
   const downloadTemplate = () => {
-    const headers = "Area,Category,Sub Category,Item,Qty,Unit,Rate,GST%";
+    const headers = "Area,Item,L,B,H,Qty,Unit,Rate,GST%";
     const sample = [
-      "Kitchen,Cabinetry,Base Unit,Kitchen Base Unit - Laminate,1,Nos,45000,18",
-      "Kitchen,Hardware,Hinges,Box Hinges Hettich Onsys,6,Sets,260,18",
-      "Master Bedroom,Cabinetry,Wardrobe,3 Door Wardrobe,1,Nos,120000,18",
+      "Kitchen,Kitchen Base Unit,10,2,2.5,1,Nos,45000,18",
+      "Master Bedroom,3 Door Wardrobe,8,2,9,1,Nos,120000,18",
     ];
     const csv = [headers, ...sample].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -376,11 +377,14 @@ function ImportModal({ onClose, onImported, projectId, estimateId }: {
       try {
         await estimatesApi.addItem(projectId, estimateId, {
           area: cols[0]?.trim() || "",
-          item: cols[3]?.trim() || "Imported Item",
-          qty: parseFloat(cols[4]) || 1,
-          unit: cols[5]?.trim() || "Nos",
-          rate: parseFloat(cols[6]) || 0,
-          gst_pct: parseFloat(cols[7]) || 18,
+          item: cols[1]?.trim() || "Imported Item",
+          length: cols[2]?.trim() || "",
+          breadth: cols[3]?.trim() || "",
+          height: cols[4]?.trim() || "",
+          qty: parseFloat(cols[5]) || 1,
+          unit: cols[6]?.trim() || "Nos",
+          rate: parseFloat(cols[7]) || 0,
+          gst_pct: parseFloat(cols[8]) || 18,
         });
       } catch { /* skip bad rows */ }
     }
@@ -398,13 +402,13 @@ function ImportModal({ onClose, onImported, projectId, estimateId }: {
         <div className="border border-surface-200 rounded-xl overflow-hidden">
           <table className="w-full text-[10px]">
             <thead><tr className="bg-surface-100">
-              {["Area", "Category", "Sub Cat", "Item", "Qty", "Unit", "Rate", "GST%"].map(h =>
+              {["Area", "Item", "L", "B", "H", "Qty", "Unit", "Rate", "GST%"].map(h =>
                 <th key={h} className="px-2 py-1.5 text-surface-500 font-semibold text-left">{h}</th>
               )}
             </tr></thead>
             <tbody>
-              <tr className="border-t border-surface-100"><td className="px-2 py-1">Kitchen</td><td className="px-2 py-1">Cabinetry</td><td className="px-2 py-1">Base Unit</td><td className="px-2 py-1 font-semibold">Kitchen Base Unit</td><td className="px-2 py-1">1</td><td className="px-2 py-1">Nos</td><td className="px-2 py-1">45,000</td><td className="px-2 py-1">18%</td></tr>
-              <tr className="border-t border-surface-100 bg-surface-50"><td className="px-2 py-1">M.Bed</td><td className="px-2 py-1">Cabinetry</td><td className="px-2 py-1">Wardrobe</td><td className="px-2 py-1 font-semibold">3 Door Wardrobe</td><td className="px-2 py-1">1</td><td className="px-2 py-1">Nos</td><td className="px-2 py-1">1,20,000</td><td className="px-2 py-1">18%</td></tr>
+              <tr className="border-t border-surface-100"><td className="px-2 py-1">Kitchen</td><td className="px-2 py-1 font-semibold">Kitchen Base Unit</td><td className="px-2 py-1">10</td><td className="px-2 py-1">2</td><td className="px-2 py-1">2.5</td><td className="px-2 py-1">1</td><td className="px-2 py-1">Nos</td><td className="px-2 py-1">45,000</td><td className="px-2 py-1">18%</td></tr>
+              <tr className="border-t border-surface-100 bg-surface-50"><td className="px-2 py-1">M.Bed</td><td className="px-2 py-1 font-semibold">3 Door Wardrobe</td><td className="px-2 py-1">8</td><td className="px-2 py-1">2</td><td className="px-2 py-1">9</td><td className="px-2 py-1">1</td><td className="px-2 py-1">Nos</td><td className="px-2 py-1">1,20,000</td><td className="px-2 py-1">18%</td></tr>
             </tbody>
           </table>
         </div>
@@ -442,6 +446,37 @@ function LineItems({
   const [draft, setDraft] = useState<Record<number, Record<string, unknown>>>({});
   const [fArea, setFArea] = useState("All");
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+
+  const { data: catData, reload: reloadCat } = useApiData(() => catalogApi.furniture(), []);
+  const catalogOptions = useMemo(() => {
+    return (catData?.results || []).map(f => ({ value: f.name, label: f.name }));
+  }, [catData]);
+
+  const [addFurnOpen, setAddFurnOpen] = useState(false);
+  const [addFurnName, setAddFurnName] = useState("");
+  const [addFurnTargetItem, setAddFurnTargetItem] = useState<EstimateItem | null>(null);
+
+  const handleAddFurniture = (name: string, item: EstimateItem) => {
+    setAddFurnName(name);
+    setAddFurnTargetItem(item);
+    setAddFurnOpen(true);
+  };
+
+  const handleFurnitureAdded = async (furniture: Furniture) => {
+    if (addFurnTargetItem) {
+      const nextDraft = { ...draft, [addFurnTargetItem.id]: { ...draft[addFurnTargetItem.id], item: furniture.name } };
+      setDraft(nextDraft);
+      // Immediately commit it
+      try {
+        await estimatesApi.updateItem(project.id, estimate.id, addFurnTargetItem.id, { item: furniture.name });
+        await onChanged();
+      } catch (e) {
+        onError("Could not save item name");
+      }
+    }
+    setAddFurnOpen(false);
+    reloadCat();
+  };
 
   const commit = async (item: EstimateItem) => {
     const changes = draft[item.id];
@@ -520,7 +555,7 @@ function LineItems({
         <table className="w-full text-[11px] min-w-[1100px]">
           <thead>
             <tr className="bg-nicara-dark">
-              {["Area", "Category", "Sub Cat", "Item", "L", "B", "H", "Qty", "Unit", "Rate", "Amount", "GST", "Detail", "Del"].map(h => (
+              {["Area", "Item", "L", "B", "H", "Qty", "Unit", "Rate", "Amount", "GST", "Detail", "Del"].map(h => (
                 <th key={h} className={TH}>{h}</th>
               ))}
             </tr>
@@ -552,11 +587,13 @@ function LineItems({
                     onError(e instanceof ApiError ? e.message : "Could not add row.");
                   }
                 }}
+                catalogOptions={catalogOptions}
+                onAddFurniture={handleAddFurniture}
               />
             ))}
             {/* Grand total footer */}
             <tr className="bg-nicara-dark">
-              <td colSpan={10} className="p-2.5 text-stone-200 font-bold text-right text-xs">
+              <td colSpan={8} className="p-2.5 text-stone-200 font-bold text-right text-xs">
                 GRAND TOTAL ({filtered.length} items)
               </td>
               <td className="p-2.5 text-nicara-gold font-extrabold text-right font-mono text-[14px]">
@@ -567,6 +604,13 @@ function LineItems({
           </tbody>
         </table>
       </div>
+
+      <AddFurnitureModal
+        open={addFurnOpen}
+        onClose={() => setAddFurnOpen(false)}
+        initialName={addFurnName}
+        onSuccess={handleFurnitureAdded}
+      />
     </div>
   );
 }
@@ -576,6 +620,7 @@ function LineItems({
 function GroupBlock({
   group, project, estimate, locked, busy, val, setDraft, commit, remove,
   expanded, setExpanded, onChanged, onError, onAddRow,
+  catalogOptions, onAddFurniture,
 }: {
   group: { area: string; items: EstimateItem[]; subtotal: number };
   project: Project;
@@ -591,13 +636,15 @@ function GroupBlock({
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
   onAddRow: () => void;
+  catalogOptions: { value: string, label: string }[];
+  onAddFurniture: (name: string, item: EstimateItem) => void;
 }) {
   const BD = "border-r border-surface-200";
   return (
     <>
       {/* Area header */}
       <tr className="bg-nicara-gold/10">
-        <td colSpan={14} className="px-3 py-2">
+        <td colSpan={12} className="px-3 py-2">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.area}</span>
             <span className="text-[10px] text-surface-400">{group.items.length} item(s)</span>
@@ -632,6 +679,8 @@ function GroupBlock({
             onError={onError}
             onToggle={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))}
             BD={BD}
+            catalogOptions={catalogOptions}
+            onAddFurniture={onAddFurniture}
           />
         );
       })}
@@ -643,7 +692,7 @@ function GroupBlock({
 
 function ItemRow({
   item, ri, isOpen, project, estimate, locked, busy, val, setDraft, commit, remove,
-  onChanged, onError, onToggle, BD,
+  onChanged, onError, onToggle, BD, catalogOptions, onAddFurniture,
 }: {
   item: EstimateItem;
   ri: number;
@@ -660,6 +709,8 @@ function ItemRow({
   onError: (msg: string) => void;
   onToggle: () => void;
   BD: string;
+  catalogOptions: { value: string, label: string }[];
+  onAddFurniture: (name: string, item: EstimateItem) => void;
 }) {
   return (
     <>
@@ -670,23 +721,26 @@ function ItemRow({
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], area: v } }))}
             onCommit={() => commit(item)} placeholder="Room" />
         </td>
-        {/* Category */}
-        <td className={`px-2 py-1.5 ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "category") || ""}
-            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], category: v } }))}
-            onCommit={() => commit(item)} placeholder="Category" />
-        </td>
-        {/* Sub Cat */}
-        <td className={`px-2 py-1.5 ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "subcategory") || ""}
-            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], subcategory: v } }))}
-            onCommit={() => commit(item)} placeholder="Sub Cat" />
-        </td>
         {/* Item */}
-        <td className={`px-2 py-1.5 font-semibold text-nicara-dark ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "item")} bold
-            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], item: v } }))}
-            onCommit={() => commit(item)} placeholder="Item name" />
+        <td className={`px-2 py-1.5 min-w-[200px] font-semibold text-nicara-dark ${BD}`}>
+          {!locked ? (
+            <SearchableSelect
+              value={val(item, "item")}
+              onChange={v => {
+                setDraft(d => ({ ...d, [item.id]: { ...d[item.id], item: v } }));
+                // Manually trigger commit since SearchableSelect onChange is an immediate blur/select
+                // We'll wrap it in a setTimeout so the state updates first, but ideally we'd pass it.
+                // Or we let the user blur the container... well SearchableSelect doesn't have onBlur.
+                // Let's just update the backend directly here for better UX:
+                estimatesApi.updateItem(project.id, estimate.id, item.id, { item: v }).then(() => onChanged());
+              }}
+              options={catalogOptions}
+              onAdd={searchTerm => onAddFurniture(searchTerm, item)}
+              placeholder="Item name"
+            />
+          ) : (
+            <div className="px-2 py-1.5 text-[11px] font-semibold text-nicara-dark">{val(item, "item")}</div>
+          )}
           {item.catalog_item_code && (
             <div className="px-2 text-[9px] text-surface-300 font-mono">{item.catalog_item_code}</div>
           )}
@@ -744,7 +798,7 @@ function ItemRow({
       {/* Collapsible detail row — live material breakdown */}
       {isOpen && (
         <tr>
-          <td colSpan={14} className="p-0">
+          <td colSpan={12} className="p-0">
             <ComponentBreakdown
               item={item} project={project} estimate={estimate}
               locked={locked} onChanged={onChanged} onError={onError} />
