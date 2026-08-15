@@ -503,6 +503,30 @@ Amount**, each row editable.
 
 In the UI: open the Initial Estimate, expand a line's **Detail** chevron.
 
+## 13a. Connected item dropdowns (one master, inline add)
+
+**Design Requirements → Unit** and **Initial Estimate → Item** are no longer free
+text — both are searchable dropdowns backed by the **same Items catalogue**, so
+the two screens draw from one master. Component: `components/ui/SearchSelect.tsx`.
+
+- Type to filter; each option shows its category (and its linked furniture, if
+  any) as a sub-label.
+- A **“+ Add …”** button sits pinned at the end of the list and stays visible
+  while you search — pick it to create a brand-new Item inline (`POST /api/items/`,
+  no category needed — a `General` category is assigned automatically).
+
+**Items ↔ Furniture link (“keep both, link them”).** An Item can point at a
+Furniture Catalogue entry via `Item.catalog_furniture`, set on the **Items** form
+(*Linked Furniture (Bill of Materials)*). When a furniture-linked item is added to
+an estimate — through **Add from Catalogue**, or by picking it in the line’s Item
+dropdown — the line’s **material breakdown is auto-filled from that furniture’s
+BOM** and the amount rolls up. Example: the seeded *Wardrobe* item linked to the
+*Wardrobe* furniture arrives with 6 components totalling **₹10,679.20**.
+
+The estimate grid drops the **Category** and **Sub Cat** columns (the sheet has
+neither); it now reads Area · Item · L · B · H · Qty · Unit · Rate · Amount · GST.
+The **Blank Line** button also works now — a fresh line may have an empty room.
+
 ## 14. Still to do
 
 - Quote calculation engine (item BOM → cost → margin → rate).

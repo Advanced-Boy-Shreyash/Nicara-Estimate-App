@@ -1,14 +1,14 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { ApiError, designRequirementsApi } from "@/lib/api";
-import type { DesignRequirement, Project } from "@/lib/apiTypes";
+import { ApiError, designRequirementsApi, itemsApi } from "@/lib/api";
+import type { DesignRequirement, Item, Project } from "@/lib/apiTypes";
 import { useApiData } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
 import { Btn } from "@/components/ui/Form";
 import Modal from "@/components/ui/Modal";
+import SearchSelect from "@/components/ui/SearchSelect";
 import { ErrorState, InlineError, Loading } from "@/components/ui/States";
-import { Upload, Eye, Download, Trash2, Plus, X } from "lucide-react";
 
 type Row = Omit<DesignRequirement, "id" | "sort_order"> & { id?: number; designImage?: string };
 
@@ -123,6 +123,16 @@ export default function DesignRequirements({ project }: { project: Project }) {
     () => designRequirementsApi.list(project.id),
     [project.id]
   );
+  // The master list the Unit dropdown draws from — same Items catalogue the
+  // Initial Estimate uses, so both stay in step.
+  const itemsQuery = useApiData(() => itemsApi.list({}), []);
+  const items = itemsQuery.data?.results ?? [];
+  const createItem = async (name: string): Promise<Item> => {
+    const created = await itemsApi.create({ name });
+    await itemsQuery.reload();
+    toast.success("Item added", `“${created.name}” is now in the catalogue`);
+    return created;
+  };
 
   const [rows, setRows] = useState<Row[] | null>(null);
   const [banner, setBanner] = useState("");
@@ -337,6 +347,9 @@ export default function DesignRequirements({ project }: { project: Project }) {
               <RoomGroup
                 key={group.room}
                 group={group}
+                items={items}
+                itemsLoading={itemsQuery.loading}
+                onCreateItem={createItem}
                 editByRef={editByRef}
                 removeByRef={removeByRef}
                 onImageUpload={handleImageUpload}
@@ -390,8 +403,11 @@ export default function DesignRequirements({ project }: { project: Project }) {
 
 /* ── Room group with heading row (like Initial Estimate area grouping) ── */
 
-function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, onAddRow }: {
+function RoomGroup({ group, items, itemsLoading, onCreateItem, editByRef, removeByRef, onImageUpload, onViewImage, onAddRow }: {
   group: { room: string; items: Row[] };
+  items: Item[];
+  itemsLoading: boolean;
+  onCreateItem: (name: string) => Promise<Item>;
   editByRef: (row: Row, key: keyof Row, value: string | boolean) => void;
   removeByRef: (row: Row) => void;
   onImageUpload: (row: Row, file: File) => void;
@@ -419,6 +435,9 @@ function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, 
           key={row.id ?? `new-${group.room}-${i}`}
           row={row}
           ri={i}
+          items={items}
+          itemsLoading={itemsLoading}
+          onCreateItem={onCreateItem}
           editByRef={editByRef}
           removeByRef={removeByRef}
           onImageUpload={onImageUpload}
@@ -431,9 +450,12 @@ function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, 
 
 /* ── Single design requirement row ── */
 
-function DesignRow({ row, ri, editByRef, removeByRef, onImageUpload, onViewImage }: {
+function DesignRow({ row, ri, items, itemsLoading, onCreateItem, editByRef, removeByRef, onImageUpload, onViewImage }: {
   row: Row;
   ri: number;
+  items: Item[];
+  itemsLoading: boolean;
+  onCreateItem: (name: string) => Promise<Item>;
   editByRef: (row: Row, key: keyof Row, value: string | boolean) => void;
   removeByRef: (row: Row) => void;
   onImageUpload: (row: Row, file: File) => void;
@@ -443,10 +465,18 @@ function DesignRow({ row, ri, editByRef, removeByRef, onImageUpload, onViewImage
 
   return (
     <tr className={`border-b border-surface-100 ${ri % 2 === 0 ? "bg-white" : "bg-surface-50/50"}`}>
-      {/* Unit Selection */}
-      <td className={`px-2 py-1.5 min-w-[140px] ${BD}`}>
-        <input className={CELL} value={row.unit}
-          onChange={e => editByRef(row, "unit", e.target.value)} placeholder="Wardrobe" />
+      {/* Unit Selection — searchable Items dropdown with inline add */}
+      <td className={`px-2 py-1.5 min-w-[160px] ${BD}`}>
+        <SearchSelect
+          value={row.unit}
+          options={items}
+          loading={itemsLoading}
+          getLabel={i => i.name}
+          getSublabel={i => i.category_name}
+          placeholder="Wardrobe"
+          onPick={i => editByRef(row, "unit", i.name)}
+          onCreate={async name => { const it = await onCreateItem(name); editByRef(row, "unit", it.name); }}
+        />
       </td>
       {/* L B H */}
       <td className={`px-2 py-1.5 w-[60px] ${BD}`}><input className={`${CELL} font-mono`} value={row.length}

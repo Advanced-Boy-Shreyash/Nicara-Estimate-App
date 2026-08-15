@@ -45,6 +45,15 @@ class RollupTests(ComponentTestCase):
         self.line.refresh_from_db()
         self.assertEqual(self.line.amount, Decimal('5000.00'))
 
+    def test_blank_area_line_can_be_created(self):
+        """The 'Blank Line' button posts an empty area — a fresh row has no room yet."""
+        url = reverse('estimate-item-list', args=[self.project.pk, self.estimate.pk])
+        res = self.client.post(
+            url, {'area': '', 'item': 'New line', 'qty': 1, 'rate': 0, 'unit': 'unit', 'gst_pct': 18},
+            format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+        self.assertEqual(res.data['area'], '')
+
     def test_component_amount_is_qty_times_price(self):
         comp = EstimateItemComponent.objects.create(
             estimate_item=self.line, basic_component='Plywood', detail='18mm',
@@ -182,3 +191,32 @@ class PopulateFromFurnitureTests(ComponentTestCase):
     def test_unknown_furniture_rejected(self):
         res = self.client.post(self.populate_url(), {'furniture_id': 99999}, format='json')
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_add_from_catalog_seeds_breakdown_for_linked_item(self):
+        """An Item linked to a furniture arrives on the estimate fully costed."""
+        from items.models import Item as MasterItem, ItemCategory
+        cat = ItemCategory.objects.create(name='Carpentry')
+        master = MasterItem.objects.create(
+            name='Wardrobe', category=cat, default_rate=Decimal('0'),
+            catalog_furniture=self.furniture)
+
+        url = reverse('estimate-item-from-catalog', args=[self.project.pk, self.estimate.pk])
+        res = self.client.post(url, {'items': [{'item_id': master.pk, 'area': 'Master Bedroom'}]}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+
+        line = self.estimate.items.get(catalog_item=master)
+        self.assertEqual(line.components.count(), 2)          # Plywood + Hardware
+        self.assertEqual(line.amount, Decimal('6940.00'))     # rolled up from BOM
+
+    def test_add_from_catalog_without_link_stays_flat(self):
+        from items.models import Item as MasterItem, ItemCategory
+        cat = ItemCategory.objects.create(name='Carpentry')
+        master = MasterItem.objects.create(
+            name='Loose Item', category=cat, default_qty=Decimal('2'), default_rate=Decimal('500'))
+
+        url = reverse('estimate-item-from-catalog', args=[self.project.pk, self.estimate.pk])
+        self.client.post(url, {'items': [{'item_id': master.pk}]}, format='json')
+
+        line = self.estimate.items.get(catalog_item=master)
+        self.assertEqual(line.components.count(), 0)
+        self.assertEqual(line.amount, Decimal('1000.00'))     # 2 × 500

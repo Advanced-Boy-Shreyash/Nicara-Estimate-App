@@ -513,9 +513,15 @@ class EstimateAddFromCatalogView(APIView):
         created = []
         with transaction.atomic():
             for entry in entries:
+                source = catalog[entry['item_id']]
                 overrides = {k: v for k, v in entry.items() if k in self.OVERRIDABLE}
-                fields = catalog[entry['item_id']].as_estimate_line(**overrides)
-                created.append(EstimateItem.objects.create(estimate=estimate, **fields))
+                fields = source.as_estimate_line(**overrides)
+                line = EstimateItem.objects.create(estimate=estimate, **fields)
+                # Linked to a furniture? Seed the material breakdown from its BOM
+                # so the line arrives fully costed, not just as a flat rate.
+                if source.catalog_furniture_id:
+                    populate_line_from_furniture(line, source.catalog_furniture, replace=True)
+                created.append(line)
 
         return Response(
             {
@@ -546,6 +552,40 @@ def _get_line(kwargs):
         estimate_id=kwargs['estimate_id'],
         estimate__project_id=kwargs['project_id'],
     )
+
+
+def populate_line_from_furniture(line, furniture, replace=True):
+    """
+    Copy a catalogue Furniture's bill of materials onto an estimate line's
+    component breakdown, then roll the line amount up from it. Shared by the
+    explicit "Pull from Catalogue" action and the add-from-catalogue flow when
+    the source item is linked to a furniture. Returns the number of rows added.
+    """
+    if replace:
+        line.components.all().delete()
+
+    created = 0
+    for part in furniture.parts.filter(is_active=True):
+        for pm in part.materials.all():
+            option = pm.effective_option
+            wastage = pm.wastage_pct or Decimal('0')
+            qty = (pm.qty_per_unit or Decimal('0')) * (Decimal('1') + wastage / Decimal('100'))
+            EstimateItemComponent.objects.create(
+                estimate_item=line,
+                basic_component=pm.material.name,
+                detail=option.detail if option else '',
+                brand=option.brand if option else '',
+                model=option.model_no if option else '',
+                qty=qty,
+                unit=pm.unit or (option.unit if option else pm.material.default_unit),
+                price=option.price if option else Decimal('0'),
+                catalog_material=pm.material,
+                catalog_option=option,
+            )
+            created += 1
+
+    line.recompute_amount()
+    return created
 
 
 class EstimateItemComponentListCreateView(generics.ListCreateAPIView):
@@ -599,33 +639,11 @@ class EstimatePopulateFromFurnitureView(APIView):
                             status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
-            if request.data.get('replace', True):
-                line.components.all().delete()
-
-            created = 0
-            for part in furniture.parts.filter(is_active=True):
-                for pm in part.materials.all():
-                    option = pm.effective_option
-                    wastage = pm.wastage_pct or Decimal('0')
-                    qty = (pm.qty_per_unit or Decimal('0')) * (Decimal('1') + wastage / Decimal('100'))
-                    EstimateItemComponent.objects.create(
-                        estimate_item=line,
-                        basic_component=pm.material.name,
-                        detail=option.detail if option else '',
-                        brand=option.brand if option else '',
-                        model=option.model_no if option else '',
-                        qty=qty,
-                        unit=pm.unit or (option.unit if option else pm.material.default_unit),
-                        price=option.price if option else Decimal('0'),
-                        catalog_material=pm.material,
-                        catalog_option=option,
-                    )
-                    created += 1
-
+            created = populate_line_from_furniture(
+                line, furniture, replace=request.data.get('replace', True))
             if not line.item:
                 line.item = furniture.name
                 line.save(update_fields=['item'])
-            line.recompute_amount()
 
         line.refresh_from_db()
         return Response({

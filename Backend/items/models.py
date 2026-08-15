@@ -76,6 +76,15 @@ class Item(models.Model):
     description = models.TextField(blank=True, default='',
                                    help_text='Default spec text copied onto estimate lines')
 
+    # The bridge to the Furniture Catalogue. When set, the item's material
+    # breakdown (bill of materials) is sourced from this furniture — an estimate
+    # line created from this item can auto-fill its component breakdown.
+    catalog_furniture = models.ForeignKey(
+        'catalog.Furniture', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='linked_items',
+        help_text='Furniture catalogue entry whose bill-of-materials backs this item',
+    )
+
     # Where this item usually applies — a hint for the estimate builder.
     default_room = models.CharField(max_length=100, blank=True, default='')
 

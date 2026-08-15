@@ -12,6 +12,7 @@ import { useApiData, inr, inrExact } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
 import Modal from "@/components/ui/Modal";
 import { Btn, Field } from "@/components/ui/Form";
+import SearchSelect from "@/components/ui/SearchSelect";
 import { EmptyState, ErrorState, InlineError, Loading, StatusPill } from "@/components/ui/States";
 import {
   Download, Upload, FileText, FileSpreadsheet, Send,
@@ -443,6 +444,17 @@ function LineItems({
   const [fArea, setFArea] = useState("All");
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
+  // Items master backing the "Item" dropdown — the same catalogue Design
+  // Requirements draws from. Picking one links the line and, if that item is
+  // tied to a furniture, pulls its material breakdown.
+  const itemsQuery = useApiData(() => itemsApi.list({}), []);
+  const masterItems = itemsQuery.data?.results ?? [];
+  const createMasterItem = async (name: string): Promise<Item> => {
+    const created = await itemsApi.create({ name });
+    await itemsQuery.reload();
+    return created;
+  };
+
   const commit = async (item: EstimateItem) => {
     const changes = draft[item.id];
     if (!changes) return;
@@ -520,7 +532,7 @@ function LineItems({
         <table className="w-full text-[11px] min-w-[1100px]">
           <thead>
             <tr className="bg-nicara-dark">
-              {["Area", "Category", "Sub Cat", "Item", "L", "B", "H", "Qty", "Unit", "Rate", "Amount", "GST", "Detail", "Del"].map(h => (
+              {["Area", "Item", "L", "B", "H", "Qty", "Unit", "Rate", "Amount", "GST", "Detail", "Del"].map(h => (
                 <th key={h} className={TH}>{h}</th>
               ))}
             </tr>
@@ -540,6 +552,9 @@ function LineItems({
                 remove={remove}
                 expanded={expanded}
                 setExpanded={setExpanded}
+                masterItems={masterItems}
+                itemsLoading={itemsQuery.loading}
+                onCreateItem={createMasterItem}
                 onChanged={onChanged}
                 onError={onError}
                 onAddRow={async () => {
@@ -556,7 +571,7 @@ function LineItems({
             ))}
             {/* Grand total footer */}
             <tr className="bg-nicara-dark">
-              <td colSpan={10} className="p-2.5 text-stone-200 font-bold text-right text-xs">
+              <td colSpan={8} className="p-2.5 text-stone-200 font-bold text-right text-xs">
                 GRAND TOTAL ({filtered.length} items)
               </td>
               <td className="p-2.5 text-nicara-gold font-extrabold text-right font-mono text-[14px]">
@@ -575,7 +590,7 @@ function LineItems({
 
 function GroupBlock({
   group, project, estimate, locked, busy, val, setDraft, commit, remove,
-  expanded, setExpanded, onChanged, onError, onAddRow,
+  expanded, setExpanded, masterItems, itemsLoading, onCreateItem, onChanged, onError, onAddRow,
 }: {
   group: { area: string; items: EstimateItem[]; subtotal: number };
   project: Project;
@@ -588,6 +603,9 @@ function GroupBlock({
   remove: (item: EstimateItem) => Promise<void>;
   expanded: Record<number, boolean>;
   setExpanded: React.Dispatch<React.SetStateAction<Record<number, boolean>>>;
+  masterItems: Item[];
+  itemsLoading: boolean;
+  onCreateItem: (name: string) => Promise<Item>;
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
   onAddRow: () => void;
@@ -597,7 +615,7 @@ function GroupBlock({
     <>
       {/* Area header */}
       <tr className="bg-nicara-gold/10">
-        <td colSpan={14} className="px-3 py-2">
+        <td colSpan={12} className="px-3 py-2">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.area}</span>
             <span className="text-[10px] text-surface-400">{group.items.length} item(s)</span>
@@ -628,6 +646,9 @@ function GroupBlock({
             setDraft={setDraft}
             commit={commit}
             remove={remove}
+            masterItems={masterItems}
+            itemsLoading={itemsLoading}
+            onCreateItem={onCreateItem}
             onChanged={onChanged}
             onError={onError}
             onToggle={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))}
@@ -643,7 +664,7 @@ function GroupBlock({
 
 function ItemRow({
   item, ri, isOpen, project, estimate, locked, busy, val, setDraft, commit, remove,
-  onChanged, onError, onToggle, BD,
+  masterItems, itemsLoading, onCreateItem, onChanged, onError, onToggle, BD,
 }: {
   item: EstimateItem;
   ri: number;
@@ -656,11 +677,42 @@ function ItemRow({
   setDraft: React.Dispatch<React.SetStateAction<Record<number, Record<string, unknown>>>>;
   commit: (item: EstimateItem) => Promise<void>;
   remove: (item: EstimateItem) => Promise<void>;
+  masterItems: Item[];
+  itemsLoading: boolean;
+  onCreateItem: (name: string) => Promise<Item>;
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
   onToggle: () => void;
   BD: string;
 }) {
+  // Picking a master item names the line, copies its rate/unit, and — when the
+  // item is linked to a furniture — pulls that furniture's material breakdown.
+  const applyMaster = async (master: Item) => {
+    try {
+      await estimatesApi.updateItem(project.id, estimate.id, item.id, {
+        item: master.name,
+        rate: master.default_rate,
+        unit: master.unit,
+      });
+      if (master.catalog_furniture) {
+        await estimatesApi.populateFromFurniture(project.id, estimate.id, item.id, master.catalog_furniture);
+      }
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Could not apply the item.");
+    }
+  };
+
+  const createAndApply = async (name: string) => {
+    try {
+      const master = await onCreateItem(name);
+      await estimatesApi.updateItem(project.id, estimate.id, item.id, { item: master.name });
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Could not add the item.");
+    }
+  };
+
   return (
     <>
       <tr className={`border-b border-surface-100 ${isOpen ? "bg-nicara-gold/5 border-l-[3px] border-l-nicara-gold" : ri % 2 === 0 ? "bg-white" : "bg-surface-50/50"}`}>
@@ -670,23 +722,23 @@ function ItemRow({
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], area: v } }))}
             onCommit={() => commit(item)} placeholder="Room" />
         </td>
-        {/* Category */}
-        <td className={`px-2 py-1.5 ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "category") || ""}
-            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], category: v } }))}
-            onCommit={() => commit(item)} placeholder="Category" />
-        </td>
-        {/* Sub Cat */}
-        <td className={`px-2 py-1.5 ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "subcategory") || ""}
-            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], subcategory: v } }))}
-            onCommit={() => commit(item)} placeholder="Sub Cat" />
-        </td>
-        {/* Item */}
-        <td className={`px-2 py-1.5 font-semibold text-nicara-dark ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "item")} bold
-            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], item: v } }))}
-            onCommit={() => commit(item)} placeholder="Item name" />
+        {/* Item — searchable Items dropdown with inline add */}
+        <td className={`px-2 py-1.5 font-semibold text-nicara-dark min-w-[160px] ${BD}`}>
+          {locked ? (
+            <div className="px-2 py-1.5 font-semibold text-nicara-dark">{val(item, "item") || "—"}</div>
+          ) : (
+            <SearchSelect
+              value={val(item, "item")}
+              options={masterItems}
+              loading={itemsLoading}
+              getLabel={i => i.name}
+              getSublabel={i => [i.category_name, i.catalog_furniture_name && `⇄ ${i.catalog_furniture_name}`].filter(Boolean).join(" · ")}
+              placeholder="Item name"
+              className="w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] font-semibold text-nicara-dark bg-transparent outline-none focus:border-nicara-gold focus:bg-white cursor-text"
+              onPick={applyMaster}
+              onCreate={createAndApply}
+            />
+          )}
           {item.catalog_item_code && (
             <div className="px-2 text-[9px] text-surface-300 font-mono">{item.catalog_item_code}</div>
           )}
@@ -744,7 +796,7 @@ function ItemRow({
       {/* Collapsible detail row — live material breakdown */}
       {isOpen && (
         <tr>
-          <td colSpan={14} className="p-0">
+          <td colSpan={12} className="p-0">
             <ComponentBreakdown
               item={item} project={project} estimate={estimate}
               locked={locked} onChanged={onChanged} onError={onError} />

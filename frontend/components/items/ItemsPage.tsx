@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ApiError, itemsApi, type ItemInput } from "@/lib/api";
+import { ApiError, catalogApi, itemsApi, type ItemInput } from "@/lib/api";
 import type { Item, ItemMeta } from "@/lib/apiTypes";
 import { useApiData, inr } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
@@ -168,6 +168,10 @@ function ItemModal({
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [banner, setBanner] = useState("");
   const [saving, setSaving] = useState(false);
+  // Furniture options for the BOM link — this is what ties an item to a
+  // material breakdown so estimate lines arrive fully costed.
+  const furnitureQuery = useApiData(() => catalogApi.furniture(), []);
+  const furniture = furnitureQuery.data?.results ?? [];
 
   const set = <K extends keyof ItemInput>(key: K, value: ItemInput[K]) =>
     setForm(f => ({ ...f, [key]: value }));
@@ -246,6 +250,16 @@ function ItemModal({
         <Select label="Typical Room" value={form.default_room ?? ""} onChange={v => set("default_room", v)}
           placeholder="Any room"
           options={(meta?.rooms ?? []).map(r => ({ value: r, label: r }))} />
+        <div className="col-span-2">
+          <Select label="Linked Furniture (Bill of Materials)"
+            value={form.catalog_furniture ? String(form.catalog_furniture) : ""}
+            onChange={v => set("catalog_furniture", v ? Number(v) : null)}
+            placeholder="None — flat rate only"
+            options={furniture.map(f => ({ value: String(f.id), label: f.name }))} />
+          <div className="mt-1 text-[10px] text-surface-400">
+            When set, an estimate line created from this item auto-fills its material breakdown from this furniture&apos;s catalogue BOM.
+          </div>
+        </div>
       </FormSection>
 
       <FormSection title="Measurement">

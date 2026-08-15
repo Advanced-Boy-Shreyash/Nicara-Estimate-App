@@ -358,7 +358,10 @@ class EstimateItem(models.Model):
         help_text='Master item this line was created from, if any'
     )
     sno = models.IntegerField(default=0)
-    area = models.CharField(max_length=100, help_text='Room name, e.g. Master Bedroom')
+    # Blank on a fresh line — the designer names the room after adding it; the
+    # grid groups empty-area lines under "Uncategorized".
+    area = models.CharField(max_length=100, blank=True, default='',
+                            help_text='Room name, e.g. Master Bedroom')
     # The Excel columns: a room area (zone) the item sits on, and its finish.
     zone = models.CharField(max_length=100, blank=True, default='',
                             help_text='Room area, e.g. East Wall')

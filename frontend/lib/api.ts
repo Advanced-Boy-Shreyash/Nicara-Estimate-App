@@ -760,7 +760,7 @@ export const bookingApi = {
 
 // ── Items catalogue ───────────────────────────────────────────
 
-export type ItemInput = Partial<Omit<Item, "id" | "code" | "category_name" | "category_icon" | "unit_display">>;
+export type ItemInput = Partial<Omit<Item, "id" | "code" | "category_name" | "category_icon" | "unit_display" | "catalog_furniture_name">>;
 
 export const itemsApi = {
   list: (params: { category?: number; search?: string; room?: string } = {}) => {

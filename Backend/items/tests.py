@@ -94,6 +94,26 @@ class ItemCatalogueTests(APITestCase):
         self.assertTrue(any(u['value'] == 'sft' for u in res.data['units']))
         self.assertEqual(res.data['counts']['items'], 1)
 
+    def test_quick_create_without_category_defaults_to_general(self):
+        """The inline '+ Add' in the estimate/design dropdowns posts a bare name."""
+        res = self.client.post(reverse('item-list'), {'name': 'Pooja Unit'}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+        created = Item.objects.get(name='Pooja Unit')
+        self.assertEqual(created.category.name, 'General')
+
+    def test_item_links_to_a_catalog_furniture(self):
+        from catalog.models import Furniture
+        furniture = Furniture.objects.create(name='Wardrobe')
+        res = self.client.patch(
+            reverse('item-detail', args=[self.item.id]),
+            {'catalog_furniture': furniture.id}, format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.assertEqual(res.data['catalog_furniture'], furniture.id)
+        self.assertEqual(res.data['catalog_furniture_name'], 'Wardrobe')
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.catalog_furniture_id, furniture.id)
+
 
 class ItemComponentTests(APITestCase):
     def setUp(self):

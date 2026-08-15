@@ -51,6 +51,8 @@ class ItemListSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     category_icon = serializers.CharField(source='category.icon', read_only=True)
     unit_display = serializers.CharField(source='get_unit_display', read_only=True)
+    catalog_furniture_name = serializers.CharField(source='catalog_furniture.name',
+                                                    read_only=True, default='')
 
     class Meta:
         model = Item
@@ -60,6 +62,7 @@ class ItemListSerializer(serializers.ModelSerializer):
             'default_length', 'default_breadth', 'default_height',
             'default_qty', 'default_rate', 'min_rate', 'max_rate',
             'gst_pct', 'margin_pct', 'is_active',
+            'catalog_furniture', 'catalog_furniture_name',
         ]
 
 
@@ -68,9 +71,15 @@ class ItemSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     unit_display = serializers.CharField(source='get_unit_display', read_only=True)
     calc_method_display = serializers.CharField(source='get_calc_method_display', read_only=True)
+    catalog_furniture_name = serializers.CharField(source='catalog_furniture.name',
+                                                    read_only=True, default='')
     components = ItemComponentSerializer(many=True, read_only=True)
     component_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     suggested_rate = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    # Optional so the inline "+ Add" quick-create can save a bare name; a
+    # 'General' category is assigned on create when none is supplied.
+    category = serializers.PrimaryKeyRelatedField(
+        queryset=ItemCategory.objects.all(), required=False, allow_null=True)
 
     class Meta:
         model = Item
@@ -85,6 +94,12 @@ class ItemSerializer(serializers.ModelSerializer):
                 {'min_rate': 'Minimum rate cannot exceed the maximum rate.'}
             )
         return data
+
+    def create(self, validated_data):
+        if not validated_data.get('category'):
+            validated_data['category'], _ = ItemCategory.objects.get_or_create(
+                name='General', defaults={'icon': '📦', 'sort_order': 999})
+        return super().create(validated_data)
 
 
 class AddItemsToEstimateSerializer(serializers.Serializer):

@@ -347,6 +347,9 @@ export interface Item {
   gst_pct: string;
   margin_pct: string;
   is_active: boolean;
+  /** Furniture Catalogue entry whose bill-of-materials backs this item. */
+  catalog_furniture: number | null;
+  catalog_furniture_name: string;
 }
 
 export interface ItemMeta {
