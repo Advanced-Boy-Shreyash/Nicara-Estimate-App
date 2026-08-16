@@ -8,7 +8,7 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace(tokenStore.access() ? "/estimate" : "/login");
+    router.replace(tokenStore.access() ? "/dashboard" : "/login");
   }, [router]);
 
   return (

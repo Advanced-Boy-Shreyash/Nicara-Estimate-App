@@ -26,3 +26,8 @@ reportlab==4.2.5        # Estimate and Booking Form PDF export
 
 # ── Serving ─────────────────────────────────────────────────
 gunicorn==23.0.0
+whitenoise==6.7.0      # serve static files in production (cPanel / Passenger)
+
+# ── Database drivers (uncomment as needed) ──────────────────
+# mysqlclient==2.2.4   # for MySQL on MilesWeb cPanel
+# psycopg2-binary==2.9.9  # for PostgreSQL

@@ -31,7 +31,7 @@ function ResetPasswordForm() {
 
     const result = await resetPassword(link.uid, link.token, password);
     if (result.success) {
-      router.replace("/estimate");
+      router.replace("/dashboard");
       return;
     }
     setError(result.error || "Could not reset your password.");

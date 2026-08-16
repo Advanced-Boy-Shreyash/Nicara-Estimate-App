@@ -18,7 +18,7 @@ function LoginForm() {
 
   /* Already signed in — skip the form. */
   useEffect(() => {
-    if (!isLoading && isAuthenticated) router.replace("/estimate");
+    if (!isLoading && isAuthenticated) router.replace("/dashboard");
   }, [isLoading, isAuthenticated, router]);
 
   /* Remembered address from the last successful sign-in. localStorage cannot
@@ -40,7 +40,7 @@ function LoginForm() {
     if (result.success) {
       if (remember) localStorage.setItem("nicara_last_email", email.trim());
       else localStorage.removeItem("nicara_last_email");
-      router.replace("/estimate");
+      router.replace("/dashboard");
       return;
     }
 

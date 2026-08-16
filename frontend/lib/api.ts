@@ -1,8 +1,8 @@
 // ── NICARA Project OS — Django REST Framework API Layer ──────
 //
-// Talks to the Django backend at NEXT_PUBLIC_API_URL (default
-// http://localhost:8000/api). Access tokens are short lived; when one expires
-// this layer transparently redeems the refresh token and replays the request.
+// Talks to the Django backend at NEXT_PUBLIC_API_URL. Access tokens are
+// short lived; when one expires this layer transparently redeems the
+// refresh token and replays the request.
 
 import type {
   BookingForm, CatalogMaterial, CatalogMeta, CatalogRoom, CatalogZone, Client,

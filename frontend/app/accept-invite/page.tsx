@@ -27,7 +27,7 @@ function AcceptInviteForm() {
 
     const result = await acceptInvite(token, password);
     if (result.success) {
-      router.replace("/estimate");
+      router.replace("/dashboard");
       return;
     }
     setError(result.error || "Could not accept the invitation.");
