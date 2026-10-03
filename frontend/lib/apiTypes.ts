@@ -238,6 +238,69 @@ export interface EstimateItem {
   /** The material breakdown; when present, `amount` is its sum. */
   components: EstimateItemComponent[];
   has_components: boolean;
+  /** Cabinet-calculator configuration the breakdown was generated from. */
+  config: CabinetConfig | null;
+}
+
+// ── Cabinet calculation engine (catalog/estimator.py) ─────────
+
+export interface CabinetConfig {
+  template: string;
+  length: number;   // width, mm
+  depth: number;    // mm
+  height: number;   // mm
+  drawers: number;
+  doors: number;
+  shelves: number;
+  carcass_thickness: number;
+  shutter_thickness: number;
+  back_thickness: number;
+  drawer_box_thickness: number;
+  board: string;
+  finish: string;
+  wastage_pct: number;
+  ply_brand: string;
+  options?: { hinge?: number | null; channel?: number | null; handle?: number | null; finish?: number | null };
+}
+
+export interface EstimatorRow {
+  basic_component: string;
+  detail: string;
+  brand: string;
+  model: string;
+  qty: string;
+  unit: string;
+  price: string;
+  amount: string;
+  source: "catalogue" | "provisional";
+  basis: string;
+}
+
+export interface EstimatorResult {
+  config: CabinetConfig;
+  rows: EstimatorRow[];
+  total: string;
+  quantities: {
+    plywood: Record<string, { net_sft: number; gross_sft: number; sheets: number }>;
+    hinges: number; slides: number; handles: number; screws: number;
+    edge_band_rft: number; finish_sheets: number; board: string;
+  };
+  warnings: string[];
+  formula_version: string;
+}
+
+export interface EstimatorMeta {
+  formula_version: string;
+  templates: ({ key: string; label: string } & Pick<CabinetConfig, "length" | "depth" | "height" | "drawers" | "doors" | "shelves">)[];
+  thicknesses: { carcass: number[]; shutter: number[]; back: number[]; drawer_box: number[] };
+  boards: string[];
+  finishes: string[];
+  ply_brands: string[];
+  hinges: { id: number; label: string }[];
+  channels: { id: number; label: string }[];
+  handles: { id: number; label: string }[];
+  laminates: { id: number; label: string }[];
+  acrylics: { id: number; label: string }[];
 }
 
 export interface Estimate {

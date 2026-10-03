@@ -385,6 +385,9 @@ class EstimateItem(models.Model):
     )
     gst_pct = models.DecimalField(max_digits=5, decimal_places=2, default=18)
     remarks = models.CharField(max_length=300, blank=True, default='')
+    # Cabinet-calculator configuration (template, size, thicknesses, counts)
+    # the breakdown was last generated from — see catalog/estimator.py.
+    config = models.JSONField(null=True, blank=True)
 
     class Meta:
         ordering = ['sno', 'id']

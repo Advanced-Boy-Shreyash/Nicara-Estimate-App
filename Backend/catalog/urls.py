@@ -28,4 +28,8 @@ urlpatterns = [
     path('furniture/parts/<int:pk>/', views.FurniturePartDetailView.as_view(), name='catalog-part-detail'),
     path('furniture/parts/<int:part_id>/materials/', views.PartMaterialListCreateView.as_view(), name='catalog-partmaterial-list'),
     path('furniture/part-materials/<int:pk>/', views.PartMaterialDetailView.as_view(), name='catalog-partmaterial-detail'),
+
+    # Cabinet calculation engine
+    path('estimator/meta/', views.EstimatorMetaView.as_view(), name='catalog-estimator-meta'),
+    path('estimator/preview/', views.EstimatorPreviewView.as_view(), name='catalog-estimator-preview'),
 ]

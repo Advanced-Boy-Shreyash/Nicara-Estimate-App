@@ -13,11 +13,12 @@ import { useToast } from "@/components/ui/Toast";
 import Modal from "@/components/ui/Modal";
 import { Btn, Field } from "@/components/ui/Form";
 import SearchSelect from "@/components/ui/SearchSelect";
+import CabinetConfigurator from "./CabinetConfigurator";
 import { EmptyState, ErrorState, InlineError, Loading, StatusPill } from "@/components/ui/States";
 import {
   Download, Upload, FileText, FileSpreadsheet, Send,
   RotateCcw, CheckCircle, Copy, Brain, Plus, Trash2, ChevronDown, ChevronUp,
-  ClipboardList, X,
+  ClipboardList, X, Calculator,
 } from "lucide-react";
 
 const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
@@ -696,6 +697,10 @@ function ItemRow({
       });
       if (master.catalog_furniture) {
         await estimatesApi.populateFromFurniture(project.id, estimate.id, item.id, master.catalog_furniture);
+      } else if (!parseFloat(master.default_rate)) {
+        // Unpriced cabinet/drawer item: start from the default template so the
+        // line gets a baseline cost (the server skips non-cabinet items).
+        await estimatesApi.configure(project.id, estimate.id, item.id, { auto: true });
       }
       await onChanged();
     } catch (e) {
@@ -707,6 +712,7 @@ function ItemRow({
     try {
       const master = await onCreateItem(name);
       await estimatesApi.updateItem(project.id, estimate.id, item.id, { item: master.name });
+      await estimatesApi.configure(project.id, estimate.id, item.id, { auto: true });
       await onChanged();
     } catch (e) {
       onError(e instanceof ApiError ? e.message : "Could not add the item.");
@@ -824,6 +830,7 @@ function ComponentBreakdown({
   const [editing, setEditing] = useState<EstimateItemComponent | "new" | null>(null);
   const [pulling, setPulling] = useState(false);
   const [showPull, setShowPull] = useState(false);
+  const [configuring, setConfiguring] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const removeComponent = async (id: number) => {
@@ -861,6 +868,12 @@ function ComponentBreakdown({
         </div>
         {!locked && (
           <div className="flex items-center gap-2">
+            <button onClick={() => setConfiguring(c => !c)}
+              className={`flex items-center gap-1 px-2.5 py-1 border rounded-lg text-[10px] font-semibold cursor-pointer ${configuring
+                ? "bg-nicara-dark border-nicara-dark text-nicara-gold"
+                : "bg-white border-amber-300 text-amber-700 hover:bg-amber-100"}`}>
+              <Calculator size={11} /> {item.config ? "Edit Calculation" : "Cabinet Calculator"}
+            </button>
             <button onClick={() => setShowPull(true)} disabled={pulling}
               className="px-2.5 py-1 bg-white border border-amber-300 rounded-lg text-[10px] font-semibold text-amber-700 cursor-pointer hover:bg-amber-100">
               {pulling ? "Pulling…" : "⇊ Pull from Catalogue"}
@@ -872,6 +885,19 @@ function ComponentBreakdown({
           </div>
         )}
       </div>
+
+      {configuring && !locked && (
+        <CabinetConfigurator
+          project={project} estimate={estimate} item={item}
+          onApplied={onChanged} onClose={() => setConfiguring(false)} />
+      )}
+      {item.config && !configuring && (
+        <div className="mb-2 text-[10px] text-amber-700">
+          Calculated from: {item.config.template.replace(/_/g, " ")} · {Math.round(item.config.length)}×{Math.round(item.config.depth)}×{Math.round(item.config.height)} mm
+          · {item.config.drawers} drawer(s), {item.config.doors} door(s), {item.config.shelves} shelf(s)
+          · {item.config.carcass_thickness}mm carcass on {item.config.board} boards
+        </div>
+      )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-[10px] min-w-[760px] border border-amber-200 rounded-lg overflow-hidden bg-white">

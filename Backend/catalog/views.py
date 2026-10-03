@@ -234,3 +234,34 @@ class CatalogTreeView(CatalogView, APIView):
             'zones': ZoneSerializer(Zone.objects.filter(is_active=True), many=True).data,
             'furniture': FurnitureSerializer(furniture_qs, many=True).data,
         })
+
+
+# ── Cabinet calculation engine ─────────────────────────────
+
+class EstimatorMetaView(APIView):
+    """GET /api/catalog/estimator/meta/ — templates, thicknesses, boards, options."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from . import estimator
+        return Response(estimator.meta())
+
+
+class EstimatorPreviewView(APIView):
+    """
+    POST /api/catalog/estimator/preview/
+    Body: { "config": {...partial...}, "hint": {"name", "length", "breadth", "height"} }
+
+    Recalculates the bill of materials without saving anything — the
+    configurator calls this on every change for live totals.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from . import estimator
+        try:
+            result = estimator.calculate(request.data.get('config') or {},
+                                         request.data.get('hint') or {})
+        except estimator.ConfigError as exc:
+            return Response({'detail': 'Invalid configuration.', 'errors': {k: [v] for k, v in exc.errors.items()}}, status=400)
+        return Response(result)

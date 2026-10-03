@@ -5,9 +5,9 @@
 // this layer transparently redeems the refresh token and replays the request.
 
 import type {
-  BookingForm, CatalogMaterial, CatalogMeta, CatalogRoom, CatalogZone, Client,
+  BookingForm, CabinetConfig, CatalogMaterial, CatalogMeta, CatalogRoom, CatalogZone, Client,
   CrmMeta, CrmNote, Deliverable, DeliverableType, DesignRequirement, Estimate,
-  EstimateItem, EstimateItemComponent, EstimateListItem, EstimateType, Furniture, FurniturePart, Item,
+  EstimateItem, EstimateItemComponent, EstimateListItem, EstimatorMeta, EstimatorResult, EstimateType, Furniture, FurniturePart, Item,
   ItemCategory, ItemMeta, Lead, LeadPipeline, MaterialOption, ModuleRegistry,
   MyPermissions, PartMaterial, PermissionMatrixRow, Project, ProjectListItem,
   ProjectMeta, Vendor, VendorMeta,
@@ -626,6 +626,18 @@ export const catalogApi = {
     apiFetch<void>(`/catalog/furniture/part-materials/${id}/`, { method: "DELETE" }),
 };
 
+// ── Cabinet calculation engine ────────────────────────────────
+
+export const estimatorApi = {
+  meta: () => apiFetch<EstimatorMeta>("/catalog/estimator/meta/"),
+  /** Recalculate without saving — called live as the configurator changes. */
+  preview: (config: Partial<CabinetConfig>,
+            hint?: { name?: string; length?: string; breadth?: string; height?: string }) =>
+    apiFetch<EstimatorResult>("/catalog/estimator/preview/", {
+      method: "POST", body: JSON.stringify({ config, hint }),
+    }),
+};
+
 // ── Estimates ─────────────────────────────────────────────────
 
 export type EstimateItemInput = Partial<
@@ -730,6 +742,16 @@ export const estimatesApi = {
     apiFetch<void>(
       `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/components/${componentId}/`,
       { method: "DELETE" }
+    ),
+  /**
+   * Run the cabinet calculator for a line and replace its breakdown.
+   * `{ auto: true }` applies the default template when the line is a cabinet.
+   */
+  configure: (projectId: number, estimateId: number, itemId: number,
+              body: { config: Partial<CabinetConfig> } | { auto: true }) =>
+    apiFetch<{ configured: boolean; detail: string; item?: EstimateItem; result?: EstimatorResult }>(
+      `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/configure/`,
+      { method: "POST", body: JSON.stringify(body) }
     ),
   /** Fill a line's breakdown from a catalogue furniture's bill of materials. */
   populateFromFurniture: (projectId: number, estimateId: number, itemId: number, furnitureId: number) =>

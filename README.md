@@ -527,6 +527,48 @@ The estimate grid drops the **Category** and **Sub Cat** columns (the sheet has
 neither); it now reads Area · Item · L · B · H · Qty · Unit · Rate · Amount · GST.
 The **Blank Line** button also works now — a fresh line may have an empty room.
 
+## 13b. Cabinet calculator (parametric BOM) — provisional formulas
+
+Every estimate line (Initial, Intermediate and Final) has a **Cabinet
+Calculator** in its breakdown. Pick a template (Base / Wall / Drawer / Tall
+cabinet, Wardrobe), then change size (mm / in / ft), board size (8x4 ft, 7x4,
+6x3, 2x1 m, 1x1 m), ply thicknesses, drawer/door/shelf counts, finish, brand
+and hardware choices. The bill of materials and cost **recalculate live** (no
+save) and **Apply to line** replaces the line's breakdown; the configuration is
+stored on the line (`EstimateItem.config`) so it can be reopened and edited.
+
+- **Default configuration** — an unconfigured line starts from the template
+  matching its name (e.g. *Base Cabinet* → 2 drawers, 1 door, 1 shelf) and its
+  written L/B/H. Adding or picking an **unpriced** cabinet/drawer item applies
+  that default automatically; items with a catalogue rate keep their rate.
+- **Scaling** — 1 drawer = 2 slides (3 drawers → 6), handles per door/drawer,
+  hinges by door height (2 / 3 / 4), screws per panel, drawer, hinge and slide,
+  plywood area per thickness → sheets of the chosen board, edge band, finish
+  sheets and adhesive.
+- **Pricing** comes from the Furniture Catalogue options (Plywood by thickness
+  + brand, Hardware, Drawer Channel, Handle, Screws, Edge Band, Laminate,
+  Acrylic, Adhesive). Anything missing uses a fallback rate and is flagged
+  **PROV**.
+- Every row shows **how its quantity was worked out**, for checking against
+  the formula sheet.
+
+> **Replacing the formulas.** All rules, allowances and constants live in one
+> place: `RULES` (and the panel maths in `_panels()`) in
+> `Backend/catalog/estimator.py`. When the formula sheet is signed off with the
+> client, update that file and bump `FORMULA_VERSION`; the API, UI and stored
+> estimates need no changes. `catalog/test_estimator.py` checks behaviour
+> (scaling, defaults, validation), so only its few exact-number assertions
+> should need touching.
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `GET /api/catalog/estimator/meta/` | Templates, boards, thicknesses, options |
+| `POST /api/catalog/estimator/preview/` | Recalculate without saving |
+| `POST …/items/{id}/configure/` | Apply a config (`{config}`) or the default (`{auto: true}`) |
+
+Note: the breakdown (and so the line amount) describes **one** unit — the
+line's Qty is not multiplied in, same as the existing furniture BOM roll-up.
+
 ## 14. Still to do
 
 - Quote calculation engine (item BOM → cost → margin → rate).

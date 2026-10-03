@@ -46,6 +46,7 @@ urlpatterns = [
     path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/components/', views.EstimateItemComponentListCreateView.as_view(), name='estimate-item-component-list'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/components/<int:pk>/', views.EstimateItemComponentDetailView.as_view(), name='estimate-item-component-detail'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/populate-from-furniture/', views.EstimatePopulateFromFurnitureView.as_view(), name='estimate-item-populate'),
+    path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/configure/', views.EstimateConfigureLineView.as_view(), name='estimate-item-configure'),
 
     # ── Booking Form ──
     path('<int:project_id>/booking-form/', views.BookingFormView.as_view(), name='booking-form'),

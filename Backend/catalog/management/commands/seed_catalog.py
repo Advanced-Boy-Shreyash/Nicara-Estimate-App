@@ -33,10 +33,29 @@ MATERIALS = {
         ('8mm Plywood', 'Austin', 'Lincoln', '8x4', 60, 'sft'),
         ('18mm Plywood', 'Austin', 'Gold', '8x4', 120, 'sft'),
         ('8mm Plywood', 'Austin', 'Gold', '8x4', 80, 'sft'),
+        # Used by the cabinet calculator (drawer boxes / thin backs).
+        ('12mm Plywood', 'Austin', 'Lincoln', '8x4', 75, 'sft'),
+        ('6mm Plywood', 'Austin', 'Lincoln', '8x4', 50, 'sft'),
+        ('16mm Plywood', 'Austin', 'Gold', '8x4', 110, 'sft'),
+        ('12mm Plywood', 'Austin', 'Gold', '8x4', 95, 'sft'),
     ]),
     'Hardware': ('nos', [
         ('Hinge', 'Hettich', 'Onsys', '0 crank', 45, 'nos'),
         ('Hinge', 'Hettich', 'Sensys', '8 crank', 120, 'nos'),
+    ]),
+    # Cabinet-calculator hardware — rates are placeholders until the
+    # client-verified price sheet lands.
+    'Drawer Channel': ('nos', [
+        ('Telescopic Channel 450mm', 'Hettich', 'Quadro', '450mm', 260, 'nos'),
+    ]),
+    'Handle': ('nos', [
+        ('Profile Handle 160mm', 'Hettich', 'Edge', '160mm', 180, 'nos'),
+    ]),
+    'Screws': ('nos', [
+        ('Wood Screw 25mm', 'GKW', 'CSK', '25mm', 1, 'nos'),
+    ]),
+    'Edge Band': ('rft', [
+        ('PVC Edge Band 2mm', 'Rehau', 'Raukantex', '22mm', 12, 'rft'),
     ]),
     'Adhesive': ('litre', [
         ('Fevicol SH', 'Pidilite', 'SH', '5 kg', 550, 'nos'),

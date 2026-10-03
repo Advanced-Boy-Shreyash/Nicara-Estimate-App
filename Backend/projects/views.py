@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 
 from decimal import Decimal
 
+from catalog import estimator
 from catalog.models import Furniture as CatalogFurniture
 from items.models import Item
 from items.serializers import AddItemsToEstimateSerializer
@@ -521,6 +522,15 @@ class EstimateAddFromCatalogView(APIView):
                 # so the line arrives fully costed, not just as a flat rate.
                 if source.catalog_furniture_id:
                     populate_line_from_furniture(line, source.catalog_furniture, replace=True)
+                elif not source.default_rate and estimator.guess_template(line.item):
+                    # An unpriced cabinet/drawer item with no linked BOM: start
+                    # from the default template so it arrives with a baseline
+                    # cost. Items with a catalogue rate keep that rate — the
+                    # configurator is then opt-in from the line's breakdown.
+                    try:
+                        configure_line(line, None, replace_dims=False)
+                    except estimator.ConfigError:
+                        pass  # odd written sizes — leave it as a flat-rate line
                 created.append(line)
 
         return Response(
@@ -618,6 +628,47 @@ class EstimateItemComponentDetailView(generics.RetrieveUpdateDestroyAPIView):
         )
 
 
+
+def configure_line(line, config=None, *, replace_dims=True):
+    """
+    Run the cabinet calculator for an estimate line and replace its breakdown
+    with the result. With no `config`, the line's own name and written sizes
+    pick the template (default configuration). Raises estimator.ConfigError.
+    """
+    hint = {'name': line.item, 'length': line.length,
+            'breadth': line.breadth, 'height': line.height}
+    # Edits layer onto the stored configuration, which keeps exact mm — the
+    # line's ft-in text is rounded and must not feed back into the maths.
+    merged = {**(line.config or {}), **(config or {})}
+    result = estimator.calculate(merged, hint)
+
+    line.components.all().delete()
+    for row in result['rows']:
+        EstimateItemComponent.objects.create(
+            estimate_item=line,
+            basic_component=row['basic_component'],
+            detail=row['detail'],
+            brand=row['brand'],
+            model=row['model'],
+            qty=row['qty'],
+            unit=row['unit'],
+            price=row['price'],
+            catalog_material_id=row['catalog_material'],
+            catalog_option_id=row['catalog_option'],
+        )
+
+    cfg = result['config']
+    line.config = cfg
+    fields = ['config']
+    if replace_dims:
+        line.length = estimator.format_ft_in(cfg['length'])
+        line.breadth = estimator.format_ft_in(cfg['depth'])
+        line.height = estimator.format_ft_in(cfg['height'])
+        fields += ['length', 'breadth', 'height']
+    line.save(update_fields=fields)
+    line.recompute_amount()
+    return result
+
 class EstimatePopulateFromFurnitureView(APIView):
     """
     POST …/estimates/{estimate_id}/items/{item_id}/populate-from-furniture/
@@ -651,6 +702,49 @@ class EstimatePopulateFromFurnitureView(APIView):
             'item': EstimateItemSerializer(line).data,
         }, status=status.HTTP_201_CREATED)
 
+
+
+class EstimateConfigureLineView(APIView):
+    """
+    POST …/estimates/{estimate_id}/items/{item_id}/configure/
+    Body: { "config": {...} }  — apply a cabinet configuration, or
+          { "auto": true }      — default template from the line's name/sizes;
+                                  a no-op (configured: false) for non-cabinets.
+
+    Replaces the line's breakdown with the calculator's bill of materials and
+    stores the configuration on the line so it can be re-opened and edited.
+    """
+    def post(self, request, project_id, estimate_id, item_id):
+        line = _get_line({'project_id': project_id, 'estimate_id': estimate_id, 'item_id': item_id})
+        if line.estimate.status == 'approved':
+            return Response({'detail': 'This estimate is approved and locked.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        if request.data.get('auto'):
+            if not estimator.guess_template(line.item):
+                return Response({'configured': False,
+                                 'detail': 'Not a cabinet item — nothing to configure.'})
+            config = None
+        else:
+            config = request.data.get('config')
+            if not isinstance(config, dict):
+                return Response({'detail': 'Send a "config" object or "auto": true.'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                result = configure_line(line, config)
+        except estimator.ConfigError as exc:
+            return Response({'detail': 'Invalid configuration.', 'errors': {k: [v] for k, v in exc.errors.items()}},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        line.refresh_from_db()
+        return Response({
+            'configured': True,
+            'detail': f'{len(result["rows"])} component(s) calculated.',
+            'item': EstimateItemSerializer(line).data,
+            'result': result,
+        })
 
 # ── Downloads ──────────────────────────────────────────────
 
