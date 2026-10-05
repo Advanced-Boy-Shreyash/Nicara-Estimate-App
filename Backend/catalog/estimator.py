@@ -1,10 +1,16 @@
 """
 NICARA — Cabinet calculation engine (parametric bill of materials)
 
-Turns a cabinet *configuration* — template, size, board thicknesses and
-component counts — into priced bill-of-materials rows that drop straight into
-an estimate line's breakdown (Basic Component | Detail | Brand | Model | Qty |
-Unit | Price | Amount).
+Turns a cabinet *configuration* — template, size, quantity, board thicknesses,
+component counts and finish — into priced bill-of-materials rows that drop
+straight into an estimate line's breakdown (Basic Component | Detail | Brand |
+Model | Qty | Unit | Price | Amount).
+
+Pipeline
+    1. materials   exact quantities from the geometry, priced from the
+                   catalogue's base components (supplier price sheet)
+    2. waste       +10% on the assembly for cutting waste / sheet off-cuts
+    3. margin      +35% (the supplier sheet's margin), editable per line
 
     ┌────────────────────────────────────────────────────────────────────┐
     │  PROVISIONAL FORMULAS                                               │
@@ -15,16 +21,16 @@ Unit | Price | Amount).
     │  nothing else in the system needs to change.                        │
     └────────────────────────────────────────────────────────────────────┘
 
-Every output row carries a plain-English `basis` ("3 drawers × 2 slides") so
-each number can be checked line-by-line against the Excel sheet.
-
-All geometry is in millimetres internally.
+Prices are NOT here — they come from the Furniture Catalogue, aligned with the
+supplier sheet by `import_supplier_specs` (see catalog/supplier_specs.py).
+Every output row carries a plain-English `basis` so each number can be checked
+line-by-line against the formula sheet. All geometry is in millimetres.
 """
 import math
 import re
 from decimal import Decimal, ROUND_HALF_UP
 
-FORMULA_VERSION = 'provisional-2026-10'
+FORMULA_VERSION = 'provisional-2026-10b'
 
 MM2_PER_SFT = 92903.04          # 1 sq ft in mm²
 MM_PER_FT = 304.8
@@ -56,27 +62,34 @@ RULES = {
         ('crockery', 'base_cabinet'), ('shoe', 'base_cabinet'),
     ],
 
-    # ── Boards (what plywood is bought in): name → (length mm, width mm)
+    # ── Procurement boards: name → (length mm, width mm). 8x4 = 32 sft, 4x4 = 16 sft.
     'boards': {
         '8x4 ft': (2440, 1220),
+        '4x4 ft': (1220, 1220),
         '7x4 ft': (2135, 1220),
         '6x3 ft': (1830, 915),
         '2x1 m': (2000, 1000),
         '1x1 m': (1000, 1000),
     },
     'thicknesses': {
-        'carcass': [18, 16, 12],    # sides, top, bottom, shelves
-        'shutter': [18, 16],        # doors and drawer fronts
-        'back': [8, 6],             # back panel and drawer bottoms
-        'drawer_box': [12, 16, 18], # drawer box sides / front / back
+        'carcass': [18, 16, 12, 10],    # sides, top, bottom, shelves
+        'shutter': [18, 16, 12],        # doors and drawer fronts
+        'back': [8, 6, 10],             # back panel and drawer bottoms
+        'drawer_box': [12, 10, 16, 18], # drawer box sides / front / back
     },
-    'finishes': ['laminate', 'acrylic', 'none'],
+    'finishes': {
+        'laminate': 'Laminate', 'acrylic': 'Acrylic', 'veneer': 'Veneer',
+        'polish': 'Polish', 'none': 'No finish',
+    },
 
     # ── Defaults for a fresh configuration
     'defaults': {
-        'carcass_thickness': 18, 'shutter_thickness': 18, 'back_thickness': 8,
+        'quantity': 1,
+        'carcass_thickness': 16, 'shutter_thickness': 16, 'back_thickness': 8,
         'drawer_box_thickness': 12, 'board': '8x4 ft', 'finish': 'laminate',
-        'wastage_pct': 10, 'ply_brand': 'Austin Lincoln',
+        'ply_brand': 'Austin Lincoln',
+        'wastage_pct': 10,      # cutting waste on the final assembly
+        'margin_pct': 35,       # as applied throughout the supplier sheet
     },
 
     # ── Geometry allowances (mm)
@@ -89,6 +102,7 @@ RULES = {
 
     # ── Hardware scaling
     'slides_per_drawer': 2,
+    'slides_per_channel_set': 2,    # the sheet prices channels per set = one pair
     'handles_per_door': 1,
     'handles_per_drawer': 1,
     'hinges_by_door_height': [(900, 2), (1500, 3), (10_000, 4)],  # ≤ height → hinges
@@ -96,23 +110,33 @@ RULES = {
     'screws_per_drawer': 16,
     'screws_per_hinge': 4,
     'screws_per_slide': 6,
+    'screws_per_box': 100,
     'edge_band_wastage_pct': 5,
 
     # ── Finish
-    'finish_sheet_sft': 32,          # laminate / acrylic sheet = 8x4
-    'finish_wastage_pct': 10,
-    'adhesive_sft_per_pack': 60,     # 1 pack covers this much finish area
+    'finish_sheet_sft': 32,          # laminate / acrylic / veneer sheet = 8x4
+    'adhesive_kg_per_sheet': 1,      # bonding adhesive per sheet of finish area
 
-    # ── Validation limits (mm / counts)
+    # ── Validation limits
     'limits': {'length': (150, 6000), 'depth': (100, 1200), 'height': (150, 3000),
-               'count': (0, 20)},
+               'count': (0, 20), 'quantity': (1, 500)},
 
-    # ── Fallback rates when the catalogue has no matching option
+    # ── Fallback rates when the catalogue has no matching option (flagged PROV)
     'fallback_rates': {
-        'plywood_sft': 90, 'Drawer Channel': 260, 'Handle': 180, 'Screws': 1,
-        'Edge Band': 12, 'Hinge': 45, 'Laminate': 1450, 'Acrylic': 3200, 'Adhesive': 550,
+        'plywood_sft': {6: 70, 8: 80, 10: 88, 12: 95, 16: 110, 18: 120},
+        'Hinge': 260, 'Drawer Channel': 2600, 'Handle': 250, 'Screws': 750,
+        'Edge Band': 60, 'Laminate': 3000, 'Acrylic': 4500, 'Veneer': 6000,
+        'Adhesive': 290, 'Polish': 220,
+    },
+    'fallback_units': {
+        'Hinge': 'set', 'Drawer Channel': 'set', 'Handle': 'nos', 'Screws': 'box',
+        'Edge Band': 'm', 'Laminate': 'sheet', 'Acrylic': 'sheet', 'Veneer': 'sheet',
+        'Adhesive': 'kg', 'Polish': 'sft',
     },
 }
+
+# Row keys a user may override the quantity of (intermediate / final estimate).
+OVERRIDABLE = {'hinge', 'channel', 'handle', 'screws', 'edge_band', 'finish', 'adhesive'}
 
 
 class ConfigError(ValueError):
@@ -180,6 +204,17 @@ def _hinges_for(door_height):
     return RULES['hinges_by_door_height'][-1][1]
 
 
+def _board_sft(board):
+    length, width = RULES['boards'][board]
+    return length * width / MM2_PER_SFT
+
+
+def _size_sft(size):
+    """'8x4' → 32 (sheet area in sft); unknown → the standard 32."""
+    m = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*', size or '')
+    return float(m.group(1)) * float(m.group(2)) if m else RULES['finish_sheet_sft']
+
+
 # ════════════════════════════════════════════════════════════════
 # Configuration
 # ════════════════════════════════════════════════════════════════
@@ -187,9 +222,9 @@ def _hinges_for(door_height):
 def normalize(config=None, hint=None):
     """
     Fill a (possibly partial) configuration from its template and the global
-    defaults, then validate. `hint` = {name, length, breadth, height} from an
-    estimate line lets an unconfigured line start from a sensible template and
-    its own written sizes.
+    defaults, then validate. `hint` = {name, length, breadth, height, qty} from
+    an estimate line lets an unconfigured line start from a sensible template,
+    its own written sizes and its quantity.
     """
     config = dict(config or {})
     hint = hint or {}
@@ -203,37 +238,47 @@ def normalize(config=None, hint=None):
     for key in ('length', 'depth', 'height', 'drawers', 'doors', 'shelves'):
         out[key] = template[key]
     out.update(RULES['defaults'])
+    out['overrides'] = {}
 
-    # Sizes written on the line override the template (only when unconfigured).
+    # Sizes / quantity written on the line seed an unconfigured calculation.
     for cfg_key, hint_key in (('length', 'length'), ('depth', 'breadth'), ('height', 'height')):
         mm = parse_dimension(hint.get(hint_key))
         if mm and cfg_key not in config:
             out[cfg_key] = round(mm)
+    if 'quantity' not in config:
+        try:
+            q = int(float(hint.get('qty') or 0))
+            if q >= 1:
+                out['quantity'] = q
+        except (TypeError, ValueError):
+            pass
 
     for key, value in config.items():
         if value is not None and value != '':
             out[key] = value
 
     errors = {}
-    lo_hi = RULES['limits']
-    for key in ('length', 'depth', 'height'):
+    limits = RULES['limits']
+
+    def number(key, cast, lo, hi, msg):
         try:
-            out[key] = float(out[key])
+            out[key] = cast(out[key])
         except (TypeError, ValueError):
-            errors[key] = 'Must be a number (mm).'
-            continue
-        lo, hi = lo_hi[key]
-        if not lo <= out[key] <= hi:
-            errors[key] = f'Must be between {lo} and {hi} mm.'
-    for key in ('drawers', 'doors', 'shelves'):
-        try:
-            out[key] = int(out[key])
-        except (TypeError, ValueError):
-            errors[key] = 'Must be a whole number.'
-            continue
-        lo, hi = lo_hi['count']
+            errors[key] = msg
+            return
         if not lo <= out[key] <= hi:
             errors[key] = f'Must be between {lo} and {hi}.'
+
+    for key in ('length', 'depth', 'height'):
+        number(key, float, *limits[key], 'Must be a number (mm).')
+        if key in errors and errors[key].startswith('Must be between'):
+            errors[key] = errors[key][:-1] + ' mm.'
+    for key in ('drawers', 'doors', 'shelves'):
+        number(key, int, *limits['count'], 'Must be a whole number.')
+    number('quantity', lambda v: int(float(v)), *limits['quantity'], 'Must be a whole number.')
+    number('wastage_pct', float, 0, 50, 'Must be a number.')
+    number('margin_pct', float, 0, 100, 'Must be a number.')
+
     for key, group in (('carcass_thickness', 'carcass'), ('shutter_thickness', 'shutter'),
                        ('back_thickness', 'back'), ('drawer_box_thickness', 'drawer_box')):
         try:
@@ -246,13 +291,25 @@ def normalize(config=None, hint=None):
     if out['board'] not in RULES['boards']:
         errors['board'] = f'Choose one of {list(RULES["boards"])}.'
     if out['finish'] not in RULES['finishes']:
-        errors['finish'] = f'Choose one of {RULES["finishes"]}.'
-    try:
-        out['wastage_pct'] = float(out['wastage_pct'])
-        if not 0 <= out['wastage_pct'] <= 50:
-            errors['wastage_pct'] = 'Must be between 0 and 50.'
-    except (TypeError, ValueError):
-        errors['wastage_pct'] = 'Must be a number.'
+        errors['finish'] = f'Choose one of {list(RULES["finishes"])}.'
+
+    overrides = {}
+    for key, value in (out.get('overrides') or {}).items():
+        if value is None or value == '':
+            continue
+        if key not in OVERRIDABLE:
+            errors['overrides'] = f'"{key}" cannot be overridden.'
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            errors['overrides'] = f'Override for {key} must be a number.'
+            continue
+        if value < 0:
+            errors['overrides'] = f'Override for {key} cannot be negative.'
+            continue
+        overrides[key] = value
+    out['overrides'] = overrides
 
     if not errors:
         drawer_zone = out['drawers'] * RULES['drawer_front_height']
@@ -272,7 +329,7 @@ def normalize(config=None, hint=None):
 # ════════════════════════════════════════════════════════════════
 
 def _panels(c):
-    """Every cut panel as (group, thickness, count, length, width, label)."""
+    """Every cut panel of ONE unit as (group, thickness, count, length, width, label)."""
     L, D, H = c['length'], c['depth'], c['height']
     t, s, b, tb = (c['carcass_thickness'], c['shutter_thickness'],
                    c['back_thickness'], c['drawer_box_thickness'])
@@ -304,37 +361,35 @@ def _panels(c):
 
 
 def quantities(c):
-    """Raw material requirements before pricing."""
+    """Raw material requirements for `quantity` units, before pricing."""
+    n = c['quantity']
     panels, door_zone = _panels(c)
-    board_l, board_w = RULES['boards'][c['board']]
-    board_sft = board_l * board_w / MM2_PER_SFT
-    waste = 1 + c['wastage_pct'] / 100
+    board_sft = _board_sft(c['board'])
 
     by_thickness = {}
     for group, thick, count, a, b, label in panels:
         entry = by_thickness.setdefault(thick, {'mm2': 0.0, 'parts': []})
-        entry['mm2'] += count * a * b
+        entry['mm2'] += count * a * b * n
         entry['parts'].append(f'{count}× {label}')
     plywood = {}
     for thick, entry in sorted(by_thickness.items(), reverse=True):
         sft = entry['mm2'] / MM2_PER_SFT
         plywood[thick] = {
             'net_sft': sft,
-            'gross_sft': sft * waste,
-            'sheets': math.ceil(sft * waste / board_sft) if sft else 0,
+            # Whole sheets to procure; the off-cut loss is costed by the waste row.
+            'sheets': math.ceil(sft / board_sft - 1e-9) if sft else 0,
             'parts': entry['parts'],
         }
 
-    door_h = door_zone if c['doors'] else 0
-    hinges_each = _hinges_for(door_h) if c['doors'] else 0
-    hinges = c['doors'] * hinges_each
-    slides = c['drawers'] * RULES['slides_per_drawer']
-    handles = c['doors'] * RULES['handles_per_door'] + c['drawers'] * RULES['handles_per_drawer']
+    hinges_each = _hinges_for(door_zone) if c['doors'] else 0
+    hinges = c['doors'] * hinges_each * n
+    slides = c['drawers'] * RULES['slides_per_drawer'] * n
+    handles = (c['doors'] * RULES['handles_per_door'] + c['drawers'] * RULES['handles_per_drawer']) * n
     carcass_panels = 4 + c['shelves']
     screws = (carcass_panels * RULES['screws_per_carcass_panel']
               + c['drawers'] * RULES['screws_per_drawer']
-              + hinges * RULES['screws_per_hinge']
-              + slides * RULES['screws_per_slide'])
+              + c['doors'] * hinges_each * RULES['screws_per_hinge']
+              + c['drawers'] * RULES['slides_per_drawer'] * RULES['screws_per_slide']) * n
 
     L, H = c['length'], c['height']
     inner_w = L - 2 * c['carcass_thickness']
@@ -344,139 +399,217 @@ def quantities(c):
         shutter_edges += c['doors'] * 2 * (L / c['doors'] + door_zone)
     if c['drawers']:
         shutter_edges += c['drawers'] * 2 * (L + RULES['drawer_front_height'])
-    edge_rft = (carcass_edges + shutter_edges) / MM_PER_FT * (1 + RULES['edge_band_wastage_pct'] / 100)
+    edge_mm = (carcass_edges + shutter_edges) * n * (1 + RULES['edge_band_wastage_pct'] / 100)
 
-    shutter_area = sum(n * a * b for g, _, n, a, b, _ in panels if g == 'Shutter') / MM2_PER_SFT
-    finish_sheets = 0
-    if c['finish'] != 'none' and shutter_area:
-        finish_sheets = math.ceil(shutter_area * (1 + RULES['finish_wastage_pct'] / 100)
-                                  / RULES['finish_sheet_sft'])
-    adhesive = math.ceil(shutter_area / RULES['adhesive_sft_per_pack']) if finish_sheets else 0
+    shutter_sft = sum(cnt * a * b for g, _, cnt, a, b, _ in panels if g == 'Shutter') * n / MM2_PER_SFT
 
     return {
         'board_sft': board_sft, 'plywood': plywood,
-        'door_height': door_h, 'hinges_per_door': hinges_each, 'hinges': hinges,
-        'slides': slides, 'handles': handles, 'screws': screws,
-        'carcass_panels': carcass_panels, 'edge_band_rft': edge_rft,
-        'shutter_sft': shutter_area, 'finish_sheets': finish_sheets, 'adhesive_packs': adhesive,
+        'door_height': door_zone if c['doors'] else 0, 'hinges_per_door': hinges_each,
+        'hinges': hinges, 'slides': slides, 'handles': handles, 'screws': screws,
+        'carcass_panels': carcass_panels, 'edge_mm': edge_mm, 'shutter_sft': shutter_sft,
     }
 
 
 # ════════════════════════════════════════════════════════════════
-# Pricing — reads the Furniture Catalogue
+# Pricing — reads the Furniture Catalogue (supplier sheet base components)
 # ════════════════════════════════════════════════════════════════
 
-def _option(material_name, detail_startswith=None, brand_model=None, option_id=None):
-    """Best catalogue option: an explicit id, else the preferred brand, else the cheapest."""
+def _option(material_name, *, detail=None, detail_startswith=None, brand_model=None,
+            option_id=None, units=None):
+    """
+    Best catalogue option: an explicit id, else the preferred brand, else the
+    cheapest supplier-sheet row, else the cheapest active row.
+    """
     from catalog.models import Material, MaterialOption
 
     if option_id:
-        opt = MaterialOption.objects.select_related('material').filter(pk=option_id).first()
-        if opt:
+        opt = MaterialOption.objects.select_related('material').filter(pk=option_id, is_active=True).first()
+        if opt and (not units or opt.unit.lower() in units):
             return opt.material, opt
     material = Material.objects.filter(name__iexact=material_name).first()
     if not material:
         return None, None
     qs = material.options.filter(is_active=True)
+    if detail:
+        qs = qs.filter(detail__iexact=detail)
     if detail_startswith:
         qs = qs.filter(detail__istartswith=detail_startswith)
+    candidates = [o for o in qs.order_by('price') if not units or o.unit.lower() in units]
     if brand_model:
-        preferred = [o for o in qs if f'{o.brand} {o.model_no}'.strip().lower() == brand_model.lower()]
+        preferred = [o for o in candidates
+                     if f'{o.brand} {o.model_no}'.strip().lower() == brand_model.lower()]
         if preferred:
             return material, preferred[0]
-    return material, qs.order_by('price').first()
+    supplier = [o for o in candidates if o.source == MaterialOption.Source.SUPPLIER_SHEET]
+    pick = (supplier or candidates or [None])[0]
+    return material, pick
 
 
-def _row(component, detail, material, option, qty, unit, fallback_key, basis):
-    price = option.price if option else Decimal(str(RULES['fallback_rates'][fallback_key]))
+def _row(key, component, detail, material, option, qty, unit, price, basis, source=None):
     qty_d = _d(qty)
+    price_d = _d(price)
     return {
+        'key': key,
         'basic_component': component,
         'detail': detail,
         'brand': option.brand if option else '',
         'model': option.model_no if option else '',
         'qty': qty_d,
         'unit': unit,
-        'price': _d(price),
-        'amount': _d(qty_d * price),
+        'price': price_d,
+        'amount': _d(qty_d * price_d),
         'catalog_material': material.pk if material else None,
         'catalog_option': option.pk if option else None,
-        'source': 'catalogue' if option else 'provisional',
+        'source': source or ('catalogue' if option else 'provisional'),
         'basis': basis,
+        'overridden': False,
     }
+
+
+def _fallback(name):
+    return Decimal(str(RULES['fallback_rates'][name])), RULES['fallback_units'][name]
 
 
 def calculate(config=None, hint=None):
     """
-    Normalise → quantities → priced rows. Returns
-    {config, rows, total, quantities, warnings, formula_version}.
+    Normalise → quantities → priced material rows → waste → margin. Returns
+    {config, rows, subtotal, waste, margin, total, per_unit, quantities,
+     warnings, formula_version}.
     """
     c = normalize(config, hint)
     q = quantities(c)
-    rows = []
+    n = c['quantity']
+    units_note = f' for {n} units' if n > 1 else ''
     sel = c.get('options') or {}
+    rows = []
 
+    # ── Plywood: exact area, priced per sft (supplier sheet price ÷ sheet area)
     for thick, p in q['plywood'].items():
-        material, option = _option('Plywood', f'{thick}mm', c['ply_brand'])
+        material, option = _option('Plywood', detail=f'{thick}mm Plywood', brand_model=c['ply_brand'])
+        if option:
+            per_sft = option.price if option.unit.lower() == 'sft' else option.price / Decimal(str(_size_sft(option.size)))
+        else:
+            per_sft = Decimal(str(RULES['fallback_rates']['plywood_sft'].get(thick, 100)))
         rows.append(_row(
-            'Plywood', f'{thick}mm BWP Plywood', material, option, p['gross_sft'], 'sft', 'plywood_sft',
-            f"{', '.join(p['parts'])} = {p['net_sft']:.2f} sft + {c['wastage_pct']:g}% wastage "
-            f"(≈ {p['sheets']} sheet(s) of {c['board']})",
+            f'ply_{thick}', 'Plywood', f'{thick}mm BWP Plywood', material, option,
+            p['net_sft'], 'sft', per_sft,
+            f"{', '.join(p['parts'])}{units_note} = {p['net_sft']:.2f} sft exact "
+            f"→ procure {p['sheets']} sheet(s) of {c['board']} ({q['board_sft']:.0f} sft)",
         ))
 
+    # ── Hardware
     if q['hinges']:
-        material, option = _option('Hardware', 'Hinge', option_id=sel.get('hinge'))
-        rows.append(_row('Hinge', 'Soft-close hinge', material, option, q['hinges'], 'nos', 'Hinge',
-                         f"{c['doors']} door(s) × {q['hinges_per_door']} hinges "
-                         f"(door height {q['door_height']:.0f}mm)"))
+        material, option = _option('Hardware', detail_startswith='Hinge', option_id=sel.get('hinge'))
+        price, unit = (option.price, option.unit) if option else _fallback('Hinge')
+        rows.append(_row('hinge', 'Hinge', 'Soft-close box hinge', material, option, q['hinges'], unit, price,
+                         f"{c['doors']} door(s) × {q['hinges_per_door']} hinges"
+                         f" (door height {q['door_height']:.0f}mm){units_note}"))
     if q['slides']:
         material, option = _option('Drawer Channel', option_id=sel.get('channel'))
-        rows.append(_row('Drawer Channel', 'Telescopic slide', material, option, q['slides'], 'nos',
-                         'Drawer Channel',
-                         f"{c['drawers']} drawer(s) × {RULES['slides_per_drawer']} slides"))
+        price, unit = (option.price, option.unit) if option else _fallback('Drawer Channel')
+        per_set = RULES['slides_per_channel_set'] if unit.lower() in ('set', 'pair') else 1
+        rows.append(_row('channel', 'Drawer Channel', 'Telescopic channel', material, option,
+                         q['slides'] / per_set, unit, price,
+                         f"{c['drawers']} drawer(s) × {RULES['slides_per_drawer']} slides{units_note} "
+                         f"= {q['slides']} slides" + (f" = {q['slides'] // per_set} set(s) of {per_set}" if per_set > 1 else '')))
     if q['handles']:
         material, option = _option('Handle', option_id=sel.get('handle'))
-        rows.append(_row('Handle', 'Cabinet handle', material, option, q['handles'], 'nos', 'Handle',
-                         f"{c['doors']} door(s) + {c['drawers']} drawer(s), 1 each"))
+        price, unit = (option.price, option.unit) if option else _fallback('Handle')
+        rows.append(_row('handle', 'Handle', option.detail if option else 'Cabinet handle', material, option,
+                         q['handles'], unit, price,
+                         f"{c['doors']} door(s) + {c['drawers']} drawer(s), 1 each{units_note}"))
     material, option = _option('Screws')
-    rows.append(_row('Screws', 'Fastening screws', material, option, q['screws'], 'nos', 'Screws',
-                     f"{q['carcass_panels']} carcass panels × {RULES['screws_per_carcass_panel']}"
+    price, unit = (option.price, option.unit) if option else _fallback('Screws')
+    per_box = RULES['screws_per_box'] if unit.lower() == 'box' else 1
+    rows.append(_row('screws', 'Screws', 'Nails and screws', material, option, q['screws'] / per_box, unit, price,
+                     f"({q['carcass_panels']} panels × {RULES['screws_per_carcass_panel']}"
                      f" + {c['drawers']} drawers × {RULES['screws_per_drawer']}"
-                     f" + {q['hinges']} hinges × {RULES['screws_per_hinge']}"
-                     f" + {q['slides']} slides × {RULES['screws_per_slide']}"))
+                     f" + hinges × {RULES['screws_per_hinge']} + slides × {RULES['screws_per_slide']}){units_note}"
+                     f" = {q['screws']} screws" + (f" ÷ {per_box} per box" if per_box > 1 else '')))
     material, option = _option('Edge Band')
-    rows.append(_row('Edge Band', '2mm PVC edge band', material, option, q['edge_band_rft'], 'rft',
-                     'Edge Band',
-                     f"exposed carcass + shutter edges + {RULES['edge_band_wastage_pct']}% wastage"))
-    if q['finish_sheets']:
-        finish_name = 'Laminate' if c['finish'] == 'laminate' else 'Acrylic'
-        material, option = _option(finish_name, option_id=sel.get('finish'))
-        rows.append(_row(finish_name, f'{finish_name} on shutters', material, option,
-                         q['finish_sheets'], 'sheet', finish_name,
-                         f"{q['shutter_sft']:.2f} sft shutters + {RULES['finish_wastage_pct']}% "
-                         f"÷ {RULES['finish_sheet_sft']} sft/sheet"))
-        material, option = _option('Adhesive')
-        rows.append(_row('Adhesive', 'Finish adhesive', material, option, q['adhesive_packs'], 'nos',
-                         'Adhesive',
-                         f"1 pack per {RULES['adhesive_sft_per_pack']} sft of finish"))
+    price, unit = (option.price, option.unit) if option else _fallback('Edge Band')
+    edge_qty = q['edge_mm'] / (1000 if unit.lower() in ('m', 'mtr', 'metre') else MM_PER_FT)
+    rows.append(_row('edge_band', 'Edge Band', 'PVC edge band 22×2mm', material, option, edge_qty, unit, price,
+                     f"exposed carcass + shutter edges{units_note} + {RULES['edge_band_wastage_pct']}% wastage"))
 
+    # ── Finish on the shutters (exterior face)
+    finish = c['finish']
+    if finish != 'none' and q['shutter_sft']:
+        name = RULES['finishes'][finish]
+        area = q['shutter_sft']
+        if finish == 'polish':
+            material, option = _option('Polish', option_id=sel.get('finish'), units={'sft'})
+            price, unit = (option.price, option.unit) if option else _fallback('Polish')
+            rows.append(_row('finish', 'Polish', option.detail if option else 'Melamine / PU polish',
+                             material, option, area, 'sft', price,
+                             f"{area:.2f} sft shutter faces{units_note}"
+                             + ('' if option else ' — per-sft polish rate not in the supplier sheet')))
+        else:
+            material, option = _option(name, option_id=sel.get('finish'))
+            price, unit = (option.price, option.unit) if option else _fallback(name)
+            if unit.lower() == 'sft':
+                qty, basis = area, f"{area:.2f} sft shutter faces{units_note}"
+            else:
+                sheet = _size_sft(option.size) if option else RULES['finish_sheet_sft']
+                qty = area / sheet
+                basis = (f"{area:.2f} sft shutters{units_note} ÷ {sheet:.0f} sft/sheet "
+                         f"= {qty:.2f} sheet (procure {math.ceil(qty - 1e-9)})")
+            rows.append(_row('finish', name, f'{name} on shutters', material, option, qty, unit, price, basis))
+            material, option = _option('Adhesive')
+            price, unit = (option.price, option.unit) if option else _fallback('Adhesive')
+            kg = area / RULES['finish_sheet_sft'] * RULES['adhesive_kg_per_sheet']
+            rows.append(_row('adhesive', 'Adhesive', 'Bonding adhesive', material, option, kg, unit, price,
+                             f"{RULES['adhesive_kg_per_sheet']} kg per {RULES['finish_sheet_sft']} sft of finish"))
+
+    # ── User overrides of component quantities (intermediate / final estimate)
+    for row in rows:
+        if row['key'] in c['overrides']:
+            row['calculated_qty'] = row['qty']
+            row['qty'] = _d(c['overrides'][row['key']])
+            row['amount'] = _d(row['qty'] * row['price'])
+            row['overridden'] = True
+            row['basis'] = f"quantity overridden (calculated {row['calculated_qty']}) — " + row['basis']
+
+    subtotal = sum((r['amount'] for r in rows), Decimal('0'))
+
+    # ── Cutting waste on the final assembly
+    waste = _d(subtotal * Decimal(str(c['wastage_pct'])) / 100)
+    if waste:
+        rows.append(_row('waste', 'Cutting Waste', f"{c['wastage_pct']:g}% on the assembly", None, None,
+                         1, 'lot', waste,
+                         f"{c['wastage_pct']:g}% of ₹{subtotal:,.2f} materials — cutting waste and "
+                         f"off-cuts from standard sheets", source='calculated'))
+
+    # ── Margin (the supplier sheet applies 35% to every procurement line)
+    margin = _d((subtotal + waste) * Decimal(str(c['margin_pct'])) / 100)
+    if margin:
+        rows.append(_row('margin', 'Margin', f"{c['margin_pct']:g}% margin", None, None,
+                         1, 'lot', margin,
+                         f"{c['margin_pct']:g}% of ₹{subtotal + waste:,.2f} (materials + waste)",
+                         source='calculated'))
+
+    total = subtotal + waste + margin
     warnings = []
     provisional = sorted({r['basic_component'] for r in rows if r['source'] == 'provisional'})
     if provisional:
-        warnings.append(f"No catalogue price for {', '.join(provisional)} — provisional rate used.")
+        warnings.append(f"No supplier-sheet price for {', '.join(provisional)} — provisional rate used.")
     if c['doors'] == 0 and c['drawers'] == 0:
         warnings.append('Open cabinet — no doors or drawers.')
+    if c['overrides']:
+        warnings.append(f"{len(c['overrides'])} quantity override(s) in place — they don't follow size or count changes.")
 
-    total = sum((r['amount'] for r in rows), Decimal('0'))
     serial_q = {
-        'plywood': {f'{k}mm': {'net_sft': round(v['net_sft'], 2), 'gross_sft': round(v['gross_sft'], 2),
-                               'sheets': v['sheets']} for k, v in q['plywood'].items()},
+        'plywood': {f'{k}mm': {'net_sft': round(v['net_sft'], 2), 'sheets': v['sheets']}
+                    for k, v in q['plywood'].items()},
         'hinges': q['hinges'], 'slides': q['slides'], 'handles': q['handles'],
-        'screws': q['screws'], 'edge_band_rft': round(q['edge_band_rft'], 2),
-        'finish_sheets': q['finish_sheets'], 'board': c['board'],
+        'screws': q['screws'], 'edge_band_m': round(q['edge_mm'] / 1000, 2),
+        'shutter_sft': round(q['shutter_sft'], 2), 'board': c['board'],
+        'board_sft': round(q['board_sft'], 1), 'quantity': n,
     }
     return {
-        'config': c, 'rows': rows, 'total': _d(total), 'quantities': serial_q,
+        'config': c, 'rows': rows, 'subtotal': _d(subtotal), 'waste': waste, 'margin': margin,
+        'total': _d(total), 'per_unit': _d(total / n), 'quantities': serial_q,
         'warnings': warnings, 'formula_version': FORMULA_VERSION,
     }
 
@@ -485,24 +618,32 @@ def meta():
     """Choice lists for the configurator UI."""
     from catalog.models import MaterialOption
 
-    def options_for(material):
-        return [{'id': o.id, 'label': f'{o.brand} {o.model_no} — {o.detail} (₹{o.price})'.strip()}
-                for o in MaterialOption.objects.filter(material__name=material, is_active=True)]
+    def options_for(material, **filters):
+        qs = MaterialOption.objects.filter(material__name=material, is_active=True, **filters)
+        return [{'id': o.id, 'unit': o.unit,
+                 'label': ' '.join(x for x in [o.brand, o.model_no, '—', o.detail, o.size] if x)
+                          + f' (₹{o.price:,.0f}/{o.unit})',
+                 'supplier_sheet': o.source == MaterialOption.Source.SUPPLIER_SHEET}
+                for o in qs.order_by('-source', 'price')]
 
     ply_brands = sorted({f'{o.brand} {o.model_no}'.strip()
                          for o in MaterialOption.objects.filter(material__name='Plywood', is_active=True)})
-    hinges = [o for o in options_for('Hardware') if 'Hinge' in o['label']]
     return {
         'formula_version': FORMULA_VERSION,
         'templates': [{'key': k, **v} for k, v in RULES['templates'].items()],
         'thicknesses': RULES['thicknesses'],
-        'boards': list(RULES['boards']),
-        'finishes': RULES['finishes'],
+        'boards': [{'key': k, 'sft': round(_board_sft(k), 1)} for k in RULES['boards']],
+        'finishes': [{'key': k, 'label': v} for k, v in RULES['finishes'].items()],
         'defaults': RULES['defaults'],
+        'overridable': sorted(OVERRIDABLE),
         'ply_brands': ply_brands,
-        'hinges': hinges,
+        'hinges': options_for('Hardware', detail__istartswith='Hinge'),
         'channels': options_for('Drawer Channel'),
         'handles': options_for('Handle'),
-        'laminates': options_for('Laminate'),
-        'acrylics': options_for('Acrylic'),
+        'finish_options': {
+            'laminate': options_for('Laminate'),
+            'acrylic': options_for('Acrylic'),
+            'veneer': options_for('Veneer'),
+            'polish': options_for('Polish', unit='sft'),
+        },
     }

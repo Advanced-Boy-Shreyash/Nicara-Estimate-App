@@ -632,7 +632,7 @@ export const estimatorApi = {
   meta: () => apiFetch<EstimatorMeta>("/catalog/estimator/meta/"),
   /** Recalculate without saving — called live as the configurator changes. */
   preview: (config: Partial<CabinetConfig>,
-            hint?: { name?: string; length?: string; breadth?: string; height?: string }) =>
+            hint?: { name?: string; length?: string; breadth?: string; height?: string; qty?: string }) =>
     apiFetch<EstimatorResult>("/catalog/estimator/preview/", {
       method: "POST", body: JSON.stringify({ config, hint }),
     }),

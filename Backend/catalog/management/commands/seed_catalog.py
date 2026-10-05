@@ -33,29 +33,10 @@ MATERIALS = {
         ('8mm Plywood', 'Austin', 'Lincoln', '8x4', 60, 'sft'),
         ('18mm Plywood', 'Austin', 'Gold', '8x4', 120, 'sft'),
         ('8mm Plywood', 'Austin', 'Gold', '8x4', 80, 'sft'),
-        # Used by the cabinet calculator (drawer boxes / thin backs).
-        ('12mm Plywood', 'Austin', 'Lincoln', '8x4', 75, 'sft'),
-        ('6mm Plywood', 'Austin', 'Lincoln', '8x4', 50, 'sft'),
-        ('16mm Plywood', 'Austin', 'Gold', '8x4', 110, 'sft'),
-        ('12mm Plywood', 'Austin', 'Gold', '8x4', 95, 'sft'),
     ]),
     'Hardware': ('nos', [
         ('Hinge', 'Hettich', 'Onsys', '0 crank', 45, 'nos'),
         ('Hinge', 'Hettich', 'Sensys', '8 crank', 120, 'nos'),
-    ]),
-    # Cabinet-calculator hardware — rates are placeholders until the
-    # client-verified price sheet lands.
-    'Drawer Channel': ('nos', [
-        ('Telescopic Channel 450mm', 'Hettich', 'Quadro', '450mm', 260, 'nos'),
-    ]),
-    'Handle': ('nos', [
-        ('Profile Handle 160mm', 'Hettich', 'Edge', '160mm', 180, 'nos'),
-    ]),
-    'Screws': ('nos', [
-        ('Wood Screw 25mm', 'GKW', 'CSK', '25mm', 1, 'nos'),
-    ]),
-    'Edge Band': ('rft', [
-        ('PVC Edge Band 2mm', 'Rehau', 'Raukantex', '22mm', 12, 'rft'),
     ]),
     'Adhesive': ('litre', [
         ('Fevicol SH', 'Pidilite', 'SH', '5 kg', 550, 'nos'),
@@ -134,9 +115,12 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--reset', action='store_true')
+        parser.add_argument('--skip-supplier-specs', action='store_true',
+                            help="Don't apply the bundled supplier price sheet.")
 
     @transaction.atomic
     def handle(self, *args, **options):
+        apply_supplier_specs = not options['skip_supplier_specs']
         if options['reset']:
             for model in (PartMaterial, FurniturePart, Furniture, MaterialOption,
                           Material, Zone, Room):
@@ -187,6 +171,13 @@ class Command(BaseCommand):
                         },
                     )
                     links_made += 1
+
+        if apply_supplier_specs:
+            # Base components (BWP ply, hinges, channels, handles, finishes…)
+            # aligned with the client's supplier price sheet.
+            from catalog.supplier_specs import import_specs
+            from catalog.supplier_specs_data import SUPPLIER_SPECS
+            import_specs(SUPPLIER_SPECS)
 
         self.stdout.write(self.style.SUCCESS(
             f'Rooms: {Room.objects.count()} | Zones: {Zone.objects.count()} | '

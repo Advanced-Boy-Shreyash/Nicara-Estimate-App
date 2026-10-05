@@ -246,6 +246,7 @@ export interface EstimateItem {
 
 export interface CabinetConfig {
   template: string;
+  quantity: number;
   length: number;   // width, mm
   depth: number;    // mm
   height: number;   // mm
@@ -258,12 +259,17 @@ export interface CabinetConfig {
   drawer_box_thickness: number;
   board: string;
   finish: string;
-  wastage_pct: number;
   ply_brand: string;
+  /** Cutting waste added to the final assembly, %. */
+  wastage_pct: number;
+  margin_pct: number;
+  /** Row key → user-set quantity (intermediate / final estimate overrides). */
+  overrides: Record<string, number>;
   options?: { hinge?: number | null; channel?: number | null; handle?: number | null; finish?: number | null };
 }
 
 export interface EstimatorRow {
+  key: string;
   basic_component: string;
   detail: string;
   brand: string;
@@ -272,35 +278,44 @@ export interface EstimatorRow {
   unit: string;
   price: string;
   amount: string;
-  source: "catalogue" | "provisional";
+  source: "catalogue" | "provisional" | "calculated";
   basis: string;
+  overridden: boolean;
+  calculated_qty?: string;
 }
 
 export interface EstimatorResult {
   config: CabinetConfig;
   rows: EstimatorRow[];
+  subtotal: string;
+  waste: string;
+  margin: string;
   total: string;
+  per_unit: string;
   quantities: {
-    plywood: Record<string, { net_sft: number; gross_sft: number; sheets: number }>;
+    plywood: Record<string, { net_sft: number; sheets: number }>;
     hinges: number; slides: number; handles: number; screws: number;
-    edge_band_rft: number; finish_sheets: number; board: string;
+    edge_band_m: number; shutter_sft: number; board: string; board_sft: number; quantity: number;
   };
   warnings: string[];
   formula_version: string;
 }
 
+export interface EstimatorOption { id: number; label: string; unit: string; supplier_sheet: boolean }
+
 export interface EstimatorMeta {
   formula_version: string;
   templates: ({ key: string; label: string } & Pick<CabinetConfig, "length" | "depth" | "height" | "drawers" | "doors" | "shelves">)[];
   thicknesses: { carcass: number[]; shutter: number[]; back: number[]; drawer_box: number[] };
-  boards: string[];
-  finishes: string[];
+  boards: { key: string; sft: number }[];
+  finishes: { key: string; label: string }[];
+  defaults: Partial<CabinetConfig>;
+  overridable: string[];
   ply_brands: string[];
-  hinges: { id: number; label: string }[];
-  channels: { id: number; label: string }[];
-  handles: { id: number; label: string }[];
-  laminates: { id: number; label: string }[];
-  acrylics: { id: number; label: string }[];
+  hinges: EstimatorOption[];
+  channels: EstimatorOption[];
+  handles: EstimatorOption[];
+  finish_options: Record<string, EstimatorOption[]>;
 }
 
 export interface Estimate {

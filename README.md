@@ -527,47 +527,68 @@ The estimate grid drops the **Category** and **Sub Cat** columns (the sheet has
 neither); it now reads Area · Item · L · B · H · Qty · Unit · Rate · Amount · GST.
 The **Blank Line** button also works now — a fresh line may have an empty room.
 
-## 13b. Cabinet calculator (parametric BOM) — provisional formulas
+## 13b. Cabinet calculator (parametric BOM)
 
-Every estimate line (Initial, Intermediate and Final) has a **Cabinet
-Calculator** in its breakdown. Pick a template (Base / Wall / Drawer / Tall
-cabinet, Wardrobe), then change size (mm / in / ft), board size (8x4 ft, 7x4,
-6x3, 2x1 m, 1x1 m), ply thicknesses, drawer/door/shelf counts, finish, brand
-and hardware choices. The bill of materials and cost **recalculate live** (no
-save) and **Apply to line** replaces the line's breakdown; the configuration is
-stored on the line (`EstimateItem.config`) so it can be reopened and edited.
+Every estimate line — Initial, Intermediate and Final — has a **Cabinet
+Calculator** in its breakdown. The Intermediate/Final estimate is where the
+client customises: size (mm / in / ft), **quantity**, board thicknesses
+(incl. 10 mm), procurement sheet (8x4 = 32 sft, 4x4 = 16 sft, …), drawer /
+door / shelf counts, finish (laminate, acrylic, veneer, **polish**, none),
+brand and hardware. Every change **recalculates live** (nothing saved);
+**Apply to line** replaces the breakdown, stores the configuration on the line
+(`EstimateItem.config`) and sets the line's Qty × Rate to match.
 
-- **Default configuration** — an unconfigured line starts from the template
-  matching its name (e.g. *Base Cabinet* → 2 drawers, 1 door, 1 shelf) and its
-  written L/B/H. Adding or picking an **unpriced** cabinet/drawer item applies
-  that default automatically; items with a catalogue rate keep their rate.
-- **Scaling** — 1 drawer = 2 slides (3 drawers → 6), handles per door/drawer,
-  hinges by door height (2 / 3 / 4), screws per panel, drawer, hinge and slide,
-  plywood area per thickness → sheets of the chosen board, edge band, finish
-  sheets and adhesive.
-- **Pricing** comes from the Furniture Catalogue options (Plywood by thickness
-  + brand, Hardware, Drawer Channel, Handle, Screws, Edge Band, Laminate,
-  Acrylic, Adhesive). Anything missing uses a fallback rate and is flagged
-  **PROV**.
-- Every row shows **how its quantity was worked out**, for checking against
-  the formula sheet.
+- **Default configuration** — an unconfigured cabinet starts from its template
+  (Base Cabinet = **2 drawers, 1 door, 1 shelf**) and the line's written size
+  and qty. Adding or picking an **unpriced** cabinet/drawer item applies it
+  automatically; items with a catalogue rate keep their rate.
+- **Scaling** — 1 drawer = 2 slides (2 drawers → 4, 3 → 6; priced per Quadro
+  *set* = one pair), one handle per door/drawer, hinges by door height, screws
+  by panel/drawer/hinge/slide, ply area per thickness → sheets to procure,
+  edge band, finish sheets, adhesive. Everything × quantity.
+- **Cost build-up** — materials at exact quantities → **+10% cutting waste on
+  the assembly** (sheet off-cuts) → **+35% margin** (as in the supplier sheet).
+  Both percentages are editable per line and appear as their own rows.
+- **Overrides** — hardware, screws, edge band, finish and adhesive quantities
+  can be typed over in the live table (shown "calculated N", with a reset).
+  Overrides don't follow later size/count changes; a warning says so.
+- Every row shows **how its quantity was worked out**. Rows without a
+  supplier-sheet price use a fallback rate and are flagged **PROV** (today:
+  10 mm ply and per-sft polish — the sheet quotes polish per rft only).
 
-> **Replacing the formulas.** All rules, allowances and constants live in one
-> place: `RULES` (and the panel maths in `_panels()`) in
-> `Backend/catalog/estimator.py`. When the formula sheet is signed off with the
-> client, update that file and bump `FORMULA_VERSION`; the API, UI and stored
-> estimates need no changes. `catalog/test_estimator.py` checks behaviour
-> (scaling, defaults, validation), so only its few exact-number assertions
-> should need touching.
+### Base components ← the supplier price sheet
+
+The client's estimate workbook (`sample template.xlsx` → **Sample detail**) is
+the source for base raw materials: Austin Lincoln **BWP** ply 8/12/16 mm
+(₹2,560/3,040/3,520 per 8x4 sheet), Hettich Onsys hinges, Hettich Quadro
+channels, handles, Shape PVC edging, PTA screws, Greenlam/Thermo laminates,
+acrylic, veneer, Fevicol, inner liner, Godrej locks. They land in the
+Furniture Catalogue (the single store) tagged `source = supplier_sheet`, which
+the calculator prefers.
+
+```bash
+python manage.py seed_catalog                         # includes a bundled copy of the sheet
+python manage.py import_supplier_specs --file "sample template.xlsx"   # refresh from the workbook
+python manage.py import_supplier_specs --file "…" --dry-run
+```
+
+Mapping lives in `catalog/supplier_specs.py` (`map_row`); the bundled copy is
+`catalog/supplier_specs_data.py`.
+
+> **Replacing the formulas.** Quantity rules, allowances, waste/margin defaults
+> and fallback rates live in one place: `RULES` (plus the panel maths in
+> `_panels()`) in `Backend/catalog/estimator.py`. When the formula sheet is
+> signed off with the client, update that file and bump `FORMULA_VERSION`;
+> prices stay in the catalogue, and the API, UI and stored estimates need no
+> changes. `catalog/test_estimator.py` checks behaviour, so only its few
+> exact-number assertions should need touching.
 
 | Endpoint | Purpose |
 | -------- | ------- |
-| `GET /api/catalog/estimator/meta/` | Templates, boards, thicknesses, options |
+| `GET /api/catalog/estimator/meta/` | Templates, sheets, thicknesses, finishes, supplier options |
 | `POST /api/catalog/estimator/preview/` | Recalculate without saving |
 | `POST …/items/{id}/configure/` | Apply a config (`{config}`) or the default (`{auto: true}`) |
 
-Note: the breakdown (and so the line amount) describes **one** unit — the
-line's Qty is not multiplied in, same as the existing furniture BOM roll-up.
 
 ## 14. Still to do
 

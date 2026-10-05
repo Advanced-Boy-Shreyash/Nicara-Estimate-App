@@ -37,7 +37,7 @@ class MaterialOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = MaterialOption
         fields = ['id', 'material', 'material_name', 'detail', 'brand', 'model_no',
-                  'size', 'price', 'unit', 'notes', 'library_item', 'label',
+                  'size', 'price', 'unit', 'notes', 'source', 'library_item', 'label',
                   'sort_order', 'is_active']
         read_only_fields = ['material']
 

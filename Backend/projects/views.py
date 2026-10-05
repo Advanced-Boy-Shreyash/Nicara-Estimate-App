@@ -636,7 +636,7 @@ def configure_line(line, config=None, *, replace_dims=True):
     pick the template (default configuration). Raises estimator.ConfigError.
     """
     hint = {'name': line.item, 'length': line.length,
-            'breadth': line.breadth, 'height': line.height}
+            'breadth': line.breadth, 'height': line.height, 'qty': line.qty}
     # Edits layer onto the stored configuration, which keeps exact mm — the
     # line's ft-in text is rounded and must not feed back into the maths.
     merged = {**(line.config or {}), **(config or {})}
@@ -659,7 +659,10 @@ def configure_line(line, config=None, *, replace_dims=True):
 
     cfg = result['config']
     line.config = cfg
-    fields = ['config']
+    # The breakdown covers `quantity` units; keep Qty × Rate telling the same story.
+    line.qty = cfg['quantity']
+    line.rate = result['per_unit']
+    fields = ['config', 'qty', 'rate']
     if replace_dims:
         line.length = estimator.format_ft_in(cfg['length'])
         line.breadth = estimator.format_ft_in(cfg['depth'])

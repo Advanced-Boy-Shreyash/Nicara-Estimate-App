@@ -893,9 +893,10 @@ function ComponentBreakdown({
       )}
       {item.config && !configuring && (
         <div className="mb-2 text-[10px] text-amber-700">
-          Calculated from: {item.config.template.replace(/_/g, " ")} · {Math.round(item.config.length)}×{Math.round(item.config.depth)}×{Math.round(item.config.height)} mm
+          Calculated from: {(item.config.quantity ?? 1) > 1 ? `${item.config.quantity} × ` : ""}{item.config.template.replace(/_/g, " ")} · {Math.round(item.config.length)}×{Math.round(item.config.depth)}×{Math.round(item.config.height)} mm
           · {item.config.drawers} drawer(s), {item.config.doors} door(s), {item.config.shelves} shelf(s)
-          · {item.config.carcass_thickness}mm carcass on {item.config.board} boards
+          · {item.config.carcass_thickness}mm carcass on {item.config.board} sheets · {item.config.finish}
+          · +{item.config.wastage_pct ?? 0}% waste, {item.config.margin_pct ?? 0}% margin
         </div>
       )}
 

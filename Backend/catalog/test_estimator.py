@@ -46,19 +46,20 @@ class EngineTests(APITestCase):
         self.assertGreater(q3['screws'], q2['screws'])
 
     def test_bigger_cabinet_needs_more_plywood(self):
-        small = estimator.calculate({'length': 600})['quantities']['plywood']['18mm']['net_sft']
-        large = estimator.calculate({'length': 1200})['quantities']['plywood']['18mm']['net_sft']
+        small = estimator.calculate({'length': 600})['quantities']['plywood']['16mm']['net_sft']
+        large = estimator.calculate({'length': 1200})['quantities']['plywood']['16mm']['net_sft']
         self.assertGreater(large, small)
 
     def test_thickness_change_reprices_carcass(self):
-        r = estimator.calculate({'carcass_thickness': 16, 'shutter_thickness': 18})
-        self.assertIn('16mm', r['quantities']['plywood'])
-        ply16 = rows_by(r)[('Plywood', '16mm BWP Plywood')]
-        self.assertEqual(ply16['price'], Decimal('90.00'))   # seeded Austin Lincoln 16mm
+        r = estimator.calculate({'carcass_thickness': 12, 'shutter_thickness': 16})
+        self.assertIn('12mm', r['quantities']['plywood'])
+        ply12 = rows_by(r)[('Plywood', '12mm BWP Plywood')]
+        # Supplier sheet: Austin Lincoln 12mm BWP = ₹3,040 per 8x4 sheet = ₹95/sft
+        self.assertEqual(ply12['price'], Decimal('95.00'))
 
     def test_smaller_board_needs_more_sheets(self):
-        big = estimator.calculate({'board': '8x4 ft', 'drawers': 0})['quantities']['plywood']['18mm']
-        small = estimator.calculate({'board': '1x1 m', 'drawers': 0})['quantities']['plywood']['18mm']
+        big = estimator.calculate({'board': '8x4 ft', 'drawers': 0})['quantities']['plywood']['16mm']
+        small = estimator.calculate({'board': '1x1 m', 'drawers': 0})['quantities']['plywood']['16mm']
         self.assertGreaterEqual(small['sheets'], big['sheets'])
 
     def test_tall_doors_get_more_hinges(self):
@@ -151,7 +152,8 @@ class ConfigureApiTests(APITestCase):
     def test_meta_lists_templates_and_boards(self):
         res = self.client.get(reverse('catalog-estimator-meta'))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertIn('1x1 m', res.data['boards'])
+        self.assertIn('4x4 ft', [b['key'] for b in res.data['boards']])
+        self.assertIn('polish', res.data['finish_options'])
         self.assertTrue(any(t['key'] == 'drawer_unit' for t in res.data['templates']))
 
     def test_configure_replaces_breakdown_and_rolls_up(self):
@@ -159,8 +161,10 @@ class ConfigureApiTests(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
         self.line.refresh_from_db()
         self.assertEqual(self.line.config['drawers'], 3)
-        slides = self.line.components.get(basic_component='Drawer Channel')
-        self.assertEqual(slides.qty, Decimal('6.00'))
+        channels = self.line.components.get(basic_component='Drawer Channel')
+        self.assertEqual(channels.qty, Decimal('3.00'))        # 6 slides = 3 Quadro sets
+        self.assertEqual(channels.unit, 'set')
+        self.assertEqual(res.data['result']['quantities']['slides'], 6)
         self.assertEqual(self.line.amount, Decimal(res.data['result']['total']))
 
     def test_reconfigure_recalculates(self):
@@ -211,3 +215,133 @@ class ConfigureApiTests(APITestCase):
         self.estimate.save()
         res = self.client.post(self.url(), {'config': {}}, format='json')
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class SupplierSheetAndAdjustmentTests(APITestCase):
+    """Supplier-sheet pricing, quantity, waste/margin, finish swaps and overrides."""
+
+    @classmethod
+    def setUpTestData(cls):
+        call_command('seed_catalog', verbosity=0)   # includes the bundled supplier sheet
+
+    def test_ply_priced_from_supplier_sheet(self):
+        from catalog.models import MaterialOption
+        opt = MaterialOption.objects.get(material__name='Plywood', detail='16mm Plywood',
+                                         brand='Austin', model_no='Lincoln')
+        self.assertEqual(opt.price, Decimal('110.00'))            # ₹3,520 / 32 sft
+        self.assertEqual(opt.source, MaterialOption.Source.SUPPLIER_SHEET)
+        self.assertIn('3,520', opt.notes)
+
+    def test_channels_priced_per_set_of_two_slides(self):
+        row = rows_by(estimator.calculate({'drawers': 2}))[('Drawer Channel', 'Telescopic channel')]
+        self.assertEqual((row['qty'], row['unit'], row['price']),
+                         (Decimal('2.00'), 'set', Decimal('2600.00')))
+
+    def test_placeholders_retired(self):
+        from catalog.models import MaterialOption
+        self.assertFalse(MaterialOption.objects.filter(
+            detail='Telescopic Channel 450mm', is_active=True).exists())
+
+    def test_waste_is_ten_percent_of_materials(self):
+        r = estimator.calculate()
+        self.assertEqual(r['waste'], (r['subtotal'] * Decimal('0.10')).quantize(Decimal('0.01')))
+        self.assertIn('Cutting Waste', [row['basic_component'] for row in r['rows']])
+
+    def test_margin_on_materials_plus_waste(self):
+        r = estimator.calculate({'margin_pct': 35})
+        expected = ((r['subtotal'] + r['waste']) * Decimal('0.35')).quantize(Decimal('0.01'))
+        self.assertEqual(r['margin'], expected)
+        self.assertEqual(r['total'], r['subtotal'] + r['waste'] + r['margin'])
+
+    def test_zero_margin_and_waste_drop_rows(self):
+        names = {row['basic_component'] for row in
+                 estimator.calculate({'margin_pct': 0, 'wastage_pct': 0})['rows']}
+        self.assertNotIn('Margin', names)
+        self.assertNotIn('Cutting Waste', names)
+
+    def test_quantity_scales_hardware_and_material(self):
+        one = estimator.calculate({'quantity': 1})
+        two = estimator.calculate({'quantity': 2})
+        self.assertEqual(two['quantities']['slides'], 2 * one['quantities']['slides'])
+        self.assertEqual(two['quantities']['hinges'], 2 * one['quantities']['hinges'])
+        self.assertAlmostEqual(two['quantities']['plywood']['16mm']['net_sft'],
+                               2 * one['quantities']['plywood']['16mm']['net_sft'], delta=0.02)
+
+    def test_sixteen_sft_board_needs_more_sheets_than_thirty_two(self):
+        big = estimator.calculate({'board': '8x4 ft', 'quantity': 3})['quantities']['plywood']['16mm']
+        small = estimator.calculate({'board': '4x4 ft', 'quantity': 3})['quantities']['plywood']['16mm']
+        self.assertGreater(small['sheets'], big['sheets'])
+
+    def test_ten_mm_ply_supported_with_provisional_rate(self):
+        r = estimator.calculate({'carcass_thickness': 10})
+        ply10 = rows_by(r)[('Plywood', '10mm BWP Plywood')]
+        self.assertEqual(ply10['source'], 'provisional')
+
+    def test_swap_acrylic_for_polish(self):
+        acrylic = rows_by(estimator.calculate({'finish': 'acrylic'}))
+        polish = rows_by(estimator.calculate({'finish': 'polish'}))
+        self.assertIn(('Acrylic', 'Acrylic on shutters'), acrylic)
+        self.assertFalse(any(k[0] == 'Acrylic' for k in polish))
+        self.assertTrue(any(k[0] == 'Polish' for k in polish))
+        self.assertFalse(any(k[0] == 'Adhesive' for k in polish))   # no bonding for polish
+
+    def test_override_component_quantity(self):
+        r = estimator.calculate({'overrides': {'handle': 6}})
+        handle = next(row for row in r['rows'] if row['key'] == 'handle')
+        self.assertTrue(handle['overridden'])
+        self.assertEqual(handle['qty'], Decimal('6.00'))
+        self.assertEqual(handle['calculated_qty'], Decimal('3.00'))
+        self.assertEqual(handle['amount'], handle['qty'] * handle['price'])
+
+    def test_unknown_override_rejected(self):
+        with self.assertRaises(estimator.ConfigError) as ctx:
+            estimator.calculate({'overrides': {'plywood': 3}})
+        self.assertIn('overrides', ctx.exception.errors)
+
+    def test_configure_sets_line_quantity_and_rate(self):
+        user = User.objects.create_user(email='a@nicara.design', password=PASSWORD,
+                                        first_name='A', last_name='B', role=User.Role.ADMIN)
+        self.client.force_authenticate(user)
+        project = Project.objects.create(name='P', client_name='C')
+        est = Estimate.objects.create(project=project, type=Estimate.EstimateType.FINAL, version=1)
+        line = EstimateItem.objects.create(estimate=est, area='Kitchen', item='Base Cabinet', qty=1, rate=0)
+        res = self.client.post(reverse('estimate-item-configure', args=[project.pk, est.pk, line.pk]),
+                               {'config': {'quantity': 3}}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        line.refresh_from_db()
+        self.assertEqual(line.qty, Decimal('3'))
+        self.assertEqual(line.amount, Decimal(res.data['result']['total']))
+        self.assertAlmostEqual(float(line.rate) * 3, float(line.amount), delta=0.05)
+
+
+class SupplierSheetParserTests(APITestCase):
+    def test_parses_sample_detail_rows(self):
+        import os
+        import tempfile
+
+        import openpyxl
+        from catalog.supplier_specs import parse_workbook
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Sample detail'
+        ws.append(['header'] * 29)
+
+        def add(spec, brand, model, price, per):
+            r = [''] * 29
+            r[10], r[11], r[12], r[18], r[19] = spec, brand, model, price, per
+            ws.append(r)
+
+        add('Core Material(16mm BWP Ply)', 'Austin', 'Lincoln BWP', 3520, 'Sheets')
+        add('Draw Channels', 'Hettich', 'Quadro - 18" Soft Close', 2600, 'sets')
+        add('Finishing - Laminate', 'Acrylic', 'RM 6104 Fern', 4500, 'sheets')
+        add('Design', '', '', 25, 'per sft')                      # not a base component
+        path = os.path.join(tempfile.mkdtemp(), 'sheet.xlsx')
+        wb.save(path)
+
+        specs = {(s['material'], s['detail']): s for s in parse_workbook(path)}
+        self.assertEqual(len(specs), 3)
+        ply = specs[('Plywood', '16mm Plywood')]
+        self.assertEqual((ply['model_no'], ply['price'], ply['unit']), ('Lincoln', Decimal('110.00'), 'sft'))
+        self.assertEqual(specs[('Drawer Channel', 'Telescopic channel (pair)')]['size'], '18" Soft Close')
+        self.assertEqual(specs[('Acrylic', 'Acrylic sheet')]['price'], Decimal('4500.00'))

@@ -163,6 +163,14 @@ class MaterialOption(TimeStamped):
     unit = models.CharField(max_length=20, default='nos')
     notes = models.CharField(max_length=300, blank=True, default='')
 
+    class Source(models.TextChoices):
+        MANUAL = 'manual', 'Manual'
+        SUPPLIER_SHEET = 'supplier_sheet', 'Supplier sheet'
+
+    # Where the price came from. The cabinet calculator prefers supplier-sheet
+    # rows (imported by `import_supplier_specs`) over older manual entries.
+    source = models.CharField(max_length=20, choices=Source.choices, default=Source.MANUAL)
+
     # Optional bridge to the existing Material Library, for teams that also
     # keep priced materials there. Never required.
     library_item = models.ForeignKey(
