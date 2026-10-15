@@ -348,9 +348,21 @@ class EstimateItem(models.Model):
     """
     Line item within an estimate.
 
-    `catalog_item` points at the Items module master record when the line was
-    picked from the catalogue; free-text lines simply leave it null.
+    Mirrors the initial-estimate spreadsheet columns:
+        Area | Item | Width(ft/in) | Height(ft/in) | Depth(ft/in) | Type |
+        Specification | Brand | Model | Application | Specifications |
+        Estimate Spec flag | Qty | Unit | Price | Price Unit | Cost |
+        Margin % | Margin Amount | Referral % | Referral Amount |
+        GST % | GST Amount | Total Amount | flag
     """
+    class ItemType(models.TextChoices):
+        PROCUREMENT = 'Procurement', 'Procurement'
+        SERVICE = 'Service', 'Service'
+        SPEC_PURPOSE = 'Spec Purpose', 'Spec Purpose'
+        PROCUREMENT_CUM_SERVICE = 'Procurement cum Service', 'Procurement cum Service'
+        # Old alias kept for backwards compat with existing data:
+        PROCUREMENT_CUM_SVC = 'Procurement cum service', 'Procurement cum service'
+
     estimate = models.ForeignKey(Estimate, on_delete=models.CASCADE, related_name='items')
     catalog_item = models.ForeignKey(
         'items.Item', on_delete=models.SET_NULL, null=True, blank=True,
@@ -358,35 +370,83 @@ class EstimateItem(models.Model):
         help_text='Master item this line was created from, if any'
     )
     sno = models.IntegerField(default=0)
-    # Blank on a fresh line — the designer names the room after adding it; the
-    # grid groups empty-area lines under "Uncategorized".
     area = models.CharField(max_length=100, blank=True, default='',
-                            help_text='Room name, e.g. Master Bedroom')
-    # The Excel columns: a room area (zone) the item sits on, and its finish.
+                            help_text='Room name, e.g. Drawing')
     zone = models.CharField(max_length=100, blank=True, default='',
                             help_text='Room area, e.g. East Wall')
     finishing = models.CharField(max_length=100, blank=True, default='',
                                  help_text='e.g. Laminate, Veneer')
-    # Kept because the estimate grid already edits these.
     category = models.CharField(max_length=100, blank=True, default='')
     subcategory = models.CharField(max_length=100, blank=True, default='')
 
-    item = models.CharField(max_length=200)
+    item = models.CharField(max_length=200, help_text='e.g. East Wall TV Unit with ledge')
     description = models.TextField(blank=True, default='')
+
+    # ── Dimensions in feet + inches (matching the spreadsheet columns) ──
+    width_ft = models.IntegerField(default=0, help_text='Width: feet part')
+    width_in = models.IntegerField(default=0, help_text='Width: inches part')
+    height_ft = models.IntegerField(default=0, help_text='Height: feet part')
+    height_in = models.IntegerField(default=0, help_text='Height: inches part')
+    depth_ft = models.IntegerField(default=0, help_text='Depth: feet part')
+    depth_in = models.IntegerField(default=0, help_text='Depth: inches part')
+
+    # Legacy char-based dimensions kept for backward compatibility.
     length = models.CharField(max_length=20, blank=True, default='')
     breadth = models.CharField(max_length=20, blank=True, default='')
     height = models.CharField(max_length=20, blank=True, default='')
+
+    # ── Type ──
+    item_type = models.CharField(max_length=50, choices=ItemType.choices,
+                                 blank=True, default='',
+                                 help_text='Procurement / Service / Spec Purpose / Procurement cum Service')
+
+    # ── Specification & identity ──
+    specification = models.CharField(max_length=250, blank=True, default='',
+                                     help_text='For Estimate, e.g. Core Material(16mm BWP Ply)')
+    brand = models.CharField(max_length=120, blank=True, default='',
+                             help_text='e.g. Austin, Hettich, Greenlam')
+    model_name = models.CharField(max_length=200, blank=True, default='',
+                                  help_text='e.g. Lincoln BWP, Onsys - 0 Crank Soft Close')
+    application = models.CharField(max_length=200, blank=True, default='',
+                                   help_text='e.g. 6 sets, 2 nos, For Grey laminate')
+    specifications_text = models.CharField(max_length=500, blank=True, default='',
+                                           help_text='Generated: Specification : Brand Model - Application')
+    estimate_spec_flag = models.BooleanField(default=True,
+                                             help_text='Whether to include in the printed estimate spec')
+
+    # ── Quantity & pricing ──
     qty = models.DecimalField(max_digits=10, decimal_places=2, default=1)
     unit = models.CharField(max_length=20, default='unit')
-    rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    rate = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text='Price per unit')
+    price_unit = models.CharField(max_length=30, blank=True, default='',
+                                  help_text='Display unit for rate, e.g. per rft, Sheets, MTR')
+    cost = models.DecimalField(max_digits=14, decimal_places=2, default=0,
+                               help_text='qty × rate')
     amount = models.DecimalField(
-        max_digits=12, decimal_places=2, default=0,
-        help_text='Sum of the component breakdown when present, else qty × rate'
+        max_digits=14, decimal_places=2, default=0,
+        help_text='Sum of component breakdown when present, else qty × rate (= cost)'
     )
+
+    # ── Margin ──
+    margin_pct = models.DecimalField(max_digits=5, decimal_places=2, default=35,
+                                     help_text='Default 35%')
+    margin_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    # ── Referral ──
+    referral_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    referral_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+
+    # ── GST & Total ──
     gst_pct = models.DecimalField(max_digits=5, decimal_places=2, default=18)
+    # gst_amount is stored so it shows up in the table without a property call.
+    gst_amount_stored = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0,
+                                       help_text='cost + margin + referral + GST')
+
+    # ── Flag ──
+    flag = models.BooleanField(default=False, help_text='Row-level flag for review')
+
     remarks = models.CharField(max_length=300, blank=True, default='')
-    # Cabinet-calculator configuration (template, size, thicknesses, counts)
-    # the breakdown was last generated from — see catalog/estimator.py.
     config = models.JSONField(null=True, blank=True)
 
     class Meta:
@@ -395,25 +455,62 @@ class EstimateItem(models.Model):
     def __str__(self):
         return f"#{self.sno} {self.area} — {self.item}"
 
+    # ── Specification builder ──────────────────────────────────
+    def build_specifications_text(self):
+        """
+        Generate the compound spec string:
+            Specification : Brand Model - Application
+        e.g. "Core Material(16mm BWP Ply) : Austin Lincoln BWP-"
+        """
+        parts = [self.specification or '']
+        identity = ' '.join(filter(None, [self.brand, self.model_name]))
+        app = self.application or ''
+        result = parts[0]
+        if identity or app:
+            result += ' : ' + identity
+            result += '-' + app if app else '-'
+        return result.strip()
+
+    def compute_amounts(self):
+        """Compute cost, margin, referral, GST & total from the base fields."""
+        q = self.qty or Decimal('0')
+        r = self.rate or Decimal('0')
+        self.cost = money(q * r)
+
+        # When a component breakdown exists, cost comes from that instead.
+        base = self.cost
+        if self.pk and self.components.exists():
+            base = money(sum((c.amount for c in self.components.all()), Decimal('0')))
+            self.cost = base
+
+        mp = self.margin_pct or Decimal('0')
+        self.margin_amount = money(base * mp / Decimal('100'))
+
+        rp = self.referral_pct or Decimal('0')
+        self.referral_amount = money(base * rp / Decimal('100'))
+
+        self.amount = base  # kept for backward compat with Estimate.subtotal
+        taxable = base + self.margin_amount + self.referral_amount
+        gp = self.gst_pct or Decimal('0')
+        self.gst_amount_stored = money(taxable * gp / Decimal('100'))
+        self.total_amount = money(taxable + self.gst_amount_stored)
+
     def save(self, *args, **kwargs):
         if not self.sno:
             last = EstimateItem.objects.filter(estimate=self.estimate).order_by('-sno').first()
             self.sno = (last.sno if last else 0) + 1
-        # A saved (has-pk) line with a component breakdown takes its amount from
-        # the components; otherwise qty × rate is the source of truth.
-        if self.pk and self.components.exists():
-            self.amount = money(sum((c.amount for c in self.components.all()), Decimal('0')))
-        else:
-            self.amount = money((self.qty or Decimal('0')) * (self.rate or Decimal('0')))
+        # Auto-build the specifications text.
+        self.specifications_text = self.build_specifications_text()
+        self.compute_amounts()
         super().save(*args, **kwargs)
 
     def recompute_amount(self):
-        """Refresh `amount` from the component breakdown (or qty × rate)."""
-        if self.components.exists():
-            self.amount = money(sum((c.amount for c in self.components.all()), Decimal('0')))
-        else:
-            self.amount = money((self.qty or Decimal('0')) * (self.rate or Decimal('0')))
-        self.save(update_fields=['amount'])
+        """Refresh amounts from the component breakdown (or qty × rate)."""
+        self.compute_amounts()
+        self.save(update_fields=[
+            'cost', 'amount', 'margin_amount', 'referral_amount',
+            'gst_amount_stored', 'total_amount', 'specifications_text',
+        ])
 
     @property
     def has_components(self):
@@ -421,11 +518,11 @@ class EstimateItem(models.Model):
 
     @property
     def gst_amount(self):
-        return money(self.amount * self.gst_pct / Decimal('100'))
+        return self.gst_amount_stored
 
     @property
     def total_with_gst(self):
-        return money(self.amount + self.gst_amount)
+        return self.total_amount
 
 
 class EstimateItemComponent(models.Model):

@@ -224,16 +224,46 @@ export interface EstimateItem {
   subcategory: string;
   item: string;
   description: string;
+  // Dimensions ft/in
+  width_ft: number;
+  width_in: number;
+  height_ft: number;
+  height_in: number;
+  depth_ft: number;
+  depth_in: number;
+  // Legacy dimensions
   length: string;
   breadth: string;
   height: string;
+  // Type & spec
+  item_type: string;
+  specification: string;
+  brand: string;
+  model_name: string;
+  application: string;
+  specifications_text: string;
+  estimate_spec_flag: boolean;
+  // Qty & pricing
   qty: string;
   unit: string;
   rate: string;
+  price_unit: string;
+  cost: string;
   amount: string;
+  // Margin
+  margin_pct: string;
+  margin_amount: string;
+  // Referral
+  referral_pct: string;
+  referral_amount: string;
+  // GST & Total
   gst_pct: string;
   gst_amount: string;
+  gst_amount_stored: string;
+  total_amount: string;
   total_with_gst: string;
+  // Flag & misc
+  flag: boolean;
   remarks: string;
   /** The material breakdown; when present, `amount` is its sum. */
   components: EstimateItemComponent[];
@@ -728,4 +758,71 @@ export interface VendorMeta {
   payment_terms: Choice[];
   document_types: Choice[];
   counts: { suppliers: number; contractors: number };
+}
+
+/* ── Raw Material Library ────────────────────────────────────── */
+
+export interface LibraryCategory {
+  id: number;
+  name: string;
+  icon: string;
+  type: string;
+}
+
+export interface LibraryBrand {
+  id: number;
+  name: string;
+  category_id: number;
+}
+
+/** Full MaterialItem as returned by the API. */
+export interface LibraryItem {
+  id: number;
+  brand: number;
+  brand_name: string;
+  category_id: number;
+  category_name: string;
+  category_icon: string;
+  model_name: string;
+  description: string;
+  weight: string;
+  length: string;
+  thickness: string;
+  default_unit: string;
+  default_rate: string;
+  gst_pct: string;
+  margin_pct: string;
+  is_active: boolean;
+  notes: string;
+  full_display: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Fields sent when creating or updating a MaterialItem. */
+export interface LibraryItemInput {
+  brand: number | "";
+  model_name: string;
+  description: string;
+  weight: string;
+  length: string;
+  thickness: string;
+  default_unit: string;
+  default_rate: string;
+  gst_pct: string;
+  margin_pct: string;
+  is_active: boolean;
+  notes: string;
+}
+
+export interface LibraryMeta {
+  categories: LibraryCategory[];
+  brands: LibraryBrand[];
+  units: Choice[];
+  counts: {
+    categories: number;
+    brands: number;
+    items: number;
+    services: number;
+  };
 }

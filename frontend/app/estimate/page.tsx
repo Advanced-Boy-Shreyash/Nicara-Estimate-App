@@ -18,6 +18,7 @@ import LeadsPage from "@/components/crm/LeadsPage";
 import ClientsPage from "@/components/crm/ClientsPage";
 import IAMMatrix from "@/components/admin/IAMMatrix";
 import CatalogPage from "@/components/catalog/CatalogPage";
+import RawMaterialPage from "@/components/library/RawMaterialPage";
 import ClientDetails from "@/components/engagement/ClientDetails";
 import DesignRequirements from "@/components/engagement/DesignRequirements";
 import DeliverablesTab from "@/components/engagement/DeliverablesTab";
@@ -837,6 +838,7 @@ const LIVE_VIEWS = [
   "dashboard", "projects", "detail",
   "vendors-material", "vendors-contractors", "items-catalogue", "catalog",
   "customers-leads", "customers-clients", "iam-permissions",
+  "library-raw",
 ];
 
 function EstimateAppInner() {
@@ -900,6 +902,7 @@ function EstimateAppInner() {
         {view === "customers-leads" && <LeadsPage onOpenProject={openProject} />}
         {view === "customers-clients" && <ClientsPage onOpenProject={openProject} />}
         {view === "iam-permissions" && <IAMMatrix />}
+        {view === "library-raw" && <RawMaterialPage />}
 
         {!LIVE_VIEWS.includes(view) && (
           <div className="p-6 px-8 animate-fade-in">

@@ -500,7 +500,7 @@ function LineItems({
     return Array.from(map.entries()).map(([area, items]) => ({
       area,
       items,
-      subtotal: items.reduce((s, i) => s + parseFloat(i.amount || "0"), 0),
+      subtotal: items.reduce((s, i) => s + parseFloat(i.total_amount || "0"), 0),
     }));
   }, [filtered]);
 
@@ -528,12 +528,20 @@ function LineItems({
         <span className="ml-auto text-[11px] text-surface-400">{filtered.length}/{estimate.items.length} items</span>
       </div>
 
-      {/* ── Table (master-branch styling) ── */}
+      {/* ── Table (spreadsheet-style) ── */}
       <div className="overflow-x-auto border border-surface-200 rounded-xl">
-        <table className="w-full text-[11px] min-w-[1100px]">
+        <table className="w-full text-[11px] min-w-[2400px]">
           <thead>
             <tr className="bg-nicara-dark">
-              {["Area", "Item", "L", "B", "H", "Qty", "Unit", "Rate", "Amount", "GST", "Detail", "Del"].map(h => (
+              {[
+                "Area", "Item",
+                "W(ft)", "W(in)", "H(ft)", "H(in)", "D(ft)", "D(in)",
+                "Type", "Specification", "Brand", "Model", "Application", "Specifications",
+                "Spec", "Qty", "Unit", "Price", "Price Unit", "Cost",
+                "Margin %", "Margin Amt", "Ref %", "Ref Amt",
+                "GST %", "GST Amt", "Total", "Flag",
+                "Detail", "Del",
+              ].map(h => (
                 <th key={h} className={TH}>{h}</th>
               ))}
             </tr>
@@ -572,13 +580,13 @@ function LineItems({
             ))}
             {/* Grand total footer */}
             <tr className="bg-nicara-dark">
-              <td colSpan={8} className="p-2.5 text-stone-200 font-bold text-right text-xs">
+              <td colSpan={25} className="p-2.5 text-stone-200 font-bold text-right text-xs">
                 GRAND TOTAL ({filtered.length} items)
               </td>
               <td className="p-2.5 text-nicara-gold font-extrabold text-right font-mono text-[14px]">
                 {inr(String(grouped.reduce((s, g) => s + g.subtotal, 0)))}
               </td>
-              <td className="bg-nicara-dark" colSpan={3} />
+              <td className="bg-nicara-dark" colSpan={4} />
             </tr>
           </tbody>
         </table>
@@ -616,7 +624,7 @@ function GroupBlock({
     <>
       {/* Area header */}
       <tr className="bg-nicara-gold/10">
-        <td colSpan={12} className="px-3 py-2">
+        <td colSpan={30} className="px-3 py-2">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.area}</span>
             <span className="text-[10px] text-surface-400">{group.items.length} item(s)</span>
@@ -690,10 +698,15 @@ function ItemRow({
   // item is linked to a furniture — pulls that furniture's material breakdown.
   const applyMaster = async (master: Item) => {
     try {
+      // Copy defaults: name, rate, unit AND dimensions + quantity
       await estimatesApi.updateItem(project.id, estimate.id, item.id, {
         item: master.name,
         rate: master.default_rate,
         unit: master.unit,
+        length: master.default_length || "",
+        breadth: master.default_breadth || "",
+        height: master.default_height || "",
+        qty: master.default_qty || "1",
       });
       if (master.catalog_furniture) {
         await estimatesApi.populateFromFurniture(project.id, estimate.id, item.id, master.catalog_furniture);
@@ -749,14 +762,73 @@ function ItemRow({
             <div className="px-2 text-[9px] text-surface-300 font-mono">{item.catalog_item_code}</div>
           )}
         </td>
-        {/* L B H */}
-        {(["length", "breadth", "height"] as const).map(dim => (
-          <td key={dim} className={`px-2 py-1.5 w-[55px] ${BD}`}>
-            <EditableCell locked={locked} value={val(item, dim)} mono
-              onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], [dim]: v } }))}
-              onCommit={() => commit(item)} placeholder="—" />
+        {/* Width ft/in */}
+        {(["width_ft", "width_in", "height_ft", "height_in", "depth_ft", "depth_in"] as const).map(dim => (
+          <td key={dim} className={`px-2 py-1.5 w-[42px] ${BD}`}>
+            <EditableCell locked={locked} value={String(val(item, dim) || "0")} mono type="number"
+              onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], [dim]: parseInt(v) || 0 } }))}
+              onCommit={() => commit(item)} />
           </td>
         ))}
+        {/* Type */}
+        <td className={`px-2 py-1.5 min-w-[100px] ${BD}`}>
+          {locked ? (
+            <span className="text-surface-600">{item.item_type || "—"}</span>
+          ) : (
+            <select
+              value={val(item, "item_type")}
+              onChange={e => { setDraft(d => ({ ...d, [item.id]: { ...d[item.id], item_type: e.target.value } })); setTimeout(() => commit(item), 0); }}
+              className="w-full px-1.5 py-1 border border-transparent rounded-lg text-[10px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white cursor-pointer"
+            >
+              <option value="">—</option>
+              <option value="Procurement">Procurement</option>
+              <option value="Service">Service</option>
+              <option value="Spec Purpose">Spec Purpose</option>
+              <option value="Procurement cum Service">Procurement cum Service</option>
+            </select>
+          )}
+        </td>
+        {/* Specification */}
+        <td className={`px-2 py-1.5 min-w-[140px] ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "specification")}
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], specification: v } }))}
+            onCommit={() => commit(item)} placeholder="Spec" />
+        </td>
+        {/* Brand */}
+        <td className={`px-2 py-1.5 min-w-[80px] ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "brand")}
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], brand: v } }))}
+            onCommit={() => commit(item)} placeholder="Brand" />
+        </td>
+        {/* Model */}
+        <td className={`px-2 py-1.5 min-w-[120px] ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "model_name")}
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], model_name: v } }))}
+            onCommit={() => commit(item)} placeholder="Model" />
+        </td>
+        {/* Application */}
+        <td className={`px-2 py-1.5 min-w-[100px] ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "application")}
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], application: v } }))}
+            onCommit={() => commit(item)} placeholder="Application" />
+        </td>
+        {/* Specifications (auto-generated, read-only) */}
+        <td className={`px-2 py-1.5 text-[10px] text-surface-500 min-w-[180px] ${BD}`}>
+          {item.specifications_text || "—"}
+        </td>
+        {/* Estimate Spec Flag */}
+        <td className={`px-2 py-1.5 text-center w-[40px] ${BD}`}>
+          {locked ? (
+            <span>{item.estimate_spec_flag ? "1" : "0"}</span>
+          ) : (
+            <input type="checkbox" checked={!!item.estimate_spec_flag}
+              onChange={e => {
+                setDraft(d => ({ ...d, [item.id]: { ...d[item.id], estimate_spec_flag: e.target.checked } }));
+                setTimeout(() => commit(item), 0);
+              }}
+              className="w-3.5 h-3.5 accent-nicara-gold cursor-pointer" />
+          )}
+        </td>
         {/* Qty */}
         <td className={`px-2 py-1.5 w-[55px] text-right font-mono ${BD}`}>
           <EditableCell locked={locked} value={val(item, "qty")} mono type="number"
@@ -769,19 +841,66 @@ function ItemRow({
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], unit: v } }))}
             onCommit={() => commit(item)} />
         </td>
-        {/* Rate */}
-        <td className={`px-2 py-1.5 w-[80px] text-right font-mono ${BD}`}>
+        {/* Price (rate) */}
+        <td className={`px-2 py-1.5 w-[70px] text-right font-mono ${BD}`}>
           <EditableCell locked={locked} value={val(item, "rate")} mono type="number"
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], rate: v } }))}
             onCommit={() => commit(item)} />
         </td>
-        {/* Amount */}
-        <td className={`px-2 py-1.5 text-right font-bold text-nicara-gold font-mono whitespace-nowrap ${BD}`}>
-          {inr(item.amount)}
+        {/* Price Unit */}
+        <td className={`px-2 py-1.5 w-[70px] ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "price_unit")}
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], price_unit: v } }))}
+            onCommit={() => commit(item)} placeholder="per unit" />
         </td>
-        {/* GST */}
-        <td className={`px-2 py-1.5 text-center text-surface-500 ${BD}`}>
+        {/* Cost (read-only: qty × rate) */}
+        <td className={`px-2 py-1.5 text-right font-mono font-semibold text-nicara-dark whitespace-nowrap ${BD}`}>
+          {inr(item.cost)}
+        </td>
+        {/* Margin % */}
+        <td className={`px-2 py-1.5 w-[50px] text-right font-mono ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "margin_pct")} mono type="number"
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], margin_pct: v } }))}
+            onCommit={() => commit(item)} />
+        </td>
+        {/* Margin Amount (read-only) */}
+        <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>
+          {inr(item.margin_amount)}
+        </td>
+        {/* Referral % */}
+        <td className={`px-2 py-1.5 w-[50px] text-right font-mono ${BD}`}>
+          <EditableCell locked={locked} value={val(item, "referral_pct")} mono type="number"
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], referral_pct: v } }))}
+            onCommit={() => commit(item)} />
+        </td>
+        {/* Referral Amount (read-only) */}
+        <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>
+          {inr(item.referral_amount)}
+        </td>
+        {/* GST % */}
+        <td className={`px-2 py-1.5 text-center text-surface-500 w-[45px] ${BD}`}>
           {parseFloat(item.gst_pct)}%
+        </td>
+        {/* GST Amount (read-only) */}
+        <td className={`px-2 py-1.5 text-right font-mono text-surface-500 whitespace-nowrap ${BD}`}>
+          {inr(item.gst_amount)}
+        </td>
+        {/* Total Amount (read-only) */}
+        <td className={`px-2 py-1.5 text-right font-bold text-nicara-gold font-mono whitespace-nowrap ${BD}`}>
+          {inr(item.total_amount)}
+        </td>
+        {/* Flag */}
+        <td className={`px-2 py-1.5 text-center w-[40px] ${BD}`}>
+          {locked ? (
+            <span>{item.flag ? "🚩" : ""}</span>
+          ) : (
+            <input type="checkbox" checked={!!item.flag}
+              onChange={e => {
+                setDraft(d => ({ ...d, [item.id]: { ...d[item.id], flag: e.target.checked } }));
+                setTimeout(() => commit(item), 0);
+              }}
+              className="w-3.5 h-3.5 accent-red-500 cursor-pointer" />
+          )}
         </td>
         {/* Expand toggle */}
         <td className={`px-2 py-1.5 text-center ${BD}`}>
@@ -802,7 +921,7 @@ function ItemRow({
       {/* Collapsible detail row — live material breakdown */}
       {isOpen && (
         <tr>
-          <td colSpan={12} className="p-0">
+          <td colSpan={30} className="p-0">
             <ComponentBreakdown
               item={item} project={project} estimate={estimate}
               locked={locked} onChanged={onChanged} onError={onError} />
@@ -1266,42 +1385,9 @@ function CatalogPicker({
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   SMART ESTIMATE GENERATOR — Material preferences → auto-generate
+   SMART ESTIMATE GENERATOR — Picks items from catalogue, auto-fills
+   BOM via add-from-catalog (which triggers populate_line_from_furniture)
    ══════════════════════════════════════════════════════════════════ */
-
-const PLYWOOD_OPTIONS = [
-  { label: "Austin Lincoln BWP 16mm", brand: "Austin", model: "Lincoln BWP", thick: "16mm", price: 3520, perUnit: "sheet" },
-  { label: "Austin Lincoln BWP 8mm", brand: "Austin", model: "Lincoln BWP", thick: "8mm", price: 2560, perUnit: "sheet" },
-  { label: "Century BWP 16mm", brand: "Century", model: "BWP Marine", thick: "16mm", price: 3800, perUnit: "sheet" },
-  { label: "Greenply MR 16mm", brand: "Greenply", model: "Green Club MR", thick: "16mm", price: 2800, perUnit: "sheet" },
-  { label: "Kitply BWP 16mm", brand: "Kitply", model: "Kit Club", thick: "16mm", price: 3200, perUnit: "sheet" },
-];
-
-const HARDWARE_OPTIONS = [
-  { label: "Hettich — Onsys Soft Close Hinges", brand: "Hettich", model: "Onsys 0-Crank", unitCost: 260 },
-  { label: "Hettich — Quadro Draw Channels", brand: "Hettich", model: "Quadro 18\" Soft Close", unitCost: 2600 },
-  { label: "Hafele — Full Hardware Set", brand: "Hafele", model: "Matrix Box + H-Box", unitCost: 12000 },
-  { label: "Ebco — Tandem Drawer System", brand: "Ebco", model: "Tandem Drawer", unitCost: 3500 },
-  { label: "Godrej — Locks + Accessories", brand: "Godrej", model: "Nuovo Draw Locks 25mm", unitCost: 650 },
-];
-
-const KITCHEN_ACC_OPTIONS = [
-  { label: "Hettich — Tandem Baskets (4 nos)", brand: "Hettich", model: "Architech Tandem Basket", qty: 4, unitCost: 3650, total: 14600 },
-  { label: "Hafele — Full Modular Kitchen Set", brand: "Hafele", model: "Modular Kitchen Accessories", qty: 1, unitCost: 45000, total: 45000 },
-  { label: "Ebco — Corner Unit + Basket", brand: "Ebco", model: "Corner Magic + Pull-out", qty: 1, unitCost: 8500, total: 8500 },
-  { label: "Hettich — Cutlery + Thali Tray", brand: "Hettich", model: "Cutlery + Thali Tray", qty: 2, unitCost: 850, total: 1700 },
-  { label: "Sincore — Sink & Tap (upto ₹35,000)", brand: "Sincore", model: "Sink & Tap Set", qty: 1, unitCost: 35000, total: 35000 },
-];
-
-const FINISH_OPTIONS = [
-  { label: "Greenlam Laminate — Matt White", brand: "Greenlam", model: "White Matt", finish: "Laminate", pricePerSheet: 3000 },
-  { label: "Greenlam Laminate — Wooden Oak", brand: "Greenlam", model: "Wooden Oak", finish: "Laminate", pricePerSheet: 3000 },
-  { label: "Merino Laminate — Off White", brand: "Merino", model: "Off White", finish: "Laminate", pricePerSheet: 3200 },
-  { label: "Merino Acrylic — High Gloss White", brand: "Merino", model: "High Gloss White", finish: "Acrylic", pricePerSheet: 4500 },
-  { label: "Rehau Acrylic — Champagne", brand: "Rehau", model: "Champagne Gloss", finish: "Acrylic", pricePerSheet: 5200 },
-  { label: "Thermo Laminate — Off White", brand: "Thermo", model: "Off White", finish: "Thermo Laminate", pricePerSheet: 5500 },
-  { label: "Duropal HPL — Anthracite", brand: "Duropal", model: "Anthracite", finish: "HPL", pricePerSheet: 4800 },
-];
 
 function SmartEstimateGenerator({
   projectId, estimateId, disabled, onGenerated, onError,
@@ -1312,58 +1398,51 @@ function SmartEstimateGenerator({
   onGenerated: () => Promise<void>;
   onError: (msg: string) => void;
 }) {
-  const [selPlywood, setSelPlywood] = useState("");
-  const [selHardware, setSelHardware] = useState("");
-  const [selKitchenAcc, setSelKitchenAcc] = useState("");
-  const [selFinish, setSelFinish] = useState("");
   const [generating, setGenerating] = useState(false);
+  // Fetch real items from catalogue
+  const itemsQuery = useApiData(() => itemsApi.list({}), []);
+  const masterItems: Item[] = itemsQuery.data?.results ?? [];
 
-  const canGenerate = selPlywood && selHardware && selKitchenAcc && selFinish;
+  // Group items by category
+  const grouped = useMemo(() => {
+    const map = new Map<string, Item[]>();
+    masterItems.forEach(item => {
+      const cat = item.category_name || "Other";
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat)!.push(item);
+    });
+    return Array.from(map.entries());
+  }, [masterItems]);
+
+  // Track selected items with area + qty overrides
+  const [selected, setSelected] = useState<Map<number, { area: string; qty: number }>>(new Map());
+
+  const toggle = (item: Item) => {
+    setSelected(prev => {
+      const next = new Map(prev);
+      if (next.has(item.id)) next.delete(item.id);
+      else next.set(item.id, { area: item.default_room || "", qty: parseFloat(item.default_qty) || 1 });
+      return next;
+    });
+  };
+
+  const update = (id: number, patch: Partial<{ area: string; qty: number }>) => {
+    setSelected(prev => {
+      const next = new Map(prev);
+      const existing = next.get(id);
+      if (existing) next.set(id, { ...existing, ...patch });
+      return next;
+    });
+  };
 
   const generate = async () => {
-    if (!canGenerate) return;
+    if (selected.size === 0) return;
     setGenerating(true);
     try {
-      const ply = PLYWOOD_OPTIONS.find(o => o.label === selPlywood)!;
-      const hw = HARDWARE_OPTIONS.find(o => o.label === selHardware)!;
-      const kac = KITCHEN_ACC_OPTIONS.find(o => o.label === selKitchenAcc)!;
-      const fin = FINISH_OPTIONS.find(o => o.label === selFinish)!;
-
-      // Generate plywood items for common areas
-      const rooms = ["Living Room", "Kitchen", "Master Bedroom", "Bedroom 2", "Bedroom 3"];
-      for (const room of rooms) {
-        const sheets = room === "Kitchen" ? 11 : room === "Master Bedroom" ? 8 : 4;
-        await estimatesApi.addItem(projectId, estimateId, {
-          area: room, item: `Core Material ${ply.thick} BWP Ply - ${ply.brand} ${ply.model}`,
-          qty: sheets, unit: "Sheets", rate: ply.price, gst_pct: 18,
-        });
-      }
-
-      // Hardware items
-      const hwRooms = ["Kitchen", "Master Bedroom", "Bedroom 2", "Living Room"];
-      for (const room of hwRooms) {
-        const qty = room === "Kitchen" ? 20 : room === "Master Bedroom" ? 12 : 6;
-        await estimatesApi.addItem(projectId, estimateId, {
-          area: room, item: `${hw.brand} ${hw.model}`,
-          qty, unit: "Sets", rate: hw.unitCost, gst_pct: 18,
-        });
-      }
-
-      // Kitchen accessories
-      await estimatesApi.addItem(projectId, estimateId, {
-        area: "Kitchen", item: `${kac.brand} ${kac.model}`,
-        qty: kac.qty, unit: "Nos", rate: kac.unitCost, gst_pct: 18,
-      });
-
-      // Finishing for all rooms
-      for (const room of rooms) {
-        const sheets = room === "Kitchen" ? 6 : room === "Master Bedroom" ? 4 : 2;
-        await estimatesApi.addItem(projectId, estimateId, {
-          area: room, item: `Finishing ${fin.finish} - ${fin.brand} ${fin.model}`,
-          qty: sheets, unit: "Sheets", rate: fin.pricePerSheet, gst_pct: 18,
-        });
-      }
-
+      const selections = [...selected.entries()].map(([item_id, v]) => ({
+        item_id, area: v.area, qty: v.qty,
+      }));
+      await estimatesApi.addFromCatalog(projectId, estimateId, selections);
       await onGenerated();
     } catch (e) {
       onError(e instanceof ApiError ? e.message : "Failed to generate estimate.");
@@ -1372,115 +1451,81 @@ function SmartEstimateGenerator({
     }
   };
 
-  const ddCls = "w-full px-3 py-2.5 border rounded-xl text-[11px] outline-none cursor-pointer transition-colors";
-
   return (
     <div className="mb-4 bg-gradient-to-br from-nicara-dark to-[#2a1f18] rounded-2xl overflow-hidden border border-stone-700">
       {/* Header */}
       <div className="px-5 py-3 border-b border-stone-700">
         <div className="text-[14px] font-bold text-white flex items-center gap-2">
-          Smart Estimate Generator
+          <Brain size={16} /> Smart Estimate Generator
         </div>
         <div className="text-[11px] text-stone-400 mt-0.5">
-          Select your material preferences — we&apos;ll generate the estimate automatically
+          Select items for a typical scope — each item auto-populates its full material breakdown (BOM) from the catalogue
         </div>
       </div>
 
-      {/* Material preference selectors */}
-      <div className="grid grid-cols-4 gap-3 p-5">
-        {/* Plywood */}
-        <div>
-          <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
-            Plywood
+      {/* Items grouped by category */}
+      <div className="max-h-[380px] overflow-y-auto">
+        {itemsQuery.loading && <div className="p-4 text-center text-stone-400 text-[11px]">Loading catalogue…</div>}
+        {grouped.map(([cat, items]) => (
+          <div key={cat}>
+            <div className="px-5 py-1.5 bg-stone-800/60 text-[10px] font-bold text-stone-300 uppercase tracking-wider border-b border-stone-700">
+              {items[0]?.category_icon} {cat} ({items.length})
+            </div>
+            {items.map(item => {
+              const picked = selected.get(item.id);
+              const dims = [item.default_length, item.default_breadth, item.default_height].filter(d => d && d !== "—" && d !== "-").join(" × ");
+              return (
+                <div key={item.id}
+                  className={`flex items-center gap-3 px-5 py-2 border-b border-stone-700/50 transition-colors ${
+                    picked ? "bg-nicara-gold/10" : "hover:bg-stone-800/40"
+                  }`}>
+                  <input type="checkbox" checked={!!picked} onChange={() => toggle(item)}
+                    className="w-3.5 h-3.5 accent-nicara-gold cursor-pointer flex-shrink-0" />
+                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => toggle(item)}>
+                    <div className="text-[11px] font-semibold text-white truncate">
+                      {item.name}
+                      {item.catalog_furniture_name && (
+                        <span className="ml-1.5 text-[9px] text-nicara-gold font-normal">⇄ {item.catalog_furniture_name}</span>
+                      )}
+                    </div>
+                    <div className="text-[9px] text-stone-400 truncate">
+                      {dims && <span className="font-mono mr-2">{dims}</span>}
+                      {item.description}
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-nicara-gold font-semibold whitespace-nowrap">
+                    {inr(item.default_rate)}<span className="text-[9px] text-stone-400">/{item.unit}</span>
+                  </div>
+                  {picked && (
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <input value={picked.area} onChange={e => update(item.id, { area: e.target.value })}
+                        placeholder="Room"
+                        className="w-[110px] px-2 py-1 bg-stone-800 border border-stone-600 rounded-lg text-[10px] text-white outline-none focus:border-nicara-gold" />
+                      <input type="number" value={picked.qty}
+                        onChange={e => update(item.id, { qty: parseFloat(e.target.value) || 0 })}
+                        className="w-[50px] px-2 py-1 bg-stone-800 border border-stone-600 rounded-lg text-[10px] text-white font-mono outline-none focus:border-nicara-gold" />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
-          <select value={selPlywood} onChange={e => setSelPlywood(e.target.value)}
-            className={`${ddCls} ${selPlywood ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
-            <option className="text-gray-500 bg-white" value="">Select plywood…</option>
-            {PLYWOOD_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
-          </select>
-          {selPlywood && (() => {
-            const o = PLYWOOD_OPTIONS.find(p => p.label === selPlywood);
-            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.price.toLocaleString()}/{o.perUnit}</div> : null;
-          })()}
-        </div>
-
-        {/* Hardware */}
-        <div>
-          <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
-            Hardware
-          </div>
-          <select value={selHardware} onChange={e => setSelHardware(e.target.value)}
-            className={`${ddCls} ${selHardware ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
-            <option className="text-gray-500 bg-white" value="">Select hardware…</option>
-            {HARDWARE_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
-          </select>
-          {selHardware && (() => {
-            const o = HARDWARE_OPTIONS.find(p => p.label === selHardware);
-            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.unitCost.toLocaleString()}/set</div> : null;
-          })()}
-        </div>
-
-        {/* Kitchen Accessories */}
-        <div>
-          <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
-            Kitchen Acc.
-          </div>
-          <select value={selKitchenAcc} onChange={e => setSelKitchenAcc(e.target.value)}
-            className={`${ddCls} ${selKitchenAcc ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
-            <option className="text-gray-500 bg-white" value="">Select kitchen accessories…</option>
-            {KITCHEN_ACC_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
-          </select>
-          {selKitchenAcc && (() => {
-            const o = KITCHEN_ACC_OPTIONS.find(p => p.label === selKitchenAcc);
-            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.total.toLocaleString()} total</div> : null;
-          })()}
-        </div>
-
-        {/* Finishing */}
-        <div>
-          <div className="text-[10px] font-bold text-stone-300 mb-1.5 flex items-center gap-1">
-            Finishing
-          </div>
-          <select value={selFinish} onChange={e => setSelFinish(e.target.value)}
-            className={`${ddCls} ${selFinish ? "border-nicara-gold bg-nicara-gold/10 text-white" : "border-stone-600 bg-stone-800/50 text-stone-400"}`}>
-            <option className="text-gray-500 bg-white" value="">Select finish…</option>
-            {FINISH_OPTIONS.map(o => <option className="text-black bg-white" key={o.label} value={o.label}>{o.label}</option>)}
-          </select>
-          {selFinish && (() => {
-            const o = FINISH_OPTIONS.find(p => p.label === selFinish);
-            return o ? <div className="text-[9px] text-nicara-gold mt-1">₹{o.pricePerSheet.toLocaleString()}/sheet</div> : null;
-          })()}
-        </div>
+        ))}
       </div>
 
-      {/* Selected preferences summary */}
-      {(selPlywood || selHardware || selKitchenAcc || selFinish) && (
-        <div className="px-5 pb-2">
-          <div className="flex flex-wrap gap-1.5">
-            {[["Plywood", selPlywood], ["Hardware", selHardware],
-            ["Kitchen", selKitchenAcc], ["Finish", selFinish]].map(([label, val]) =>
-              val ? (
-                <span key={label as string} className="px-2.5 py-1 bg-nicara-gold/10 border border-nicara-gold/30 rounded-full text-[9px] font-semibold text-nicara-gold">
-                  {label}: {(val as string).split("—")[0]?.trim() || val}
-                </span>
-              ) : null
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Generate button */}
+      {/* Selected count + Generate */}
       <div className="px-5 py-3 border-t border-stone-700 flex items-center justify-between">
-        {canGenerate ? (
-          <button onClick={generate} disabled={disabled || generating}
-            className="px-6 py-2.5 bg-nicara-gold border-none rounded-xl text-white text-[12px] font-bold cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50">
-            {generating ? "Generating Estimate\u2026" : "Generate Estimate"}
-          </button>
-        ) : (
-          <div className="text-[11px] text-stone-500">
-            Select all 4 material preferences above to enable estimate generation
-          </div>
-        )}
+        <div className="flex flex-wrap gap-1.5">
+          {selected.size > 0 && (
+            <span className="text-[11px] text-stone-300">
+              {selected.size} item(s) selected — each will auto-generate its material breakdown
+            </span>
+          )}
+        </div>
+        <button onClick={generate} disabled={disabled || generating || selected.size === 0}
+          className="px-6 py-2.5 bg-nicara-gold border-none rounded-xl text-white text-[12px] font-bold cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50">
+          {generating ? "Generating…" : `Generate ${selected.size > 0 ? `${selected.size} Item(s)` : "Estimate"}`}
+        </button>
       </div>
     </div>
   );

@@ -123,8 +123,36 @@ class EstimateItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = EstimateItem
-        fields = '__all__'
-        read_only_fields = ['estimate', 'amount']
+        fields = [
+            'id', 'estimate', 'catalog_item', 'catalog_item_code', 'sno',
+            'area', 'zone', 'finishing', 'category', 'subcategory',
+            'item', 'description',
+            # Dimensions ft/in
+            'width_ft', 'width_in', 'height_ft', 'height_in',
+            'depth_ft', 'depth_in',
+            # Legacy dimensions
+            'length', 'breadth', 'height',
+            # Type & spec
+            'item_type', 'specification', 'brand', 'model_name',
+            'application', 'specifications_text', 'estimate_spec_flag',
+            # Qty & pricing
+            'qty', 'unit', 'rate', 'price_unit', 'cost', 'amount',
+            # Margin
+            'margin_pct', 'margin_amount',
+            # Referral
+            'referral_pct', 'referral_amount',
+            # GST & Total
+            'gst_pct', 'gst_amount', 'gst_amount_stored', 'total_amount',
+            'total_with_gst',
+            # Flag & misc
+            'flag', 'remarks', 'config',
+            # Breakdown
+            'components', 'has_components',
+        ]
+        read_only_fields = [
+            'estimate', 'amount', 'cost', 'margin_amount', 'referral_amount',
+            'gst_amount_stored', 'total_amount', 'specifications_text',
+        ]
 
     def validate_qty(self, value):
         if value is not None and value < 0:

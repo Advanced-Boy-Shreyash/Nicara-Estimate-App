@@ -8,7 +8,8 @@ import type {
   BookingForm, CabinetConfig, CatalogMaterial, CatalogMeta, CatalogRoom, CatalogZone, Client,
   CrmMeta, CrmNote, Deliverable, DeliverableType, DesignRequirement, Estimate,
   EstimateItem, EstimateItemComponent, EstimateListItem, EstimatorMeta, EstimatorResult, EstimateType, Furniture, FurniturePart, Item,
-  ItemCategory, ItemMeta, Lead, LeadPipeline, MaterialOption, ModuleRegistry,
+  ItemCategory, ItemMeta, Lead, LeadPipeline, LibraryBrand, LibraryItem, LibraryItemInput, LibraryMeta,
+  MaterialOption, ModuleRegistry,
   MyPermissions, PartMaterial, PermissionMatrixRow, Project, ProjectListItem,
   ProjectMeta, Vendor, VendorMeta,
 } from "@/lib/apiTypes";
@@ -642,8 +643,14 @@ export const estimatorApi = {
 
 export type EstimateItemInput = Partial<
   Pick<EstimateItem, "area" | "zone" | "finishing" | "category" | "subcategory" |
-       "item" | "description" | "length" | "breadth" | "height" | "unit" | "remarks">
-  & { qty: number | string; rate: number | string; gst_pct: number | string }
+       "item" | "description" | "length" | "breadth" | "height" | "unit" | "remarks" |
+       "item_type" | "specification" | "brand" | "model_name" | "application" |
+       "estimate_spec_flag" | "price_unit" | "flag">
+  & { qty: number | string; rate: number | string; gst_pct: number | string;
+      margin_pct?: number | string; referral_pct?: number | string;
+      width_ft?: number; width_in?: number;
+      height_ft?: number; height_in?: number;
+      depth_ft?: number; depth_in?: number }
 >;
 
 export type ComponentInput = Partial<
@@ -950,30 +957,42 @@ export const fileApi = {
   download: (fileId: string) => `${BASE_URL}/files/${fileId}/download/`,
 };
 
-// ── Component Library ─────────────────────────────────────────
+// ── Raw Material Library ──────────────────────────────────────
 
 export const libraryApi = {
-  categories: () => apiFetch<unknown[]>("/library/categories/"),
-  categoryDetail: (id: number) => apiFetch<unknown>(`/library/categories/${id}/`),
-  createCategory: (data: unknown) =>
-    apiFetch<unknown>("/library/categories/", { method: "POST", body: JSON.stringify(data) }),
-  brands: (categoryId?: number) =>
-    apiFetch<unknown[]>(categoryId ? `/library/brands/?category=${categoryId}` : "/library/brands/"),
-  createBrand: (data: unknown) =>
-    apiFetch<unknown>("/library/brands/", { method: "POST", body: JSON.stringify(data) }),
-  items: (brandId?: number) =>
-    apiFetch<unknown[]>(brandId ? `/library/items/?brand=${brandId}` : "/library/items/"),
-  createItem: (data: unknown) =>
-    apiFetch<unknown>("/library/items/", { method: "POST", body: JSON.stringify(data) }),
-  updateItem: (id: number, data: unknown) =>
-    apiFetch<unknown>(`/library/items/${id}/`, { method: "PUT", body: JSON.stringify(data) }),
+  /** Dropdown data: categories, brands, units, counts. */
+  meta: () => apiFetch<LibraryMeta>("/library/meta/"),
+
+  /** Paginated list of MaterialItems with optional filters/search. */
+  items: (params?: { search?: string; category?: number; brand?: number; is_active?: boolean }) => {
+    const q = new URLSearchParams();
+    if (params?.search) q.set("search", params.search);
+    if (params?.category !== undefined) q.set("brand__category", String(params.category));
+    if (params?.brand !== undefined) q.set("brand", String(params.brand));
+    if (params?.is_active !== undefined) q.set("is_active", params.is_active ? "true" : "false");
+    const qs = q.toString();
+    return apiFetch<Paginated<LibraryItem>>(`/library/items/${qs ? `?${qs}` : ""}`);
+  },
+
+  createItem: (data: LibraryItemInput) =>
+    apiFetch<LibraryItem>("/library/items/", { method: "POST", body: JSON.stringify(data) }),
+
+  updateItem: (id: number, data: Partial<LibraryItemInput>) =>
+    apiFetch<LibraryItem>(`/library/items/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+
   deleteItem: (id: number) =>
     apiFetch<void>(`/library/items/${id}/`, { method: "DELETE" }),
-  services: () => apiFetch<unknown[]>("/library/services/"),
-  createService: (data: unknown) =>
-    apiFetch<unknown>("/library/services/", { method: "POST", body: JSON.stringify(data) }),
-  updateService: (id: number, data: unknown) =>
-    apiFetch<unknown>(`/library/services/${id}/`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteService: (id: number) =>
-    apiFetch<void>(`/library/services/${id}/`, { method: "DELETE" }),
+
+  // ── Brands CRUD ───────────────────────────────────────────────
+  brands: (categoryId?: number) =>
+    apiFetch<Paginated<LibraryBrand>>(categoryId ? `/library/brands/?category=${categoryId}` : "/library/brands/"),
+
+  createBrand: (data: { name: string; category: number }) =>
+    apiFetch<LibraryBrand>("/library/brands/", { method: "POST", body: JSON.stringify(data) }),
+
+  updateBrand: (id: number, data: Partial<LibraryBrand>) =>
+    apiFetch<LibraryBrand>(`/library/brands/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+
+  deleteBrand: (id: number) =>
+    apiFetch<void>(`/library/brands/${id}/`, { method: "DELETE" }),
 };

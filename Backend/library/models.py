@@ -70,6 +70,13 @@ class MaterialItem(models.Model):
     brand = models.ForeignKey(MaterialBrand, on_delete=models.CASCADE, related_name='items')
     model_name = models.CharField(max_length=200, help_text='Product model/variant name')
     description = models.TextField(blank=True, default='')
+    # Physical dimensions / specs
+    weight = models.CharField(max_length=50, blank=True, default='',
+                              help_text='e.g. 2.5 kg, 500g')
+    length = models.CharField(max_length=50, blank=True, default='',
+                              help_text='e.g. 8ft, 2440mm')
+    thickness = models.CharField(max_length=50, blank=True, default='',
+                                 help_text='e.g. 16mm, 18mm')
     default_unit = models.CharField(max_length=20, default='nos',
                                      help_text='sheets, sets, nos, sft, kg, rft')
     default_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0,

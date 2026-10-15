@@ -6,11 +6,19 @@ from .models import MaterialCategory, MaterialBrand, MaterialItem, ServiceItem
 class MaterialItemSerializer(serializers.ModelSerializer):
     brand_name = serializers.CharField(source='brand.name', read_only=True)
     category_name = serializers.CharField(source='brand.category.name', read_only=True)
+    category_id = serializers.IntegerField(source='brand.category.id', read_only=True)
+    category_icon = serializers.CharField(source='brand.category.icon', read_only=True)
     full_display = serializers.CharField(read_only=True)
 
     class Meta:
         model = MaterialItem
-        fields = '__all__'
+        fields = [
+            'id', 'brand', 'brand_name', 'category_id', 'category_name', 'category_icon',
+            'model_name', 'description', 'weight', 'length', 'thickness',
+            'default_unit', 'default_rate', 'gst_pct', 'margin_pct',
+            'is_active', 'notes', 'image', 'created_at', 'updated_at',
+            'full_display',
+        ]
 
 
 class MaterialBrandSerializer(serializers.ModelSerializer):

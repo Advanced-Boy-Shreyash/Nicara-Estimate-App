@@ -3,6 +3,7 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    path('meta/', views.LibraryMetaView.as_view(), name='library-meta'),
     path('categories/', views.MaterialCategoryListCreateView.as_view(), name='category-list'),
     path('categories/<int:pk>/', views.MaterialCategoryDetailView.as_view(), name='category-detail'),
     path('brands/', views.MaterialBrandListCreateView.as_view(), name='brand-list'),
