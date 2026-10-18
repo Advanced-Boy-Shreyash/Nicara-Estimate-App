@@ -12,6 +12,7 @@ NICARA Catalogue — Views  (mounted at /api/catalog/, module 'catalog')
     tree/                  the whole hierarchy for a drill-down UI
 """
 from django.db.models import Count, Q
+from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -19,10 +20,11 @@ from rest_framework.views import APIView
 from accounts.permissions import HasModulePermission
 
 from .models import (
-    Furniture, FurniturePart, Material, MaterialOption, PartMaterial, Room, Zone,
+    Furniture, FurnitureItemComponent, FurniturePart, Material, MaterialOption,
+    PartMaterial, Room, Zone,
 )
 from .serializers import (
-    FurnitureListSerializer, FurniturePartSerializer, FurnitureSerializer,
+    FurnitureItemComponentSerializer, FurnitureListSerializer, FurniturePartSerializer, FurnitureSerializer,
     MaterialListSerializer, MaterialOptionSerializer, MaterialSerializer,
     PartMaterialSerializer, RoomSerializer, ZoneSerializer,
 )
@@ -150,7 +152,13 @@ class FurnitureDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         return (Furniture.objects
                 .annotate(part_count=Count('parts', filter=Q(parts__is_active=True)))
-                .prefetch_related('rooms', 'parts__materials__material'))
+                .prefetch_related(
+                    'rooms', 'parts__materials__material',
+                    'parts__materials__default_option',
+                    'item_components__item__components__material_item__category',
+                    'item_components__item__components__material_item__brand',
+                    'item_components__item__components__service_item',
+                ))
 
     def perform_destroy(self, instance):
         instance.is_active = False
@@ -191,6 +199,33 @@ class PartMaterialDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView)
     queryset = PartMaterial.objects.all()
 
 
+class FurnitureItemComponentListCreateView(CatalogView, generics.ListCreateAPIView):
+    serializer_class = FurnitureItemComponentSerializer
+
+    def get_queryset(self):
+        return FurnitureItemComponent.objects.filter(
+            furniture_id=self.kwargs['furniture_id'],
+        ).select_related('item').prefetch_related('item__components')
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['furniture'] = get_object_or_404(Furniture, pk=self.kwargs['furniture_id'])
+        return context
+
+    def perform_create(self, serializer):
+        serializer.save(furniture_id=self.kwargs['furniture_id'])
+
+
+class FurnitureItemComponentDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = FurnitureItemComponentSerializer
+    queryset = FurnitureItemComponent.objects.select_related('item', 'furniture')
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['furniture'] = self.get_object().furniture
+        return context
+
+
 # ── Meta & tree ─────────────────────────────────────────────
 
 UNIT_CHOICES = ['nos', 'set', 'sft', 'rft', 'sqm', 'sheets', 'kg', 'litre', 'lot', 'lumpsum']
@@ -222,7 +257,10 @@ class CatalogTreeView(CatalogView, APIView):
         room_id = request.query_params.get('room')
 
         furniture_qs = Furniture.objects.filter(is_active=True).prefetch_related(
-            'rooms', 'parts__materials__material', 'parts__materials__default_option'
+            'rooms', 'parts__materials__material', 'parts__materials__default_option',
+            'item_components__item__components__material_item__category',
+            'item_components__item__components__material_item__brand',
+            'item_components__item__components__service_item',
         )
         if room_id:
             furniture_qs = furniture_qs.filter(

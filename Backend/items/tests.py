@@ -151,12 +151,46 @@ class ItemComponentTests(APITestCase):
     def test_suggested_rate_is_zero_without_a_bom(self):
         self.assertEqual(self.item.suggested_rate, Decimal('0'))
 
+    def test_plan_area_component_uses_width_and_depth(self):
+        item = Item.objects.create(
+            name='TV Unit with Ledge', category=self.category,
+            default_length="8'0\"", default_breadth="1'0\"", default_height="1'3\"",
+        )
+        component = ItemComponent.objects.create(
+            item=item, material_item=self.ply, qty_per_unit=Decimal('2'),
+            quantity_basis=ItemComponent.QuantityBasis.PLAN_AREA,
+            unit='sft',
+        )
+
+        self.assertEqual(component.quantity_factor, Decimal('8'))
+        self.assertEqual(component.line_cost, Decimal('1600'))
+
     def test_rate_override_wins_over_library_rate(self):
         component = ItemComponent.objects.create(
             item=self.item, material_item=self.ply,
             qty_per_unit=Decimal('1'), rate_override=Decimal('250'),
         )
         self.assertEqual(component.effective_rate, Decimal('250'))
+
+    def test_brandless_raw_material_is_available_to_smart_estimate(self):
+        category = MaterialCategory.objects.create(
+            name='Fasteners', product_group=MaterialCategory.ProductGroup.HARDWARE,
+        )
+        material = MaterialItem.objects.create(
+            category=category, brand=None, model_name='Screws',
+            default_rate=Decimal('2.50'), default_unit='nos',
+        )
+
+        response = self.client.get(reverse('smart-estimate-options'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        screws = next(option for option in response.data['hardware'] if option['id'] == material.id)
+        self.assertEqual(screws['brand'], '')
+        self.assertEqual(Decimal(str(screws['price'])), Decimal('2.50'))
+        library_response = self.client.get('/api/library/items/', {'category': category.id})
+        self.assertEqual(library_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(library_response.data['results'][0]['brand'], None)
+        self.assertEqual(library_response.data['results'][0]['category_name'], 'Fasteners')
 
     def test_component_needs_a_link_or_a_label(self):
         res = self.client.post(

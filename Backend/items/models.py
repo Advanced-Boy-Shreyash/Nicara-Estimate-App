@@ -8,11 +8,12 @@ either created from an Item (carrying its defaults) or typed free-hand.
                                             └─> library.ServiceItem
 
 `ItemComponent` is the bill of materials that will eventually drive rate
-build-up (ply + laminate + hardware + labour → cost → margin → rate). The
-structure is in place now; the costing engine is deliberately not — rates are
-entered directly on the Item until that lands.
+build-up (ply + laminate + hardware + labour → cost → margin → rate). Component
+rates are sourced from the Raw Material Library, with item dimensions and
+wastage applied when calculating a BOM.
 """
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+import re
 
 from django.db import models
 from django.utils import timezone
@@ -180,6 +181,13 @@ class ItemComponent(models.Model):
         MATERIAL = 'material', 'Material'
         SERVICE = 'service', 'Service / Labour'
 
+    class QuantityBasis(models.TextChoices):
+        PER_UNIT = 'per_unit', 'Per unit'
+        AREA = 'area', 'Scale by area'
+        PLAN_AREA = 'plan_area', 'Scale by width × depth'
+        LENGTH = 'length', 'Scale by length'
+        VOLUME = 'volume', 'Scale by volume'
+
     item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='components')
     component_type = models.CharField(max_length=20, choices=ComponentType.choices,
                                       default=ComponentType.MATERIAL)
@@ -194,6 +202,9 @@ class ItemComponent(models.Model):
     label = models.CharField(max_length=200, blank=True, default='',
                              help_text='Free-text name when no library record is linked')
     qty_per_unit = models.DecimalField(max_digits=10, decimal_places=3, default=1)
+    quantity_basis = models.CharField(
+        max_length=20, choices=QuantityBasis.choices, default=QuantityBasis.PER_UNIT,
+    )
     unit = models.CharField(max_length=20, default='nos')
     rate_override = models.DecimalField(
         max_digits=12, decimal_places=2, null=True, blank=True,
@@ -228,9 +239,55 @@ class ItemComponent(models.Model):
         return Decimal('0')
 
     @property
+    def quantity_factor(self):
+        if self.quantity_basis == self.QuantityBasis.PER_UNIT:
+            return Decimal('1')
+        length = dimension_in_feet(self.item.default_length)
+        breadth = dimension_in_feet(self.item.default_breadth)
+        height = dimension_in_feet(self.item.default_height)
+        if self.quantity_basis == self.QuantityBasis.LENGTH:
+            if not length:
+                raise ValueError(f'{self.item.name} needs a default length for length-based BOM quantities.')
+            return length
+        if self.quantity_basis == self.QuantityBasis.AREA:
+            if not length or not height:
+                raise ValueError(f'{self.item.name} needs default length and height for area-based BOM quantities.')
+            return length * height
+        if self.quantity_basis == self.QuantityBasis.PLAN_AREA:
+            if not length or not breadth:
+                raise ValueError(f'{self.item.name} needs default length and depth for width × depth BOM quantities.')
+            return length * breadth
+        if not length or not breadth or not height:
+            raise ValueError(f'{self.item.name} needs default dimensions for volume-based BOM quantities.')
+        return length * breadth * height
+
+    @property
     def line_cost(self):
         # Decimal throughout — `or 0` would hand back an int for Decimal('0.00')
         # and the subsequent division would silently produce a float.
         qty = self.qty_per_unit or Decimal('0')
         wastage = self.wastage_pct or Decimal('0')
-        return qty * (Decimal('1') + wastage / Decimal('100')) * self.effective_rate
+        return (
+            qty * (Decimal('1') + wastage / Decimal('100'))
+            * self.quantity_factor * self.effective_rate
+        )
+
+
+def dimension_in_feet(value):
+    """Parse common designer dimensions such as 8'0", 96 inches, or 8ft."""
+    if not value:
+        return Decimal('0')
+    text = str(value).strip().lower()
+    match = re.fullmatch(
+        r"\s*(?:(\d+(?:\.\d+)?)\s*(?:'|ft|feet))?\s*"
+        r"(?:(\d+(?:\.\d+)?)\s*(?:\"|in|inch|inches))?\s*",
+        text,
+    )
+    if match:
+        feet = Decimal(match.group(1) or '0')
+        inches = Decimal(match.group(2) or '0')
+        return feet + inches / Decimal('12')
+    try:
+        return Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError(f'Invalid dimension value: {value}') from exc

@@ -424,18 +424,23 @@ def _option(material_name, *, detail=None, detail_startswith=None, brand_model=N
     from catalog.models import Material, MaterialOption
 
     if option_id:
-        opt = MaterialOption.objects.select_related('material').filter(pk=option_id, is_active=True).first()
+        opt = MaterialOption.objects.select_related('material', 'library_item').filter(
+            pk=option_id, is_active=True,
+        ).first()
         if opt and (not units or opt.unit.lower() in units):
             return opt.material, opt
     material = Material.objects.filter(name__iexact=material_name).first()
     if not material:
         return None, None
-    qs = material.options.filter(is_active=True)
+    qs = material.options.filter(is_active=True).select_related('library_item')
     if detail:
         qs = qs.filter(detail__iexact=detail)
     if detail_startswith:
         qs = qs.filter(detail__istartswith=detail_startswith)
-    candidates = [o for o in qs.order_by('price') if not units or o.unit.lower() in units]
+    candidates = sorted(
+        (o for o in qs.select_related('library_item') if not units or o.unit.lower() in units),
+        key=lambda option: option.effective_price,
+    )
     if brand_model:
         preferred = [o for o in candidates
                      if f'{o.brand} {o.model_no}'.strip().lower() == brand_model.lower()]
@@ -488,7 +493,7 @@ def calculate(config=None, hint=None):
     for thick, p in q['plywood'].items():
         material, option = _option('Plywood', detail=f'{thick}mm Plywood', brand_model=c['ply_brand'])
         if option:
-            per_sft = option.price if option.unit.lower() == 'sft' else option.price / Decimal(str(_size_sft(option.size)))
+            per_sft = option.effective_price if option.unit.lower() == 'sft' else option.effective_price / Decimal(str(_size_sft(option.size)))
         else:
             per_sft = Decimal(str(RULES['fallback_rates']['plywood_sft'].get(thick, 100)))
         rows.append(_row(
@@ -501,13 +506,13 @@ def calculate(config=None, hint=None):
     # ── Hardware
     if q['hinges']:
         material, option = _option('Hardware', detail_startswith='Hinge', option_id=sel.get('hinge'))
-        price, unit = (option.price, option.unit) if option else _fallback('Hinge')
+        price, unit = (option.effective_price, option.unit) if option else _fallback('Hinge')
         rows.append(_row('hinge', 'Hinge', 'Soft-close box hinge', material, option, q['hinges'], unit, price,
                          f"{c['doors']} door(s) × {q['hinges_per_door']} hinges"
                          f" (door height {q['door_height']:.0f}mm){units_note}"))
     if q['slides']:
         material, option = _option('Drawer Channel', option_id=sel.get('channel'))
-        price, unit = (option.price, option.unit) if option else _fallback('Drawer Channel')
+        price, unit = (option.effective_price, option.unit) if option else _fallback('Drawer Channel')
         per_set = RULES['slides_per_channel_set'] if unit.lower() in ('set', 'pair') else 1
         rows.append(_row('channel', 'Drawer Channel', 'Telescopic channel', material, option,
                          q['slides'] / per_set, unit, price,
@@ -515,12 +520,12 @@ def calculate(config=None, hint=None):
                          f"= {q['slides']} slides" + (f" = {q['slides'] // per_set} set(s) of {per_set}" if per_set > 1 else '')))
     if q['handles']:
         material, option = _option('Handle', option_id=sel.get('handle'))
-        price, unit = (option.price, option.unit) if option else _fallback('Handle')
+        price, unit = (option.effective_price, option.unit) if option else _fallback('Handle')
         rows.append(_row('handle', 'Handle', option.detail if option else 'Cabinet handle', material, option,
                          q['handles'], unit, price,
                          f"{c['doors']} door(s) + {c['drawers']} drawer(s), 1 each{units_note}"))
     material, option = _option('Screws')
-    price, unit = (option.price, option.unit) if option else _fallback('Screws')
+    price, unit = (option.effective_price, option.unit) if option else _fallback('Screws')
     per_box = RULES['screws_per_box'] if unit.lower() == 'box' else 1
     rows.append(_row('screws', 'Screws', 'Nails and screws', material, option, q['screws'] / per_box, unit, price,
                      f"({q['carcass_panels']} panels × {RULES['screws_per_carcass_panel']}"
@@ -528,7 +533,7 @@ def calculate(config=None, hint=None):
                      f" + hinges × {RULES['screws_per_hinge']} + slides × {RULES['screws_per_slide']}){units_note}"
                      f" = {q['screws']} screws" + (f" ÷ {per_box} per box" if per_box > 1 else '')))
     material, option = _option('Edge Band')
-    price, unit = (option.price, option.unit) if option else _fallback('Edge Band')
+    price, unit = (option.effective_price, option.unit) if option else _fallback('Edge Band')
     edge_qty = q['edge_mm'] / (1000 if unit.lower() in ('m', 'mtr', 'metre') else MM_PER_FT)
     rows.append(_row('edge_band', 'Edge Band', 'PVC edge band 22×2mm', material, option, edge_qty, unit, price,
                      f"exposed carcass + shutter edges{units_note} + {RULES['edge_band_wastage_pct']}% wastage"))
@@ -540,14 +545,14 @@ def calculate(config=None, hint=None):
         area = q['shutter_sft']
         if finish == 'polish':
             material, option = _option('Polish', option_id=sel.get('finish'), units={'sft'})
-            price, unit = (option.price, option.unit) if option else _fallback('Polish')
+            price, unit = (option.effective_price, option.unit) if option else _fallback('Polish')
             rows.append(_row('finish', 'Polish', option.detail if option else 'Melamine / PU polish',
                              material, option, area, 'sft', price,
                              f"{area:.2f} sft shutter faces{units_note}"
                              + ('' if option else ' — per-sft polish rate not in the supplier sheet')))
         else:
             material, option = _option(name, option_id=sel.get('finish'))
-            price, unit = (option.price, option.unit) if option else _fallback(name)
+            price, unit = (option.effective_price, option.unit) if option else _fallback(name)
             if unit.lower() == 'sft':
                 qty, basis = area, f"{area:.2f} sft shutter faces{units_note}"
             else:
@@ -557,7 +562,7 @@ def calculate(config=None, hint=None):
                          f"= {qty:.2f} sheet (procure {math.ceil(qty - 1e-9)})")
             rows.append(_row('finish', name, f'{name} on shutters', material, option, qty, unit, price, basis))
             material, option = _option('Adhesive')
-            price, unit = (option.price, option.unit) if option else _fallback('Adhesive')
+            price, unit = (option.effective_price, option.unit) if option else _fallback('Adhesive')
             kg = area / RULES['finish_sheet_sft'] * RULES['adhesive_kg_per_sheet']
             rows.append(_row('adhesive', 'Adhesive', 'Bonding adhesive', material, option, kg, unit, price,
                              f"{RULES['adhesive_kg_per_sheet']} kg per {RULES['finish_sheet_sft']} sft of finish"))
@@ -620,11 +625,18 @@ def meta():
 
     def options_for(material, **filters):
         qs = MaterialOption.objects.filter(material__name=material, is_active=True, **filters)
+        ordered = sorted(
+            qs.select_related('library_item'),
+            key=lambda option: (
+                option.source != MaterialOption.Source.SUPPLIER_SHEET,
+                option.effective_price,
+            ),
+        )
         return [{'id': o.id, 'unit': o.unit,
                  'label': ' '.join(x for x in [o.brand, o.model_no, '—', o.detail, o.size] if x)
-                          + f' (₹{o.price:,.0f}/{o.unit})',
+                          + f' (₹{o.effective_price:,.0f}/{o.unit})',
                  'supplier_sheet': o.source == MaterialOption.Source.SUPPLIER_SHEET}
-                for o in qs.order_by('-source', 'price')]
+                for o in ordered]
 
     ply_brands = sorted({f'{o.brand} {o.model_no}'.strip()
                          for o in MaterialOption.objects.filter(material__name='Plywood', is_active=True)})

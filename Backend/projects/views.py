@@ -6,33 +6,36 @@ import os
 import re
 
 from django.db import transaction
+from django.db.models import Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, permissions, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from decimal import Decimal
 
 from catalog import estimator
-from catalog.models import Furniture as CatalogFurniture
-from items.models import Item
+from catalog.models import Furniture as CatalogFurniture, MaterialOption
+from items.models import Item, ItemComponent, dimension_in_feet
 from items.serializers import AddItemsToEstimateSerializer
+from library.models import MaterialItem as LibraryMaterialItem
 from nicara.media import build_derivatives
 
 from .exports import booking_pdf, estimate_pdf, estimate_xlsx
 
 from .models import (
-    BookingForm, Project, DesignRequirement, ProjectDeliverable, Estimate,
+    BookingForm, Project, DesignRequirement, ProjectFloorPlan, ProjectDeliverable, Estimate,
     EstimateItem, EstimateItemComponent, Measurement, MaterialSelection,
     ExecutionStage, PaymentMilestone, QualityCheck,
 )
 from .serializers import (
     BookingFormSerializer, ProjectListSerializer, ProjectDetailSerializer,
     DeliverableReviewSerializer, DesignRequirementBulkSerializer,
-    DesignRequirementSerializer, ProjectDeliverableSerializer,
+    DesignRequirementSerializer, ProjectFloorPlanSerializer, ProjectDeliverableSerializer,
     EstimateSerializer, EstimateListSerializer, EstimateItemSerializer,
     EstimateItemComponentSerializer,
     MeasurementSerializer, MaterialSelectionSerializer,
@@ -165,6 +168,56 @@ class DesignRequirementBulkView(APIView):
             DesignRequirementSerializer(created, many=True).data,
             status=status.HTTP_200_OK,
         )
+
+
+class ProjectFloorPlanListCreateView(generics.ListCreateAPIView):
+    """List or upload floor-plan files for one project."""
+    serializer_class = ProjectFloorPlanSerializer
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_queryset(self):
+        return ProjectFloorPlan.objects.filter(project_id=self.kwargs['project_id'])
+
+    def create(self, request, *args, **kwargs):
+        project = get_object_or_404(Project, pk=self.kwargs['project_id'])
+        files = request.FILES.getlist('files')
+        if not files:
+            return Response(
+                {'detail': 'Select at least one floor-plan file.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        upload_serializers = [
+            self.get_serializer(data={'file': file})
+            for file in files
+        ]
+        for serializer in upload_serializers:
+            serializer.is_valid(raise_exception=True)
+
+        created = []
+        with transaction.atomic():
+            for file, serializer in zip(files, upload_serializers):
+                created.append(serializer.save(
+                    project=project,
+                    file_name=os.path.basename(file.name)[:255],
+                    file_size=file.size,
+                ))
+
+        return Response(
+            self.get_serializer(created, many=True).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ProjectFloorPlanDetailView(generics.RetrieveDestroyAPIView):
+    serializer_class = ProjectFloorPlanSerializer
+
+    def get_queryset(self):
+        return ProjectFloorPlan.objects.filter(project_id=self.kwargs['project_id'])
+
+    def perform_destroy(self, instance):
+        instance.file.delete(save=False)
+        instance.delete()
 
 
 # ── Deliverables (FL, MB, 3D, Renders, WD) ────────────────
@@ -465,6 +518,114 @@ class EstimateDuplicateView(EstimateActionView):
         return Response(EstimateSerializer(clone).data, status=status.HTTP_201_CREATED)
 
 
+class EstimateApplySmartMaterialsView(EstimateActionView):
+    """Apply selected brands/models to matching estimate breakdown components."""
+
+    def post(self, request, project_id, pk):
+        estimate = self.get_estimate()
+        materials_pref = request.data.get('materials', [])
+
+        with transaction.atomic():
+            components = EstimateItemComponent.objects.filter(estimate_item__estimate=estimate)
+
+            for pref in materials_pref:
+                basic = pref.get('basic_component')
+                brand = pref.get('brand')
+                model = pref.get('model')
+                library_item_id = pref.get('library_item_id')
+                product_group = pref.get('product_group')
+
+                if not library_item_id and (not basic or not brand or not model):
+                    continue
+
+                library_item = None
+                if library_item_id:
+                    library_item = LibraryMaterialItem.objects.select_related(
+                        'category', 'brand',
+                    ).filter(pk=library_item_id, is_active=True).first()
+                    if library_item is None:
+                        return Response(
+                            {'detail': f'Unknown or inactive library material id: {library_item_id}.'},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    product_group = product_group or library_item.category.product_group
+
+                matching_comps = components.none()
+                if library_item:
+                    matching_comps = components.filter(
+                        Q(library_material_item__category__product_group=product_group)
+                        | Q(catalog_option__library_item__category__product_group=product_group)
+                    )
+                    category_name = library_item.category.name.lower()
+                    if product_group == 'finishing':
+                        finish_type = 'laminate' if 'laminate' in category_name else (
+                            'acrylic' if 'acrylic' in category_name else ''
+                        )
+                        if finish_type:
+                            matching_comps = matching_comps.filter(
+                                Q(basic_component__icontains=finish_type)
+                                | Q(library_material_item__category__name__icontains=finish_type)
+                                | Q(catalog_option__library_item__category__name__icontains=finish_type)
+                            )
+                    if not matching_comps.exists():
+                        aliases = {
+                            'plywood': ('ply',),
+                            'hardware': ('hardware', 'hinge', 'channel', 'handle'),
+                            'kitchen_accessories': ('accessor', 'basket', 'pull'),
+                            'finishing': ('laminate', 'acrylic', 'finish'),
+                        }.get(product_group, ())
+                        if product_group == 'finishing':
+                            if 'laminate' in category_name:
+                                aliases = ('laminate',)
+                            elif 'acrylic' in category_name:
+                                aliases = ('acrylic',)
+                        predicate = Q(basic_component__iexact=basic or '')
+                        for alias in aliases:
+                            predicate |= Q(basic_component__icontains=alias)
+                        matching_comps = components.filter(predicate)
+                else:
+                    matching_comps = components.filter(basic_component__iexact=basic)
+
+                for comp in matching_comps:
+                    comp.brand = library_item.brand.name if library_item and library_item.brand_id else (brand or '')
+                    comp.model = library_item.model_name if library_item else model
+
+                    option = None
+                    if library_item:
+                        option = MaterialOption.objects.filter(
+                            library_item=library_item,
+                            material__is_active=True,
+                        ).order_by('price').first()
+                    else:
+                        option = MaterialOption.objects.filter(
+                            material__name__iexact=basic,
+                            brand__iexact=brand,
+                            model_no__iexact=model,
+                            detail__icontains=comp.detail,
+                        ).order_by('price').first()
+
+                    if not option:
+                        if not library_item:
+                            option = MaterialOption.objects.filter(
+                                material__name__iexact=basic,
+                                brand__iexact=brand,
+                                model_no__iexact=model,
+                            ).order_by('price').first()
+
+                    if option:
+                        comp.price = option.effective_price
+                        comp.catalog_option = option
+                    elif library_item:
+                        comp.price = library_item.default_rate
+                        comp.catalog_option = None
+                    if library_item:
+                        comp.library_material_item = library_item
+
+                    comp.save()
+
+        return self.responded(estimate)
+
+
 class EstimateItemListCreateView(generics.ListCreateAPIView):
     """GET/POST /api/projects/{project_id}/estimates/{estimate_id}/items/"""
     serializer_class = EstimateItemSerializer
@@ -494,7 +655,9 @@ class EstimateAddFromCatalogView(APIView):
     `item_id` overrides them.
     """
     OVERRIDABLE = {'area', 'item', 'description', 'length', 'breadth', 'height',
-                   'qty', 'unit', 'rate', 'gst_pct', 'remarks'}
+                   'qty', 'unit', 'rate', 'gst_pct', 'remarks',
+                   'width_ft', 'width_in', 'height_ft', 'height_in',
+                   'depth_ft', 'depth_in'}
 
     def post(self, request, project_id, estimate_id):
         estimate = get_object_or_404(Estimate, pk=estimate_id, project_id=project_id)
@@ -502,7 +665,15 @@ class EstimateAddFromCatalogView(APIView):
         serializer.is_valid(raise_exception=True)
 
         entries = serializer.validated_data['items']
-        catalog = Item.objects.in_bulk([e['item_id'] for e in entries])
+        catalog = Item.objects.prefetch_related(
+            'components__material_item__category', 'components__material_item__brand',
+            'components__service_item',
+            'catalog_furniture__parts__materials__material',
+            'catalog_furniture__parts__materials__default_option',
+            'catalog_furniture__item_components__item__components__material_item__category',
+            'catalog_furniture__item_components__item__components__material_item__brand',
+            'catalog_furniture__item_components__item__components__service_item',
+        ).in_bulk([e['item_id'] for e in entries])
 
         missing = [e['item_id'] for e in entries if e['item_id'] not in catalog]
         if missing:
@@ -522,6 +693,8 @@ class EstimateAddFromCatalogView(APIView):
                 # so the line arrives fully costed, not just as a flat rate.
                 if source.catalog_furniture_id:
                     populate_line_from_furniture(line, source.catalog_furniture, replace=True)
+                elif source.components.exists():
+                    populate_line_from_item(line, source, replace=True)
                 elif not source.default_rate and estimator.guess_template(line.item):
                     # An unpriced cabinet/drawer item with no linked BOM: start
                     # from the default template so it arrives with a baseline
@@ -564,7 +737,92 @@ def _get_line(kwargs):
     )
 
 
-def populate_line_from_furniture(line, furniture, replace=True):
+def _estimate_dimension_factor(line, component):
+    """Resolve dimension-based material quantities from the current estimate line."""
+    if component.quantity_basis == ItemComponent.QuantityBasis.PER_UNIT:
+        return Decimal('1')
+    width = Decimal(line.width_ft or 0) + Decimal(line.width_in or 0) / Decimal('12')
+    height = Decimal(line.height_ft or 0) + Decimal(line.height_in or 0) / Decimal('12')
+    depth = Decimal(line.depth_ft or 0) + Decimal(line.depth_in or 0) / Decimal('12')
+    width = width or dimension_in_feet(line.length or component.item.default_length)
+    depth = depth or dimension_in_feet(line.breadth or component.item.default_breadth)
+    height = height or dimension_in_feet(line.height or component.item.default_height)
+    if component.quantity_basis == ItemComponent.QuantityBasis.LENGTH:
+        if not width:
+            raise ValidationError({'dimensions': 'Length is required for this item BOM.'})
+        return width
+    if component.quantity_basis == ItemComponent.QuantityBasis.AREA:
+        if not width or not height:
+            raise ValidationError({'dimensions': 'Length and height are required for this item BOM.'})
+        return width * height
+    if component.quantity_basis == ItemComponent.QuantityBasis.PLAN_AREA:
+        if not width or not depth:
+            raise ValidationError({'dimensions': 'Length and depth are required for this item BOM.'})
+        return width * depth
+    if not width or not depth or not height:
+        raise ValidationError({'dimensions': 'All dimensions are required for this item BOM.'})
+    return width * depth * height
+
+
+def _append_item_bom(line, item, multiplier):
+    created = 0
+    for component in item.components.all():
+        material = component.material_item
+        service = component.service_item
+        quantity = component.qty_per_unit or Decimal('0')
+        quantity *= multiplier
+        if material:
+            quantity *= _estimate_dimension_factor(line, component)
+            quantity *= Decimal('1') + (component.wastage_pct or Decimal('0')) / Decimal('100')
+            category = material.category
+            name = category.name
+            detail = material.thickness or material.length or ''
+            brand = material.brand.name if material.brand_id else ''
+            model = material.model_name
+            price = component.effective_rate
+            unit = component.unit or material.default_unit
+        elif service:
+            category = None
+            name = service.category
+            detail = service.sub_type
+            brand = ''
+            model = service.name
+            price = component.effective_rate
+            unit = component.unit or service.default_unit
+        else:
+            category = None
+            name = component.label or 'Other'
+            detail = ''
+            brand = ''
+            model = ''
+            price = component.effective_rate
+            unit = component.unit
+        EstimateItemComponent.objects.create(
+            estimate_item=line,
+            basic_component=name,
+            detail=detail,
+            brand=brand,
+            model=model,
+            qty=quantity,
+            unit=unit,
+            price=price,
+            library_material_item=material,
+        )
+        created += 1
+    return created
+
+
+def populate_line_from_item(line, item, replace=True, multiplier=None):
+    """Snapshot a reusable item's BOM into its estimate line."""
+    if replace:
+        line.components.all().delete()
+    quantity = multiplier if multiplier is not None else (line.qty or Decimal('1'))
+    created = _append_item_bom(line, item, quantity)
+    line.recompute_amount()
+    return created
+
+
+def populate_line_from_furniture(line, furniture, replace=True, multiplier=None, visited=None):
     """
     Copy a catalogue Furniture's bill of materials onto an estimate line's
     component breakdown, then roll the line amount up from it. Shared by the
@@ -574,12 +832,19 @@ def populate_line_from_furniture(line, furniture, replace=True):
     if replace:
         line.components.all().delete()
 
+    if visited is None:
+        visited = set()
+    if furniture.pk in visited:
+        raise ValidationError({'detail': 'Furniture composition contains a circular dependency.'})
+    visited.add(furniture.pk)
+    line_quantity = multiplier if multiplier is not None else (line.qty or Decimal('1'))
     created = 0
     for part in furniture.parts.filter(is_active=True):
         for pm in part.materials.all():
             option = pm.effective_option
             wastage = pm.wastage_pct or Decimal('0')
-            qty = (pm.qty_per_unit or Decimal('0')) * (Decimal('1') + wastage / Decimal('100'))
+            qty = ((pm.qty_per_unit or Decimal('0')) * line_quantity
+                   * (Decimal('1') + wastage / Decimal('100')))
             EstimateItemComponent.objects.create(
                 estimate_item=line,
                 basic_component=pm.material.name,
@@ -588,11 +853,23 @@ def populate_line_from_furniture(line, furniture, replace=True):
                 model=option.model_no if option else '',
                 qty=qty,
                 unit=pm.unit or (option.unit if option else pm.material.default_unit),
-                price=option.price if option else Decimal('0'),
+                price=option.effective_price if option else Decimal('0'),
                 catalog_material=pm.material,
                 catalog_option=option,
+                library_material_item=option.library_item if option else None,
             )
             created += 1
+
+    for composed in furniture.item_components.all():
+        nested_item = composed.item
+        nested_multiplier = line_quantity * composed.qty_per_unit
+        if nested_item.catalog_furniture_id:
+            created += populate_line_from_furniture(
+                line, nested_item.catalog_furniture, replace=False,
+                multiplier=nested_multiplier, visited=visited.copy(),
+            )
+        else:
+            created += _append_item_bom(line, nested_item, nested_multiplier)
 
     line.recompute_amount()
     return created

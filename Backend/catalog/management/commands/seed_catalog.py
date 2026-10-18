@@ -688,16 +688,18 @@ class Command(BaseCommand):
         for order, (name, (unit, icon, option_rows)) in enumerate(MATERIALS.items(), start=1):
             material, _ = Material.objects.get_or_create(
                 name=name, defaults={'default_unit': unit, 'icon': icon, 'sort_order': order})
+            material.ensure_library_category()
             materials[name] = material
             for o_order, row in enumerate(option_rows, start=1):
                 detail, brand, model, size, price, o_unit, source = row
-                MaterialOption.objects.get_or_create(
+                option, _ = MaterialOption.objects.get_or_create(
                     material=material, detail=detail, brand=brand, model_no=model, size=size,
                     defaults={
                         'price': Decimal(price), 'unit': o_unit,
                         'sort_order': o_order, 'source': source,
                     },
                 )
+                option.sync_library_item()
 
         # ── Furniture with BOM ───────────────────────────────
         furniture_made = parts_made = links_made = 0

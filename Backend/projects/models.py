@@ -9,6 +9,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import models
 from django.conf import settings
+from django.core.validators import FileExtensionValidator
 from django.utils import timezone
 
 MONEY = Decimal('0.01')
@@ -138,6 +139,27 @@ class DesignRequirement(models.Model):
 
     def __str__(self):
         return f"{self.project.name} — {self.room}: {self.unit}"
+
+
+class ProjectFloorPlan(models.Model):
+    """Uploaded floor-plan references for a project."""
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='floor_plans')
+    file = models.FileField(
+        upload_to='floor-plans/%Y/%m/',
+        max_length=255,
+        validators=[FileExtensionValidator(
+            allowed_extensions=['pdf', 'png', 'jpg', 'jpeg', 'gif', 'dxf', 'dwg']
+        )],
+    )
+    file_name = models.CharField(max_length=255, blank=True, default='')
+    file_size = models.PositiveIntegerField(default=0, help_text='Bytes')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at', 'id']
+
+    def __str__(self):
+        return f"{self.project.name} — {self.file_name or self.file.name}"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -303,13 +325,16 @@ class Estimate(models.Model):
     # Computed from line items so a stale stored total can never be served.
     @property
     def subtotal(self):
-        return money(sum((i.amount for i in self.items.all()), Decimal('0')))
+        return money(sum((i.pre_tax_amount for i in self.items.all()), Decimal('0')))
 
     @property
     def total_discount(self):
         pct = self.discount_pct or Decimal('0')
         flat = self.discount_amount or Decimal('0')
-        return money(self.subtotal * pct / Decimal('100') + flat)
+        return min(self.subtotal, max(
+            Decimal('0.00'),
+            money(self.subtotal * pct / Decimal('100') + flat),
+        ))
 
     @property
     def taxable_amount(self):
@@ -323,7 +348,8 @@ class Estimate(models.Model):
             return Decimal('0.00')
         ratio = self.taxable_amount / subtotal
         return money(sum(
-            (i.amount * ratio * i.gst_pct / Decimal('100') for i in self.items.all()),
+            (money(i.pre_tax_amount * ratio * i.gst_pct / Decimal('100'))
+             for i in self.items.all()),
             Decimal('0'),
         ))
 
@@ -489,7 +515,7 @@ class EstimateItem(models.Model):
         rp = self.referral_pct or Decimal('0')
         self.referral_amount = money(base * rp / Decimal('100'))
 
-        self.amount = base  # kept for backward compat with Estimate.subtotal
+        self.amount = base  # Base cost remains separate for line-item compatibility.
         taxable = base + self.margin_amount + self.referral_amount
         gp = self.gst_pct or Decimal('0')
         self.gst_amount_stored = money(taxable * gp / Decimal('100'))
@@ -515,6 +541,11 @@ class EstimateItem(models.Model):
     @property
     def has_components(self):
         return self.components.exists()
+
+    @property
+    def pre_tax_amount(self):
+        """Line value before GST, including margin and referral charges."""
+        return money(self.amount + self.margin_amount + self.referral_amount)
 
     @property
     def gst_amount(self):
@@ -557,6 +588,10 @@ class EstimateItemComponent(models.Model):
     )
     catalog_option = models.ForeignKey(
         'catalog.MaterialOption', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='+',
+    )
+    library_material_item = models.ForeignKey(
+        'library.MaterialItem', on_delete=models.SET_NULL, null=True, blank=True,
         related_name='+',
     )
 

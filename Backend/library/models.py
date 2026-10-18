@@ -25,7 +25,18 @@ class MaterialCategory(models.Model):
         SPEC_PURPOSE = 'Spec Purpose', 'Spec Purpose'
         PROC_SERVICE = 'Procurement cum Service', 'Procurement cum Service'
 
+    class ProductGroup(models.TextChoices):
+        PLYWOOD = 'plywood', 'Plywood'
+        HARDWARE = 'hardware', 'Hardware'
+        KITCHEN_ACCESSORIES = 'kitchen_accessories', 'Kitchen Accessories'
+        FINISHING = 'finishing', 'Finishing'
+        OTHER = 'other', 'Other'
+
     name = models.CharField(max_length=150, unique=True)
+    product_group = models.CharField(
+        max_length=30, choices=ProductGroup.choices, default=ProductGroup.OTHER,
+        db_index=True,
+    )
     type = models.CharField(max_length=30, choices=SpecType.choices, default=SpecType.PROCUREMENT)
     icon = models.CharField(max_length=10, blank=True, default='📦')
     description = models.TextField(blank=True, default='')
@@ -67,7 +78,13 @@ class MaterialItem(models.Model):
               Brand='Austin' → Model='Lincoln BWP'
               Brand='Greenlam' → Model='Off white Colour'
     """
-    brand = models.ForeignKey(MaterialBrand, on_delete=models.CASCADE, related_name='items')
+    category = models.ForeignKey(
+        MaterialCategory, on_delete=models.PROTECT, related_name='materials',
+    )
+    brand = models.ForeignKey(
+        MaterialBrand, on_delete=models.SET_NULL, related_name='items',
+        null=True, blank=True,
+    )
     model_name = models.CharField(max_length=200, help_text='Product model/variant name')
     description = models.TextField(blank=True, default='')
     # Physical dimensions / specs
@@ -93,12 +110,19 @@ class MaterialItem(models.Model):
         ordering = ['model_name']
 
     def __str__(self):
-        return f"{self.brand.name} — {self.model_name}"
+        brand = f'{self.brand.name} — ' if self.brand_id else ''
+        return f'{brand}{self.model_name}'
+
+    def save(self, *args, **kwargs):
+        if not self.category_id and self.brand_id:
+            self.category_id = self.brand.category_id
+        super().save(*args, **kwargs)
 
     @property
     def full_display(self):
         """Full display text: 'Category: Brand Model'"""
-        return f"{self.brand.category.name}: {self.brand.name} {self.model_name}"
+        brand = f'{self.brand.name} ' if self.brand_id else ''
+        return f'{self.category.name}: {brand}{self.model_name}'
 
 
 class ServiceItem(models.Model):

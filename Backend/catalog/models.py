@@ -125,6 +125,10 @@ class Material(TimeStamped):
     """
     code = models.CharField(max_length=20, unique=True, blank=True)
     name = models.CharField(max_length=120, unique=True)
+    library_category = models.ForeignKey(
+        'library.MaterialCategory', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='catalog_materials',
+    )
     default_unit = models.CharField(
         max_length=20, default='nos',
         help_text='sft, rft, nos, sheets, kg, litre, set, …'
@@ -145,6 +149,26 @@ class Material(TimeStamped):
     @property
     def options_total(self):
         return self.options.filter(is_active=True).count()
+
+    def ensure_library_category(self):
+        from library.models import MaterialCategory
+
+        category = self.library_category
+        if category is None:
+            category, _ = MaterialCategory.objects.get_or_create(name=self.name)
+            normalized = self.name.lower()
+            if 'ply' in normalized:
+                category.product_group = MaterialCategory.ProductGroup.PLYWOOD
+            elif any(term in normalized for term in ('accessor', 'basket', 'pull-out', 'pullout')):
+                category.product_group = MaterialCategory.ProductGroup.KITCHEN_ACCESSORIES
+            elif any(term in normalized for term in ('hardware', 'hinge', 'channel', 'handle')):
+                category.product_group = MaterialCategory.ProductGroup.HARDWARE
+            elif any(term in normalized for term in ('laminate', 'acrylic', 'finish')):
+                category.product_group = MaterialCategory.ProductGroup.FINISHING
+            category.save(update_fields=['product_group'])
+            self.library_category = category
+            self.save(update_fields=['library_category'])
+        return category
 
 
 class MaterialOption(TimeStamped):
@@ -188,6 +212,51 @@ class MaterialOption(TimeStamped):
     @property
     def label(self):
         return str(self)
+
+    @property
+    def effective_price(self):
+        return self.library_item.default_rate if self.library_item_id else self.price
+
+    def sync_library_item(self):
+        from library.models import MaterialBrand, MaterialItem
+
+        category = self.material.ensure_library_category()
+        brand = None
+        if self.brand:
+            brand, _ = MaterialBrand.objects.get_or_create(
+                category=category, name=self.brand,
+            )
+        model_name = ' '.join(value for value in (self.model_no, self.detail) if value)[:200]
+        if not model_name:
+            model_name = self.label[:200]
+        defaults = {
+            'category': category,
+            'brand': brand,
+            'model_name': model_name,
+            'default_unit': self.unit or self.material.default_unit,
+            'default_rate': self.price,
+            'description': self.notes,
+        }
+        if self.library_item_id:
+            library_item = self.library_item
+            for field, value in defaults.items():
+                setattr(library_item, field, value)
+            library_item.save()
+        else:
+            library_item, _ = MaterialItem.objects.update_or_create(
+                category=category,
+                brand=brand,
+                model_name=model_name,
+                defaults={
+                    'default_unit': defaults['default_unit'],
+                    'default_rate': defaults['default_rate'],
+                    'description': defaults['description'],
+                },
+            )
+        if self.library_item_id != library_item.id:
+            self.library_item = library_item
+            self.save(update_fields=['library_item'])
+        return library_item
 
 
 # ════════════════════════════════════════════════════════════════
@@ -236,8 +305,10 @@ class Furniture(TimeStamped):
 
     @property
     def material_cost(self):
-        """Roll up the cost of every part's materials, before margin."""
-        return money(sum((p.material_cost for p in self.parts.all()), Decimal('0')))
+        """Roll up direct materials and reusable item BOMs, before margin."""
+        direct = sum((p.material_cost for p in self.parts.all()), Decimal('0'))
+        items = sum((component.line_cost for component in self.item_components.all()), Decimal('0'))
+        return money(direct + items)
 
     @property
     def suggested_rate(self):
@@ -298,15 +369,36 @@ class PartMaterial(TimeStamped):
     def effective_option(self):
         if self.default_option_id:
             return self.default_option
-        return self.material.options.filter(is_active=True).order_by('price').first()
+        options = self.material.options.filter(is_active=True).select_related('library_item')
+        return min(options, key=lambda option: option.effective_price, default=None)
 
     @property
     def unit_price(self):
         option = self.effective_option
-        return option.price if option else Decimal('0')
+        return option.effective_price if option else Decimal('0')
 
     @property
     def line_cost(self):
         qty = (self.qty_per_unit or Decimal('0'))
         wastage = self.wastage_pct or Decimal('0')
         return money(qty * (Decimal('1') + wastage / Decimal('100')) * self.unit_price)
+
+
+class FurnitureItemComponent(TimeStamped):
+    """A reusable catalogue item and quantity used to assemble one furniture unit."""
+
+    furniture = models.ForeignKey(
+        Furniture, on_delete=models.CASCADE, related_name='item_components',
+    )
+    item = models.ForeignKey(
+        'items.Item', on_delete=models.PROTECT, related_name='used_in_furniture',
+    )
+    qty_per_unit = models.DecimalField(max_digits=10, decimal_places=3, default=1)
+    notes = models.CharField(max_length=300, blank=True, default='')
+
+    class Meta:
+        ordering = ['sort_order', 'id']
+
+    @property
+    def line_cost(self):
+        return money(self.qty_per_unit * self.item.component_cost)

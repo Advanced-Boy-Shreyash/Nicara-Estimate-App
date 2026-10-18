@@ -4,7 +4,7 @@ Full project lifecycle serializers.
 """
 from rest_framework import serializers
 from .models import (
-    BookingForm, Project, DesignRequirement, ProjectDeliverable, Estimate,
+    BookingForm, Project, DesignRequirement, ProjectFloorPlan, ProjectDeliverable, Estimate,
     EstimateItem, EstimateItemComponent, Measurement, MaterialSelection,
     ExecutionStage, PaymentMilestone, QualityCheck,
 )
@@ -21,6 +21,29 @@ class DesignRequirementSerializer(serializers.ModelSerializer):
 class DesignRequirementBulkSerializer(serializers.Serializer):
     """Replace a project's requirement rows in one call (the grid saves whole)."""
     rows = serializers.ListField(child=serializers.DictField(), allow_empty=True)
+
+
+class ProjectFloorPlanSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+    file_size_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProjectFloorPlan
+        fields = ['id', 'file', 'file_name', 'file_size', 'file_size_display', 'file_url', 'created_at']
+        read_only_fields = ['file_name', 'file_size', 'created_at']
+        extra_kwargs = {'file': {'write_only': True}}
+
+    def get_file_url(self, obj):
+        request = self.context.get('request')
+        return request.build_absolute_uri(obj.file.url) if request else obj.file.url
+
+    def get_file_size_display(self, obj):
+        size = obj.file_size
+        if size < 1024:
+            return f'{size} B'
+        if size < 1024 * 1024:
+            return f'{size / 1024:.1f} KB'
+        return f'{size / (1024 * 1024):.1f} MB'
 
 
 # ── Deliverables (FL, MB, 3D, Renders, WD) ──────────────────
@@ -96,7 +119,7 @@ class EstimateItemComponentSerializer(serializers.ModelSerializer):
         model = EstimateItemComponent
         fields = ['id', 'estimate_item', 'sno', 'basic_component', 'detail',
                   'brand', 'model', 'qty', 'unit', 'price', 'amount',
-                  'catalog_material', 'catalog_option']
+                  'catalog_material', 'catalog_option', 'library_material_item']
         read_only_fields = ['estimate_item', 'amount']
 
     def validate_qty(self, value):
@@ -196,6 +219,16 @@ class EstimateSerializer(serializers.ModelSerializer):
 
     def get_approved_by_name(self, obj):
         return obj.approved_by.get_full_name() if obj.approved_by else ''
+
+    def validate_discount_pct(self, value):
+        if value is not None and not (0 <= value <= 100):
+            raise serializers.ValidationError('Discount percentage must be between 0 and 100.')
+        return value
+
+    def validate_discount_amount(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError('Discount amount cannot be negative.')
+        return value
 
 
 class EstimateListSerializer(serializers.ModelSerializer):

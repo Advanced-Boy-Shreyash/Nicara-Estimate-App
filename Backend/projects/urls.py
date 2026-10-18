@@ -22,6 +22,8 @@ urlpatterns = [
     path('<int:project_id>/design-requirements/', views.DesignRequirementListCreateView.as_view(), name='design-req-list'),
     path('<int:project_id>/design-requirements/bulk/', views.DesignRequirementBulkView.as_view(), name='design-req-bulk'),
     path('<int:project_id>/design-requirements/<int:pk>/', views.DesignRequirementDetailView.as_view(), name='design-req-detail'),
+    path('<int:project_id>/floor-plans/', views.ProjectFloorPlanListCreateView.as_view(), name='floor-plan-list'),
+    path('<int:project_id>/floor-plans/<int:pk>/', views.ProjectFloorPlanDetailView.as_view(), name='floor-plan-detail'),
 
     # ── Deliverables (FL, MB, 3D, Renders, WD) — versioned + approvals ──
     path('<int:project_id>/deliverables/', views.DeliverableListCreateView.as_view(), name='deliverable-list'),
@@ -37,6 +39,7 @@ urlpatterns = [
     path('<int:project_id>/estimates/<int:pk>/approve/', views.EstimateApproveView.as_view(), name='estimate-approve'),
     path('<int:project_id>/estimates/<int:pk>/request-revision/', views.EstimateRequestRevisionView.as_view(), name='estimate-revision'),
     path('<int:project_id>/estimates/<int:pk>/duplicate/', views.EstimateDuplicateView.as_view(), name='estimate-duplicate'),
+    path('<int:project_id>/estimates/<int:pk>/apply-smart-materials/', views.EstimateApplySmartMaterialsView.as_view(), name='estimate-apply-materials'),
     path('<int:project_id>/estimates/<int:pk>/pdf/', views.EstimatePDFView.as_view(), name='estimate-pdf'),
     path('<int:project_id>/estimates/<int:pk>/excel/', views.EstimateExcelView.as_view(), name='estimate-excel'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/', views.EstimateItemListCreateView.as_view(), name='estimate-item-list'),

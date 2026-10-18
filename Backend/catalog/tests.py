@@ -7,8 +7,13 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import PagePermission, User
+from items.models import Item, ItemCategory, ItemComponent
+from library.models import MaterialBrand as LibraryBrand
+from library.models import MaterialCategory as LibraryCategory
+from library.models import MaterialItem as LibraryMaterialItem
 from catalog.models import (
-    Furniture, FurniturePart, Material, MaterialOption, PartMaterial, Room, Zone,
+    Furniture, FurnitureItemComponent, FurniturePart, Material, MaterialOption,
+    PartMaterial, Room, Zone,
 )
 
 PASSWORD = 'Str0ng!Passw0rd'
@@ -94,6 +99,30 @@ class CostRollupTests(CatalogTestCase):
     def test_suggested_rate_zero_without_bom(self):
         self.assertEqual(self.furniture.suggested_rate, Decimal('0.00'))
 
+    def test_library_price_and_reusable_items_roll_into_furniture_cost(self):
+        category = LibraryCategory.objects.create(name='Plywood', product_group='plywood')
+        brand = LibraryBrand.objects.create(category=category, name='Austin')
+        variant = LibraryMaterialItem.objects.create(
+            category=category, brand=brand, model_name='Lincoln',
+            default_rate=Decimal('150'), default_unit='sft',
+        )
+        option = MaterialOption.objects.create(
+            material=self.ply, detail='18mm', brand='Austin', model_no='Lincoln',
+            price=Decimal('100'), unit='sft', library_item=variant,
+        )
+        PartMaterial.objects.create(
+            part=self.part, material=self.ply, default_option=option, qty_per_unit=10,
+        )
+
+        item_category = ItemCategory.objects.create(name='Components')
+        drawer = Item.objects.create(name='Drawer', category=item_category)
+        ItemComponent.objects.create(item=drawer, material_item=variant, qty_per_unit=2)
+        FurnitureItemComponent.objects.create(furniture=self.furniture, item=drawer, qty_per_unit=3)
+
+        # Direct stock uses the central library rate (10 x 150); drawer BOM is
+        # 3 units x (2 x 150), so no duplicated line-item aggregation is needed.
+        self.assertEqual(self.furniture.material_cost, Decimal('2400.00'))
+
 
 class RoomScopingTests(CatalogTestCase):
     def setUp(self):
@@ -150,6 +179,11 @@ class ApiTests(CatalogTestCase):
             {'detail': '18mm Plywood', 'brand': 'Austin', 'model_no': 'Lincoln',
              'size': '8x4', 'price': '100', 'unit': 'sft'}, format='json')
         self.assertEqual(option.status_code, status.HTTP_201_CREATED, option.data)
+        self.assertTrue(option.data['library_item'])
+        self.assertEqual(
+            LibraryMaterialItem.objects.get(pk=option.data['library_item']).default_rate,
+            Decimal('100.00'),
+        )
 
     def test_negative_price_rejected(self):
         m = Material.objects.create(name='Plywood')
@@ -169,6 +203,26 @@ class ApiTests(CatalogTestCase):
             {'material': hardware.pk, 'default_option': ply_option.pk, 'qty_per_unit': '2'},
             format='json')
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_furniture_can_include_reusable_item_and_reject_its_own_item(self):
+        furniture = Furniture.objects.create(name='Cabinet')
+        category = ItemCategory.objects.create(name='Components')
+        drawer = Item.objects.create(name='Drawer', category=category)
+        url = reverse('catalog-furniture-item-list', args=[furniture.pk])
+
+        response = self.client.post(url, {
+            'item': drawer.pk, 'qty_per_unit': '2',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data['item_name'], 'Drawer')
+        self.assertEqual(furniture.item_components.count(), 1)
+
+        linked = Item.objects.create(
+            name='Linked Cabinet', category=category, catalog_furniture=furniture,
+        )
+        rejected = self.client.post(url, {'item': linked.pk}, format='json')
+        self.assertEqual(rejected.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_delete_deactivates(self):
         room = Room.objects.create(name='Study')

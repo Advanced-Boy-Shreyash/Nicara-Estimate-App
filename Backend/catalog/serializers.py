@@ -2,7 +2,8 @@
 from rest_framework import serializers
 
 from .models import (
-    Furniture, FurniturePart, Material, MaterialOption, PartMaterial, Room, Zone,
+    Furniture, FurnitureItemComponent, FurniturePart, Material, MaterialOption,
+    PartMaterial, Room, Zone,
 )
 
 
@@ -33,18 +34,32 @@ class ZoneSerializer(serializers.ModelSerializer):
 class MaterialOptionSerializer(serializers.ModelSerializer):
     label = serializers.CharField(read_only=True)
     material_name = serializers.CharField(source='material.name', read_only=True)
+    effective_price = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
 
     class Meta:
         model = MaterialOption
         fields = ['id', 'material', 'material_name', 'detail', 'brand', 'model_no',
                   'size', 'price', 'unit', 'notes', 'source', 'library_item', 'label',
-                  'sort_order', 'is_active']
+                  'effective_price', 'sort_order', 'is_active']
         read_only_fields = ['material']
 
     def validate_price(self, value):
         if value is not None and value < 0:
             raise serializers.ValidationError('Price cannot be negative.')
         return value
+
+    def _sync_library_item(self, instance):
+        instance.sync_library_item()
+
+    def create(self, validated_data):
+        instance = super().create(validated_data)
+        self._sync_library_item(instance)
+        return instance
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+        self._sync_library_item(instance)
+        return instance
 
 
 def _annotated_or(obj, annotation_attr, live):
@@ -60,7 +75,7 @@ class MaterialSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Material
-        fields = ['id', 'code', 'name', 'default_unit', 'icon', 'option_count',
+        fields = ['id', 'code', 'name', 'library_category', 'default_unit', 'icon', 'option_count',
                   'price_from', 'options', 'sort_order', 'is_active']
         read_only_fields = ['code']
 
@@ -68,8 +83,17 @@ class MaterialSerializer(serializers.ModelSerializer):
         return _annotated_or(obj, 'option_count', obj.options.count)
 
     def get_price_from(self, obj):
-        cheapest = obj.options.filter(is_active=True).order_by('price').first()
-        return float(cheapest.price) if cheapest else None
+        cheapest = min(
+            obj.options.filter(is_active=True).select_related('library_item'),
+            key=lambda option: option.effective_price,
+            default=None,
+        )
+        return float(cheapest.effective_price) if cheapest else None
+
+    def create(self, validated_data):
+        instance = super().create(validated_data)
+        instance.ensure_library_category()
+        return instance
 
 
 class MaterialListSerializer(serializers.ModelSerializer):
@@ -78,11 +102,56 @@ class MaterialListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Material
-        fields = ['id', 'code', 'name', 'default_unit', 'icon',
+        fields = ['id', 'code', 'name', 'library_category', 'default_unit', 'icon',
                   'option_count', 'sort_order', 'is_active']
 
     def get_option_count(self, obj):
         return _annotated_or(obj, 'option_count', obj.options.count)
+
+
+class FurnitureItemComponentSerializer(serializers.ModelSerializer):
+    item_name = serializers.CharField(source='item.name', read_only=True)
+    item_code = serializers.CharField(source='item.code', read_only=True)
+    item_cost = serializers.DecimalField(
+        source='item.component_cost', max_digits=14, decimal_places=2, read_only=True,
+    )
+    line_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = FurnitureItemComponent
+        fields = ['id', 'furniture', 'item', 'item_name', 'item_code',
+                  'qty_per_unit', 'notes', 'item_cost', 'line_cost',
+                  'sort_order', 'is_active']
+        read_only_fields = ['furniture']
+
+    def validate_item(self, value):
+        furniture = self.context.get('furniture')
+        if furniture:
+            def reaches_target(item, target_id, visited_items, visited_furniture):
+                if item.pk in visited_items:
+                    return False
+                visited_items.add(item.pk)
+                linked_furniture_id = item.catalog_furniture_id
+                if not linked_furniture_id:
+                    return False
+                if linked_furniture_id == target_id:
+                    return True
+                if linked_furniture_id in visited_furniture:
+                    return False
+                visited_furniture.add(linked_furniture_id)
+                nested = FurnitureItemComponent.objects.filter(
+                    furniture_id=linked_furniture_id,
+                ).select_related('item')
+                return any(
+                    reaches_target(component.item, target_id, visited_items, visited_furniture)
+                    for component in nested
+                )
+
+            if reaches_target(value, furniture.id, set(), set()):
+                raise serializers.ValidationError(
+                    'Furniture composition cannot create a circular item dependency.'
+                )
+        return value
 
 
 # ── Furniture → parts → materials ───────────────────────────
@@ -145,6 +214,7 @@ class FurnitureListSerializer(serializers.ModelSerializer):
 class FurnitureSerializer(serializers.ModelSerializer):
     room_names = serializers.SerializerMethodField()
     parts = FurniturePartSerializer(many=True, read_only=True)
+    item_components = FurnitureItemComponentSerializer(many=True, read_only=True)
     part_count = serializers.SerializerMethodField()
     material_cost = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     suggested_rate = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)

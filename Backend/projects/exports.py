@@ -515,13 +515,12 @@ def estimate_xlsx(estimate):
             row += 1
 
         index += 1
-        gst_amount = item.amount * item.gst_pct / Decimal('100')
         values = [
             index, item.area, item.zone, item.item, item.finishing, item.description,
             item.length, item.breadth, item.height,
             float(item.qty), item.unit,
             float(item.rate), float(item.amount),
-            float(item.gst_pct), float(gst_amount), float(item.amount + gst_amount),
+            float(item.gst_pct), float(item.gst_amount_stored), float(item.total_amount),
         ]
         money_columns = {12, 13, 15, 16}
         for column, value in enumerate(values, start=1):

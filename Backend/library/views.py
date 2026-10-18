@@ -28,7 +28,7 @@ class LibraryMetaView(APIView):
 
     def get(self, request):
         categories = MaterialCategory.objects.filter(is_active=True).values(
-            'id', 'name', 'icon', 'type'
+            'id', 'name', 'icon', 'type', 'product_group'
         )
         brands = MaterialBrand.objects.filter(is_active=True).values(
             'id', 'name', 'category_id'
@@ -78,16 +78,45 @@ class MaterialBrandDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 class MaterialItemListCreateView(generics.ListCreateAPIView):
     """GET/POST /api/library/items/"""
-    queryset = MaterialItem.objects.select_related('brand__category').all()
+    queryset = MaterialItem.objects.select_related('category', 'brand').all()
     serializer_class = MaterialItemSerializer
-    filterset_fields = ['brand', 'brand__category', 'is_active']
-    search_fields = ['model_name', 'brand__name', 'brand__category__name', 'description']
+    filterset_fields = ['brand', 'category', 'brand__category', 'is_active']
+    search_fields = ['model_name', 'brand__name', 'category__name', 'description']
     ordering_fields = ['model_name', 'default_rate', 'created_at']
 
 
 class MaterialItemDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = MaterialItem.objects.all()
     serializer_class = MaterialItemSerializer
+
+
+class SmartEstimateOptionsView(APIView):
+    """Return active library variants grouped for the existing estimate selectors."""
+
+    def get(self, request):
+        groups = [
+            MaterialCategory.ProductGroup.PLYWOOD,
+            MaterialCategory.ProductGroup.HARDWARE,
+            MaterialCategory.ProductGroup.KITCHEN_ACCESSORIES,
+            MaterialCategory.ProductGroup.FINISHING,
+        ]
+        items = (MaterialItem.objects.filter(
+            is_active=True, category__is_active=True, category__product_group__in=groups,
+        ).select_related('category', 'brand').order_by('category__name', 'brand__name', 'model_name'))
+        results = {group: [] for group in groups}
+        for item in items:
+            group = item.category.product_group
+            brand = f'{item.brand.name} — ' if item.brand_id else ''
+            results[group].append({
+                'id': item.id,
+                'label': f'{brand}{item.model_name}',
+                'brand': item.brand.name if item.brand_id else '',
+                'model': item.model_name,
+                'category': item.category.name,
+                'price': item.default_rate,
+                'unit': item.default_unit,
+            })
+        return Response(results)
 
 
 class ServiceItemListCreateView(generics.ListCreateAPIView):

@@ -172,6 +172,8 @@ def import_specs(specs, *, dry_run=False):
                 created += 1
                 continue
             material = Material.objects.create(name=spec['material'], default_unit=spec['unit'])
+        elif not dry_run:
+            material.ensure_library_category()
         match = MaterialOption.objects.filter(
             material=material, detail__iexact=spec['detail'], brand__iexact=spec['brand'],
             model_no__iexact=spec['model_no'], size__iexact=spec['size'],
@@ -184,12 +186,14 @@ def import_specs(specs, *, dry_run=False):
                 for k, v in fields.items():
                     setattr(match, k, v)
                 match.save()
+                match.sync_library_item()
         else:
             created += 1
             if not dry_run:
-                MaterialOption.objects.create(
+                option = MaterialOption.objects.create(
                     material=material, detail=spec['detail'], brand=spec['brand'],
                     model_no=spec['model_no'], size=spec['size'], **fields)
+                option.sync_library_item()
 
     for entry in PLACEHOLDERS:
         qs = MaterialOption.objects.filter(material__name=entry[0], detail=entry[1], is_active=True,
