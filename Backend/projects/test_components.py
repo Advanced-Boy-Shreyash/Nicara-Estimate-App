@@ -137,7 +137,7 @@ class PopulateFromItemTests(ComponentTestCase):
         raw_category = MaterialCategory.objects.create(
             name='Plywood', product_group=MaterialCategory.ProductGroup.PLYWOOD,
         )
-        brand = MaterialBrand.objects.create(category=raw_category, name='Austin')
+        brand = MaterialBrand.objects.create(name='Austin')
         variant = MaterialItem.objects.create(
             category=raw_category, brand=brand, model_name='Lincoln',
             default_rate=Decimal('100'), default_unit='sft',
@@ -178,9 +178,8 @@ class SmartMaterialTests(ComponentTestCase):
             name='Core Material(18mm BWP Ply)', product_group=MaterialCategory.ProductGroup.PLYWOOD)
         self.ply12 = MaterialCategory.objects.create(
             name='Core Material(12mm BWP Ply)', product_group=MaterialCategory.ProductGroup.PLYWOOD)
-        gurjan18 = MaterialBrand.objects.create(category=self.ply18, name='Gurjan')
-        gurjan12 = MaterialBrand.objects.create(category=self.ply12, name='Gurjan')
-        austin18 = MaterialBrand.objects.create(category=self.ply18, name='Austin')
+        gurjan18 = gurjan12 = MaterialBrand.objects.create(name='Gurjan')
+        austin18 = MaterialBrand.objects.create(name='Austin')
         self.g18 = MaterialItem.objects.create(category=self.ply18, brand=gurjan18, model_name='710 BWP',
                                                default_rate=Decimal('80'), default_unit='sft')
         self.g12 = MaterialItem.objects.create(category=self.ply12, brand=gurjan12, model_name='710 BWP',

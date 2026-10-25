@@ -2,11 +2,11 @@
 
 import { Fragment, useMemo, useState } from "react";
 import {
-  ApiError, catalogApi, estimatesApi, itemsApi, libraryApi,
-  type ComponentInput, type SmartOption,
+  ApiError, catalogApi, estimatesApi, libraryApi,
+  type ComponentInput,
 } from "@/lib/api";
 import type {
-  CalcOptions, Estimate, EstimateItem, EstimateItemComponent, EstimateType, Item, LibraryItem, Project,
+  CalcOptions, Estimate, EstimateItem, EstimateItemComponent, EstimateType, LibraryItem, Project,
 } from "@/lib/apiTypes";
 import { useApiData, inr, inrExact } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
@@ -39,7 +39,6 @@ export default function EstimateTab({
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [banner, setBanner] = useState("");
   const [busy, setBusy] = useState(false);
-  const [picking, setPicking] = useState(false);
   const [importing, setImporting] = useState(false);
   const [showGenerator, setShowGenerator] = useState(false);
   const [populating, setPopulating] = useState(false);
@@ -166,7 +165,6 @@ export default function EstimateTab({
 
           {/* Actions */}
           <div className="flex items-center gap-2 mb-4 flex-wrap">
-            <Btn onClick={() => setPicking(true)} disabled={busy || locked}><Plus size={13} /> Add from Catalogue</Btn>
             <Btn variant="ghost" disabled={busy || locked}
               onClick={() => guard(
                 () => estimatesApi.addItem(project.id, estimate.id, {
@@ -267,7 +265,7 @@ export default function EstimateTab({
               onGenerated={async () => {
                 await refresh();
                 setShowGenerator(false);
-                toast.success("Applied", "Chosen brands and models applied to the estimate rows");
+                toast.success("Applied", "Chosen brands applied to the estimate rows");
               }}
               onError={setBanner}
             />
@@ -284,19 +282,6 @@ export default function EstimateTab({
 
           <Totals estimate={estimate} />
         </>
-      )}
-
-      {picking && estimate && (
-        <CatalogPicker
-          onClose={() => setPicking(false)}
-          onAdd={async selections => {
-            setPicking(false);
-            await guard(
-              () => estimatesApi.addFromCatalog(project.id, estimate.id, selections),
-              `${selections.length} item(s) added`
-            );
-          }}
-        />
       )}
 
       {addingFurniture && estimate && (
@@ -430,17 +415,6 @@ function LineItems({
   const [fArea, setFArea] = useState("All");
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
-  // Items master backing the "Item" dropdown — the same catalogue Design
-  // Requirements draws from. Picking one links the line and, if that item is
-  // tied to a furniture, pulls its material breakdown.
-  const itemsQuery = useApiData(() => itemsApi.list({}), []);
-  const masterItems = itemsQuery.data?.results ?? [];
-  const createMasterItem = async (name: string): Promise<Item> => {
-    const created = await itemsApi.create({ name });
-    await itemsQuery.reload();
-    return created;
-  };
-
   const commit = async (item: EstimateItem) => {
     const changes = draft[item.id];
     if (!changes) return;
@@ -546,9 +520,6 @@ function LineItems({
                 remove={remove}
                 expanded={expanded}
                 setExpanded={setExpanded}
-                masterItems={masterItems}
-                itemsLoading={itemsQuery.loading}
-                onCreateItem={createMasterItem}
                 onChanged={onChanged}
                 onError={onError}
                 onAddRow={async () => {
@@ -584,7 +555,7 @@ function LineItems({
 
 function GroupBlock({
   group, project, estimate, locked, busy, val, setDraft, commit, remove,
-  expanded, setExpanded, masterItems, itemsLoading, onCreateItem, onChanged, onError, onAddRow,
+  expanded, setExpanded, onChanged, onError, onAddRow,
 }: {
   group: { area: string; items: EstimateItem[]; subtotal: number };
   project: Project;
@@ -597,9 +568,6 @@ function GroupBlock({
   remove: (item: EstimateItem) => Promise<void>;
   expanded: Record<number, boolean>;
   setExpanded: React.Dispatch<React.SetStateAction<Record<number, boolean>>>;
-  masterItems: Item[];
-  itemsLoading: boolean;
-  onCreateItem: (name: string) => Promise<Item>;
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
   onAddRow: () => void;
@@ -652,9 +620,6 @@ function GroupBlock({
             setDraft={setDraft}
             commit={commit}
             remove={remove}
-            masterItems={masterItems}
-            itemsLoading={itemsLoading}
-            onCreateItem={onCreateItem}
             onChanged={onChanged}
             onError={onError}
             onToggle={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))}
@@ -671,7 +636,7 @@ function GroupBlock({
 
 function ItemRow({
   item, ri, isOpen, project, estimate, locked, busy, val, setDraft, commit, remove,
-  masterItems, itemsLoading, onCreateItem, onChanged, onError, onToggle, BD,
+  onChanged, onError, onToggle, BD,
 }: {
   item: EstimateItem;
   ri: number;
@@ -684,53 +649,15 @@ function ItemRow({
   setDraft: React.Dispatch<React.SetStateAction<Record<number, Record<string, unknown>>>>;
   commit: (item: EstimateItem) => Promise<void>;
   remove: (item: EstimateItem) => Promise<void>;
-  masterItems: Item[];
-  itemsLoading: boolean;
-  onCreateItem: (name: string) => Promise<Item>;
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
   onToggle: () => void;
   BD: string;
 }) {
   const generated = !!item.group_key;
-
-  // Picking a master item names the line and copies its rate/unit/size. An item
-  // that is a catalogue furniture is replaced by that furniture's calculated rows.
-  const applyMaster = async (master: Item) => {
-    try {
-      if (master.catalog_furniture) {
-        await estimatesApi.addFurniture(project.id, estimate.id, {
-          furniture_id: master.catalog_furniture, area: item.area, zone: item.zone, item: master.name,
-          width: master.default_length || undefined, height: master.default_height || undefined,
-          depth: master.default_breadth || undefined,
-        });
-        await estimatesApi.deleteItem(project.id, estimate.id, item.id);
-      } else {
-        await estimatesApi.updateItem(project.id, estimate.id, item.id, {
-          item: master.name,
-          rate: master.default_rate,
-          unit: master.unit,
-          length: master.default_length || "",
-          breadth: master.default_breadth || "",
-          height: master.default_height || "",
-          qty: master.default_qty || "1",
-        });
-      }
-      await onChanged();
-    } catch (e) {
-      onError(e instanceof ApiError ? e.message : "Could not apply the item.");
-    }
-  };
-
-  const createAndApply = async (name: string) => {
-    try {
-      const master = await onCreateItem(name);
-      await estimatesApi.updateItem(project.id, estimate.id, item.id, { item: master.name });
-      await onChanged();
-    } catch (e) {
-      onError(e instanceof ApiError ? e.message : "Could not add the item.");
-    }
-  };
+  // Doors / Drawers / Shelves: priced per piece from their parts (the Detail breakdown).
+  const perPiece = generated && item.item_type === "Spec Purpose" && (item.components?.length ?? 0) > 0;
+  const pieceName = { doors: "door", drawers: "drawer", shelves: "shelf" }[item.quantity_rule] ?? "piece";
 
   return (
     <>
@@ -741,22 +668,14 @@ function ItemRow({
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], area: v } }))}
             onCommit={() => commit(item)} placeholder="Room" />
         </td>
-        {/* Item — searchable Items dropdown with inline add */}
+        {/* Item — calculated rows carry their furniture's name; hand-added lines are free text */}
         <td className={`px-2 py-1.5 font-semibold text-nicara-dark min-w-[160px] ${BD}`}>
           {locked || generated ? (
             <div className="px-2 py-1.5 font-semibold text-nicara-dark">{val(item, "item") || "—"}</div>
           ) : (
-            <SearchSelect
-              value={val(item, "item")}
-              options={masterItems}
-              loading={itemsLoading}
-              getLabel={i => i.name}
-              getSublabel={i => [i.category_name, i.catalog_furniture_name && `⇄ ${i.catalog_furniture_name}`].filter(Boolean).join(" · ")}
-              placeholder="Item name"
-              className="w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] font-semibold text-nicara-dark bg-transparent outline-none focus:border-nicara-gold focus:bg-white cursor-text"
-              onPick={applyMaster}
-              onCreate={createAndApply}
-            />
+            <EditableCell locked={locked} value={val(item, "item")}
+              onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], item: v } }))}
+              onCommit={() => commit(item)} placeholder="Item name" />
           )}
           {item.catalog_item_code && (
             <div className="px-2 text-[9px] text-surface-300 font-mono">{item.catalog_item_code}</div>
@@ -849,11 +768,19 @@ function ItemRow({
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], unit: v } }))}
             onCommit={() => commit(item)} />
         </td>
-        {/* Price (rate) */}
+        {/* Price (rate) — per door / drawer / shelf for those rows, built from their parts */}
         <td className={`px-2 py-1.5 w-[70px] text-right font-mono ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "rate")} mono type="number"
-            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], rate: v } }))}
-            onCommit={() => commit(item)} />
+          {perPiece ? (
+            <button onClick={onToggle} title={`Cost of one ${pieceName} — open its parts`}
+              className="w-full text-right bg-transparent border-none p-0 px-2 py-1.5 cursor-pointer font-mono text-[11px] text-nicara-dark hover:text-nicara-gold">
+              {inr(item.rate)}
+              <div className="text-[9px] text-surface-400 font-sans">per {pieceName} · {item.components!.length} parts</div>
+            </button>
+          ) : (
+            <EditableCell locked={locked} value={val(item, "rate")} mono type="number"
+              onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], rate: v } }))}
+              onCommit={() => commit(item)} />
+          )}
         </td>
         {/* Price Unit */}
         <td className={`px-2 py-1.5 w-[70px] ${BD}`}>
@@ -954,6 +881,7 @@ function ComponentBreakdown({
 }) {
   const toast = useToast();
   const components = item.components ?? [];
+  const perPiece = !!item.group_key && item.item_type === "Spec Purpose";
   const [editing, setEditing] = useState<EstimateItemComponent | "new" | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -971,10 +899,12 @@ function ComponentBreakdown({
     <div className="bg-amber-50 border-l-[3px] border-l-nicara-gold px-4 py-3">
       <div className="flex items-center justify-between mb-2">
         <div className="text-[10px] font-bold text-amber-800">
-          📋 Material Breakdown — {item.item || "line"}
+          📋 {perPiece ? `${item.specification} — what ${parseFloat(item.qty)} ${item.specification.toLowerCase()} are made of` : `Material Breakdown — ${item.item || "line"}`}
           {components.length > 0 && (
             <span className="ml-2 text-amber-600 font-normal">
-              amount rolls up from these {components.length} component(s)
+              {perPiece
+                ? `₹${parseFloat(item.rate).toLocaleString("en-IN")} each · taken out of the material rows, so nothing is counted twice`
+                : `amount rolls up from these ${components.length} component(s)`}
             </span>
           )}
         </div>
@@ -1002,7 +932,12 @@ function ComponentBreakdown({
               <tr key={c.id} className="border-t border-amber-200">
                 <td className="px-2 py-1.5 font-semibold text-nicara-dark">{c.basic_component}</td>
                 <td className="px-2 py-1.5 text-surface-600">{c.detail || "—"}</td>
-                <td className="px-2 py-1.5 text-surface-600">{c.brand || "—"}</td>
+                <td className="px-2 py-1.5 text-surface-600">
+                  {c.material_category && !locked ? (
+                    <PartMaterialPicker part={c} item={item} project={project} estimate={estimate}
+                      onChanged={onChanged} onError={onError} />
+                  ) : (c.brand || "—")}
+                </td>
                 <td className="px-2 py-1.5 text-surface-600">{c.model || "—"}</td>
                 <td className="px-2 py-1.5 font-mono text-right">{parseFloat(c.qty)}</td>
                 <td className="px-2 py-1.5">{c.unit || "—"}</td>
@@ -1182,127 +1117,6 @@ function Totals({ estimate }: { estimate: Estimate }) {
   );
 }
 
-/* ── Catalogue picker ─────────────────────────────────────────── */
-
-function CatalogPicker({
-  onClose, onAdd,
-}: {
-  onClose: () => void;
-  onAdd: (items: { item_id: number; area?: string; qty?: number }[]) => void;
-}) {
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Map<number, { area: string; qty: number }>>(new Map());
-  const { data, loading, error, reload } = useApiData(
-    () => itemsApi.list({ search: search || undefined }),
-    [search]
-  );
-
-  const items = data?.results ?? [];
-
-  const toggle = (item: Item) => {
-    setSelected(current => {
-      const next = new Map(current);
-      if (next.has(item.id)) next.delete(item.id);
-      else next.set(item.id, { area: item.default_room, qty: parseFloat(item.default_qty) || 1 });
-      return next;
-    });
-  };
-
-  const update = (id: number, patch: Partial<{ area: string; qty: number }>) => {
-    setSelected(current => {
-      const next = new Map(current);
-      const existing = next.get(id);
-      if (existing) next.set(id, { ...existing, ...patch });
-      return next;
-    });
-  };
-
-  const submit = () =>
-    onAdd([...selected.entries()].map(([item_id, v]) => ({ item_id, area: v.area, qty: v.qty })));
-
-  return (
-    <Modal open onClose={onClose} size="xl" title="Add Items from Catalogue"
-      subtitle="Rates, dimensions and GST come from the catalogue — adjust room and quantity here."
-      footer={
-        <>
-          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={submit} disabled={selected.size === 0}>
-            Add {selected.size > 0 ? `${selected.size} item(s)` : "Items"}
-          </Btn>
-        </>
-      }>
-      <div className="relative mb-3">
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-surface-400">🔍</span>
-        <input value={search} onChange={e => setSearch(e.target.value)} autoFocus
-          placeholder="Search wardrobe, ceiling, kitchen…"
-          className="w-full pl-9 pr-3 py-2.5 border border-surface-200 rounded-xl text-[12px] bg-white outline-none focus:border-nicara-gold" />
-      </div>
-
-      {loading && <Loading />}
-      {error && <ErrorState message={error} onRetry={reload} />}
-
-      {!loading && !error && (
-        <div className="border border-surface-200 rounded-xl overflow-hidden max-h-[420px] overflow-y-auto">
-          <table className="w-full text-[12px]">
-            <thead className="sticky top-0">
-              <tr className="bg-surface-100">
-                {["", "Item", "Category", "L × B × H", "Rate", "Room", "Qty"].map(h => (
-                  <th key={h} className="px-3 py-2 text-surface-500 font-semibold text-left text-[10px] uppercase tracking-wider">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(item => {
-                const picked = selected.get(item.id);
-                return (
-                  <tr key={item.id}
-                    className={`border-b border-surface-100 ${picked ? "bg-nicara-gold/5" : "hover:bg-surface-50"}`}>
-                    <td className="px-3 py-2">
-                      <input type="checkbox" checked={!!picked} onChange={() => toggle(item)}
-                        className="w-4 h-4 accent-nicara-gold cursor-pointer" />
-                    </td>
-                    <td className="px-3 py-2 max-w-[260px] cursor-pointer" onClick={() => toggle(item)}>
-                      <div className="font-semibold text-nicara-dark">{item.name}</div>
-                      {item.description && <div className="text-[10px] text-surface-400 truncate">{item.description}</div>}
-                    </td>
-                    <td className="px-3 py-2 text-surface-500 whitespace-nowrap">
-                      {item.category_icon} {item.category_name}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-[10px] text-surface-500 whitespace-nowrap">
-                      {[item.default_length, item.default_breadth, item.default_height]
-                        .filter(d => d && d !== "-").join(" × ") || "—"}
-                    </td>
-                    <td className="px-3 py-2 font-semibold text-nicara-dark whitespace-nowrap">
-                      {inr(item.default_rate)}<span className="text-[10px] text-surface-400">/{item.unit}</span>
-                    </td>
-                    <td className="px-2 py-2 w-[140px]">
-                      {picked && (
-                        <input value={picked.area} onChange={e => update(item.id, { area: e.target.value })}
-                          placeholder="Room"
-                          className="w-full px-2 py-1 border border-surface-200 rounded-lg text-[11px] outline-none focus:border-nicara-gold" />
-                      )}
-                    </td>
-                    <td className="px-2 py-2 w-[80px]">
-                      {picked && (
-                        <input type="number" value={picked.qty}
-                          onChange={e => update(item.id, { qty: parseFloat(e.target.value) || 0 })}
-                          className="w-full px-2 py-1 border border-surface-200 rounded-lg text-[11px] font-mono outline-none focus:border-nicara-gold" />
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-              {items.length === 0 && (
-                <tr><td colSpan={7} className="px-3 py-8 text-center text-surface-400">No items match that search</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Modal>
-  );
-}
-
 /* ══════════════════════════════════════════════════════════════════
    CALCULATED FURNITURE GROUPS — size, options, recalculation
    ══════════════════════════════════════════════════════════════════ */
@@ -1452,6 +1266,38 @@ function RawMaterialPicker({ item, project, estimate, onChanged, onError }: {
   );
 }
 
+/** Brand / model of one part of a door, drawer or shelf — re-prices the piece. */
+function PartMaterialPicker({ part, item, project, estimate, onChanged, onError }: {
+  part: EstimateItemComponent; item: EstimateItem; project: Project; estimate: Estimate;
+  onChanged: () => Promise<void>; onError: (msg: string) => void;
+}) {
+  const [choices, setChoices] = useState<LibraryItem[] | null>(null);
+  const load = () => {
+    if (choices === null && part.material_category) {
+      categoryItems(part.material_category).then(setChoices).catch(() => setChoices([]));
+    }
+  };
+  const choose = async (id: string) => {
+    if (!id) return;
+    try {
+      await estimatesApi.updateComponent(project.id, estimate.id, item.id, part.id, { library_material_item: Number(id) });
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Could not change the brand.");
+    }
+  };
+  return (
+    <select value={part.library_material_item ? String(part.library_material_item) : ""} onFocus={load} onMouseDown={load}
+      onChange={e => choose(e.target.value)} title="Brand / model — re-prices this part"
+      className="w-full max-w-[220px] px-1 py-0.5 border border-transparent rounded-md text-[10px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white cursor-pointer">
+      {(choices ?? []).length === 0 && <option value={part.library_material_item ?? ""}>{part.brand || "—"}</option>}
+      {(choices ?? []).map(m => (
+        <option key={m.id} value={m.id}>{[m.brand_name, m.model_name].filter(Boolean).join(" — ")} (₹{parseFloat(m.default_rate)})</option>
+      ))}
+    </select>
+  );
+}
+
 /** Pick a catalogue furniture, its room/zone, size and options. */
 function AddFurnitureModal({ onClose, onAdd }: {
   onClose: () => void;
@@ -1511,8 +1357,8 @@ function AddFurnitureModal({ onClose, onAdd }: {
    ══════════════════════════════════════════════════════════════════ */
 
 const SMART_GROUPS: { key: string; label: string; hint: string }[] = [
-  { key: "plywood", label: "Plywood", hint: "Applies to every ply thickness that brand makes" },
-  { key: "hardware", label: "Hardware", hint: "Hinges, channels, handles, locks" },
+  { key: "plywood", label: "Plywood", hint: "Every ply thickness — rows and door / shelf / drawer boards" },
+  { key: "hardware", label: "Hardware", hint: "Hinges, channels, handles, knobs, locks" },
   { key: "kitchen_accessories", label: "Kitchen Accessories", hint: "Baskets, trays, organisers" },
   { key: "finishing", label: "Finishing", hint: "Laminate, acrylic, liner, edging" },
 ];
@@ -1526,31 +1372,28 @@ function SmartEstimateGenerator({
   onGenerated: () => Promise<void>;
   onError: (msg: string) => void;
 }) {
+  const toast = useToast();
   const options = useApiData(() => libraryApi.smartOptions(), []);
   const [chosen, setChosen] = useState<Record<string, string>>({});
   const [applying, setApplying] = useState(false);
-  const picked = Object.values(chosen).filter(Boolean).map(Number);
+  const picked = Object.entries(chosen).filter(([, id]) => id)
+    .map(([group, id]) => ({ group, brand_id: Number(id) }));
 
   const apply = async () => {
     if (picked.length === 0) return;
     setApplying(true);
     try {
-      await estimatesApi.applySmartMaterials(projectId, estimateId, picked);
+      const res = await estimatesApi.applySmartBrands(projectId, estimateId, picked);
+      if (res.brand_result.unchanged > 0) {
+        toast.info("Some rows kept their brand",
+          `${res.brand_result.changed} switched; ${res.brand_result.unchanged} kept — the brand has no model in their category`);
+      }
       await onGenerated();
     } catch (e) {
-      onError(e instanceof ApiError ? e.message : "Could not apply the preferences.");
+      onError(e instanceof ApiError ? e.message : "Could not apply the brands.");
     } finally {
       setApplying(false);
     }
-  };
-
-  const grouped = (key: string) => {
-    const byCategory = new Map<string, SmartOption[]>();
-    (options.data?.[key] ?? []).forEach(o => {
-      if (!byCategory.has(o.category)) byCategory.set(o.category, []);
-      byCategory.get(o.category)!.push(o);
-    });
-    return Array.from(byCategory.entries());
   };
 
   return (
@@ -1560,32 +1403,37 @@ function SmartEstimateGenerator({
           <Brain size={16} /> Smart Estimate Generator
         </div>
         <div className="text-[11px] text-stone-400 mt-0.5">
-          Choose brands and models — every matching row is re-priced from Raw Material. Quantities don&apos;t change.
+          Choose a brand per group — every matching row and part switches to that brand&apos;s model in its own
+          category and is re-priced from Raw Material. Quantities don&apos;t change.
         </div>
       </div>
 
-      {options.loading && <div className="p-4 text-center text-stone-400 text-[11px]">Loading raw materials…</div>}
+      {options.loading && <div className="p-4 text-center text-stone-400 text-[11px]">Loading brands…</div>}
       <div className="grid grid-cols-4 gap-3 p-5">
-        {SMART_GROUPS.map(g => (
-          <label key={g.key} className="block">
-            <span className="text-[10px] font-bold text-stone-300 uppercase tracking-wider block mb-1">{g.label}</span>
-            <select value={chosen[g.key] ?? ""} onChange={e => setChosen(c => ({ ...c, [g.key]: e.target.value }))}
-              className="w-full px-2 py-2 bg-stone-800 border border-stone-600 rounded-lg text-[11px] text-white outline-none focus:border-nicara-gold cursor-pointer">
-              <option value="">Keep current</option>
-              {grouped(g.key).map(([category, items]) => (
-                <optgroup key={category} label={category}>
-                  {items.map(o => <option key={o.id} value={o.id}>{o.label} (₹{parseFloat(o.price)}/{o.unit})</option>)}
-                </optgroup>
-              ))}
-            </select>
-            <span className="text-[9px] text-stone-500 mt-1 block">{g.hint}</span>
-          </label>
-        ))}
+        {SMART_GROUPS.map(g => {
+          const brands = options.data?.[g.key] ?? [];
+          return (
+            <label key={g.key} className="block">
+              <span className="text-[10px] font-bold text-stone-300 uppercase tracking-wider block mb-1">{g.label}</span>
+              <select value={chosen[g.key] ?? ""} onChange={e => setChosen(c => ({ ...c, [g.key]: e.target.value }))}
+                disabled={brands.length === 0}
+                className="w-full px-2 py-2 bg-stone-800 border border-stone-600 rounded-lg text-[11px] text-white outline-none focus:border-nicara-gold cursor-pointer disabled:opacity-50">
+                <option value="">Keep current</option>
+                {brands.map(b => (
+                  <option key={b.id} value={b.id} title={b.categories.join(", ")}>
+                    {b.name} ({b.categories.length} {b.categories.length === 1 ? "category" : "categories"})
+                  </option>
+                ))}
+              </select>
+              <span className="text-[9px] text-stone-500 mt-1 block">{g.hint}</span>
+            </label>
+          );
+        })}
       </div>
 
       <div className="px-5 py-3 border-t border-stone-700 flex items-center justify-between">
         <span className="text-[11px] text-stone-300">
-          {picked.length ? `${picked.length} preference(s) chosen` : "Pick at least one brand / model"}
+          {picked.length ? `${picked.length} brand(s) chosen` : "Pick at least one brand"}
         </span>
         <button onClick={apply} disabled={disabled || applying || picked.length === 0}
           className="px-6 py-2.5 bg-nicara-gold border-none rounded-xl text-white text-[12px] font-bold cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50">

@@ -1,5 +1,6 @@
 """NICARA Component Library — Views"""
 from rest_framework import generics
+from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from .models import MaterialCategory, MaterialBrand, MaterialItem, ServiceItem
@@ -30,12 +31,16 @@ class LibraryMetaView(APIView):
         categories = MaterialCategory.objects.filter(is_active=True).values(
             'id', 'name', 'icon', 'type', 'product_group'
         )
-        brands = MaterialBrand.objects.filter(is_active=True).values(
-            'id', 'name', 'category_id'
-        )
+        # Brands are one master list; category_ids says where each one has models.
+        used = {}
+        for brand_id, category_id in MaterialItem.objects.filter(brand__isnull=False).values_list(
+                'brand_id', 'category_id').distinct():
+            used.setdefault(brand_id, []).append(category_id)
+        brands = [{'id': b['id'], 'name': b['name'], 'category_ids': used.get(b['id'], [])}
+                  for b in MaterialBrand.objects.filter(is_active=True).values('id', 'name')]
         return Response({
             'categories': list(categories),
-            'brands': list(brands),
+            'brands': brands,
             'units': LIBRARY_UNITS,
             'counts': {
                 'categories': MaterialCategory.objects.count(),
@@ -64,23 +69,34 @@ class MaterialCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 class MaterialBrandListCreateView(generics.ListCreateAPIView):
-    """GET/POST /api/library/brands/"""
-    queryset = MaterialBrand.objects.all()
+    """GET/POST /api/library/brands/ — the brand master list (?category=<id>: brands with a model there)."""
     serializer_class = MaterialBrandSerializer
-    filterset_fields = ['category']
     search_fields = ['name']
+
+    def get_queryset(self):
+        qs = MaterialBrand.objects.all()
+        category = self.request.query_params.get('category')
+        if category:
+            qs = qs.filter(items__category_id=category).distinct()
+        return qs
 
 
 class MaterialBrandDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = MaterialBrand.objects.all()
     serializer_class = MaterialBrandSerializer
 
+    def perform_destroy(self, instance):
+        if instance.items.exists():
+            raise ValidationError({'detail': f'"{instance.name}" is used by {instance.items.count()} raw '
+                                             'material(s). Reassign or delete them first, or mark the brand inactive.'})
+        instance.delete()
+
 
 class MaterialItemListCreateView(generics.ListCreateAPIView):
     """GET/POST /api/library/items/"""
     queryset = MaterialItem.objects.select_related('category', 'brand').all()
     serializer_class = MaterialItemSerializer
-    filterset_fields = ['brand', 'category', 'brand__category', 'is_active']
+    filterset_fields = ['brand', 'category', 'is_active']
     search_fields = ['model_name', 'brand__name', 'category__name', 'description']
     ordering_fields = ['model_name', 'default_rate', 'created_at']
 
@@ -91,7 +107,12 @@ class MaterialItemDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 class SmartEstimateOptionsView(APIView):
-    """Return active library variants grouped for the existing estimate selectors."""
+    """
+    GET /api/library/smart-estimate-options/
+    Brands per product group for the Smart Estimate Generator. Only categories
+    that estimate rows are priced from (a Basic Component's raw-material
+    category) count, so a brand listed here can re-price at least one row type.
+    """
 
     def get(self, request):
         groups = [
@@ -101,21 +122,22 @@ class SmartEstimateOptionsView(APIView):
             MaterialCategory.ProductGroup.FINISHING,
         ]
         items = (MaterialItem.objects.filter(
-            is_active=True, category__is_active=True, category__product_group__in=groups,
-        ).select_related('category', 'brand').order_by('category__name', 'brand__name', 'model_name'))
-        results = {group: [] for group in groups}
+            is_active=True, brand__isnull=False, brand__is_active=True,
+            category__is_active=True, category__product_group__in=groups,
+            category__basic_components__isnull=False,
+        ).select_related('category', 'brand').distinct())
+        found = {group: {} for group in groups}
         for item in items:
-            group = item.category.product_group
-            brand = f'{item.brand.name} — ' if item.brand_id else ''
-            results[group].append({
-                'id': item.id,
-                'label': f'{brand}{item.model_name}',
-                'brand': item.brand.name if item.brand_id else '',
-                'model': item.model_name,
-                'category': item.category.name,
-                'price': item.default_rate,
-                'unit': item.default_unit,
+            entry = found[item.category.product_group].setdefault(item.brand_id, {
+                'id': item.brand_id, 'name': item.brand.name, 'categories': set(), 'models': 0,
             })
+            entry['categories'].add(item.category.name)
+            entry['models'] += 1
+        results = {
+            group: sorted(({**b, 'categories': sorted(b['categories'])} for b in brands.values()),
+                          key=lambda b: b['name'].lower())
+            for group, brands in found.items()
+        }
         return Response(results)
 
 

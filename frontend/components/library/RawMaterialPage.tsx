@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ApiError, libraryApi } from "@/lib/api";
-import type { LibraryItem, LibraryItemInput, LibraryMeta } from "@/lib/apiTypes";
+import type { LibraryBrand, LibraryItem, LibraryItemInput, LibraryMeta } from "@/lib/apiTypes";
 import { useApiData, inr } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
 import Modal from "@/components/ui/Modal";
@@ -10,6 +10,7 @@ import { Btn, Check, Field, FormSection, Select, TextArea } from "@/components/u
 import { EmptyState, ErrorState, Loading } from "@/components/ui/States";
 
 const BLANK: LibraryItemInput = {
+  category: "",
   brand: "",
   model_name: "",
   description: "",
@@ -24,16 +25,37 @@ const BLANK: LibraryItemInput = {
   notes: "",
 };
 
+/** Raw Material Library: priced materials (category + brand + model) and the brand master list. */
 export default function RawMaterialPage() {
+  const [tab, setTab] = useState<"materials" | "brands">("materials");
+  const { data: meta, reload: reloadMeta } = useApiData<LibraryMeta>(() => libraryApi.meta(), []);
+
+  return (
+    <div className="p-6 px-8 animate-fade-in">
+      <div className="flex gap-1 mb-5 bg-surface-100 p-1 rounded-xl w-fit">
+        {([["materials", "🪵 Materials"], ["brands", "🏷️ Brands"]] as const).map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key)}
+            className={`px-4 py-2 rounded-lg text-[12px] font-semibold border-none cursor-pointer ${tab === key
+              ? "bg-white text-nicara-dark shadow-sm" : "bg-transparent text-surface-500 hover:text-nicara-dark"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === "materials"
+        ? <MaterialsPanel meta={meta} reloadMeta={reloadMeta} />
+        : <BrandsPanel onChanged={reloadMeta} />}
+    </div>
+  );
+}
+
+/* ─── Materials ────────────────────────────────────────────────── */
+
+function MaterialsPanel({ meta, reloadMeta }: { meta: LibraryMeta | null; reloadMeta: () => Promise<void> }) {
   const toast = useToast();
   const [search, setSearch]           = useState("");
   const [catFilter, setCatFilter]     = useState<number | "">("");
   const [brandFilter, setBrandFilter] = useState<number | "">("");
   const [editing, setEditing]         = useState<LibraryItem | "new" | null>(null);
-
-  const { data: meta, reload: reloadMeta } = useApiData<LibraryMeta>(
-    () => libraryApi.meta(), []
-  );
 
   const { data, loading, error, reload } = useApiData(
     () => libraryApi.items({
@@ -61,16 +83,17 @@ export default function RawMaterialPage() {
     setBrandFilter("");
   };
 
+  // With a category chosen, only the brands that have a material in it.
   const brandOptions = useMemo(() => {
     const brands = meta?.brands ?? [];
-    const filtered = catFilter ? brands.filter(b => b.category_id === catFilter) : brands;
+    const filtered = catFilter ? brands.filter(b => b.category_ids?.includes(catFilter)) : brands;
     return filtered.map(b => ({ value: String(b.id), label: b.name }));
   }, [meta, catFilter]);
 
   const refresh = async () => { await Promise.all([reload(), reloadMeta()]); };
 
   return (
-    <div className="p-6 px-8 animate-fade-in">
+    <>
       {/* Header */}
       <div className="flex justify-between items-start mb-5">
         <div>
@@ -172,7 +195,7 @@ export default function RawMaterialPage() {
                           {!item.is_active && <span className="text-[9px] font-bold text-red-500 bg-red-50 px-1.5 py-0.5 rounded-full">Inactive</span>}
                         </td>
                         <td className="px-3 py-2.5 text-surface-500 max-w-[220px]"><div className="truncate">{item.description || "—"}</div></td>
-                        <td className="px-3 py-2.5 font-semibold text-nicara-dark whitespace-nowrap">{item.brand_name}</td>
+                        <td className="px-3 py-2.5 font-semibold text-nicara-dark whitespace-nowrap">{item.brand_name || "—"}</td>
                         <td className="px-3 py-2.5 text-surface-600 whitespace-nowrap font-mono text-[11px]">{item.weight || "—"}</td>
                         <td className="px-3 py-2.5 text-surface-600 whitespace-nowrap font-mono text-[11px]">{item.length || "—"}</td>
                         <td className="px-3 py-2.5 text-surface-600 whitespace-nowrap font-mono text-[11px]">{item.thickness || "—"}</td>
@@ -201,25 +224,28 @@ export default function RawMaterialPage() {
         <MaterialModal
           item={editing === "new" ? null : editing}
           meta={meta}
+          onBrandAdded={reloadMeta}
           onClose={() => setEditing(null)}
           onSaved={msg => { setEditing(null); toast.success(msg); void refresh(); }}
         />
       )}
-    </div>
+    </>
   );
 }
 
-/* ─── Add / Edit modal ─────────────────────────────────────────── */
+/* ─── Add / Edit material ──────────────────────────────────────── */
 
-function MaterialModal({ item, meta, onClose, onSaved }: {
+function MaterialModal({ item, meta, onBrandAdded, onClose, onSaved }: {
   item: LibraryItem | null;
   meta: LibraryMeta | null;
+  onBrandAdded: () => Promise<void>;
   onClose: () => void;
   onSaved: (msg: string) => void;
 }) {
   const [form, setForm] = useState<LibraryItemInput>(
     item
       ? {
+          category:     item.category_id,
           brand:        item.brand,
           model_name:   item.model_name,
           description:  item.description,
@@ -238,18 +264,21 @@ function MaterialModal({ item, meta, onClose, onSaved }: {
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [banner, setBanner] = useState("");
   const [saving, setSaving] = useState(false);
-  const [selCat, setSelCat] = useState<number | "">(item?.category_id ?? "");
+  const [newBrand, setNewBrand] = useState<string | null>(null);
 
   const set = <K extends keyof LibraryItemInput>(k: K, v: LibraryItemInput[K]) =>
     setForm(f => ({ ...f, [k]: v }));
 
   const err = (field: string) => errors[field]?.[0];
 
+  // Every brand is available for every category; ones already used here come first.
   const brandOptions = useMemo(() => {
-    const brands = meta?.brands ?? [];
-    const filtered = selCat ? brands.filter(b => b.category_id === selCat) : brands;
-    return filtered.map(b => ({ value: String(b.id), label: b.name }));
-  }, [meta, selCat]);
+    const brands = (meta?.brands ?? []).filter(b => b.is_active !== false);
+    const cat = form.category;
+    const used = (b: LibraryBrand) => (cat && b.category_ids?.includes(cat) ? 0 : 1);
+    return [...brands].sort((a, b) => used(a) - used(b) || a.name.localeCompare(b.name))
+      .map(b => ({ value: String(b.id), label: b.name }));
+  }, [meta, form.category]);
 
   const categoryOptions = useMemo(
     () => (meta?.categories ?? []).map(c => ({ value: String(c.id), label: `${c.icon} ${c.name}` })),
@@ -266,21 +295,35 @@ function MaterialModal({ item, meta, onClose, onSaved }: {
   const gstAmt  = rateNum * gstPct / 100;
   const totalWithGst = rateNum + gstAmt;
 
+  const addBrand = async () => {
+    const name = (newBrand ?? "").trim();
+    if (!name) return;
+    try {
+      const created = await libraryApi.createBrand({ name });
+      await onBrandAdded();
+      set("brand", created.id);
+      setNewBrand(null);
+    } catch (e) {
+      setErrors(er => ({ ...er, brand: [e instanceof ApiError ? e.message : "Could not add the brand."] }));
+    }
+  };
+
   const save = async () => {
     const newErrors: Record<string, string[]> = {};
     if (!form.model_name?.trim()) newErrors.model_name = ["Material name is required."];
-    if (!form.brand)              newErrors.brand       = ["Please select a brand."];
+    if (!form.category)           newErrors.category   = ["Please select a category."];
     if (Object.keys(newErrors).length) { setErrors(newErrors); return; }
 
+    const body = { ...form, brand: form.brand || null };
     setSaving(true);
     setBanner("");
     setErrors({});
     try {
       if (item) {
-        await libraryApi.updateItem(item.id, form);
+        await libraryApi.updateItem(item.id, body);
         onSaved(`${form.model_name} updated`);
       } else {
-        await libraryApi.createItem(form as LibraryItemInput);
+        await libraryApi.createItem(body);
         onSaved(`${form.model_name} added to library`);
       }
     } catch (e) {
@@ -300,7 +343,7 @@ function MaterialModal({ item, meta, onClose, onSaved }: {
   return (
     <Modal open onClose={onClose} size="lg"
       title={item ? `Edit — ${item.model_name}` : "New Raw Material"}
-      subtitle={item ? `${item.brand_name} · ${item.category_name}` : "Add a new material to the library"}
+      subtitle={item ? `${item.brand_name || "No brand"} · ${item.category_name}` : "Add a new material to the library"}
       footer={<>
         {item && <Btn variant="danger" onClick={retire} disabled={saving}>Remove</Btn>}
         <Btn variant="ghost" onClick={onClose} disabled={saving}>Cancel</Btn>
@@ -315,13 +358,37 @@ function MaterialModal({ item, meta, onClose, onSaved }: {
 
       {/* Identity */}
       <FormSection title="Identity">
-        <Select label="Category" value={String(selCat)}
-          onChange={v => { setSelCat(v ? Number(v) : ""); set("brand", ""); }}
-          placeholder="Select category…" options={categoryOptions} required />
-        <Select label="Brand" value={form.brand ? String(form.brand) : ""}
-          onChange={v => set("brand", v ? Number(v) : "")}
-          placeholder={selCat ? "Select brand…" : "Choose category first"}
-          options={brandOptions} required error={err("brand")} />
+        <Select label="Category" value={String(form.category)}
+          onChange={v => set("category", v ? Number(v) : "")}
+          placeholder="Select category…" options={categoryOptions} required error={err("category")} />
+        <div>
+          {newBrand === null ? (
+            <>
+              <Select label="Brand" value={form.brand ? String(form.brand) : ""}
+                onChange={v => set("brand", v ? Number(v) : "")}
+                placeholder="— No brand —" options={brandOptions} error={err("brand")} />
+              <button type="button" onClick={() => setNewBrand("")}
+                className="mt-1 bg-transparent border-none p-0 text-[10px] font-semibold text-nicara-gold cursor-pointer">
+                + New brand
+              </button>
+            </>
+          ) : (
+            <div>
+              <Field label="New brand" value={newBrand} onChange={setNewBrand} placeholder="e.g. Century"
+                error={err("brand")} />
+              <div className="flex gap-2 mt-1.5">
+                <button type="button" onClick={addBrand} disabled={!newBrand.trim()}
+                  className="px-2.5 py-1 rounded-lg border-none bg-nicara-gold text-white text-[10px] font-bold cursor-pointer disabled:opacity-50">
+                  Add brand
+                </button>
+                <button type="button" onClick={() => setNewBrand(null)}
+                  className="px-2.5 py-1 rounded-lg border-none bg-surface-100 text-surface-600 text-[10px] cursor-pointer">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
         <div className="col-span-2">
           <Field label="Material / Model Name" value={form.model_name}
             onChange={v => set("model_name", v)} required error={err("model_name")}
@@ -382,5 +449,107 @@ function MaterialModal({ item, meta, onClose, onSaved }: {
         </div>
       </FormSection>
     </Modal>
+  );
+}
+
+/* ─── Brands — one master list linked to raw materials ─────────── */
+
+function BrandsPanel({ onChanged }: { onChanged: () => Promise<void> }) {
+  const toast = useToast();
+  const { data, loading, error, reload } = useApiData(() => libraryApi.brands(), []);
+  const [name, setName] = useState("");
+  const [editing, setEditing] = useState<{ id: number; name: string } | null>(null);
+  const [banner, setBanner] = useState("");
+  const brands = data?.results ?? [];
+
+  const run = async (action: () => Promise<unknown>, msg: string) => {
+    setBanner("");
+    try {
+      await action();
+      await Promise.all([reload(), onChanged()]);
+      toast.success(msg);
+    } catch (e) {
+      setBanner(e instanceof ApiError ? e.message : "Something went wrong.");
+    }
+  };
+
+  return (
+    <>
+      <div className="flex justify-between items-start mb-5">
+        <div>
+          <h1 className="text-xl font-bold text-nicara-dark m-0">🏷️ Brands</h1>
+          <p className="text-[12px] text-surface-500 mt-1 m-0">
+            One list of brands. Each raw material links to a brand; the Smart Estimate Generator offers these.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="New brand name"
+            onKeyDown={e => { if (e.key === "Enter" && name.trim()) void run(async () => { await libraryApi.createBrand({ name: name.trim() }); setName(""); }, "Brand added"); }}
+            className="px-3 py-2.5 border border-surface-200 rounded-xl text-[12px] bg-white outline-none focus:border-nicara-gold w-[220px]" />
+          <Btn disabled={!name.trim()}
+            onClick={() => run(async () => { await libraryApi.createBrand({ name: name.trim() }); setName(""); }, "Brand added")}>
+            + Add Brand
+          </Btn>
+        </div>
+      </div>
+
+      {banner && (
+        <div className="mb-4 px-4 py-2.5 bg-red-50 border border-red-200 rounded-xl text-[12px] text-red-700 font-medium">{banner}</div>
+      )}
+      {loading && <Loading />}
+      {error && <ErrorState message={error} onRetry={reload} />}
+      {!loading && !error && brands.length === 0 && <EmptyState icon="🏷️" title="No brands yet" hint="Add the first brand above." />}
+
+      {!loading && !error && brands.length > 0 && (
+        <div className="bg-white border border-surface-200 rounded-2xl overflow-hidden">
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="bg-nicara-dark">
+                {["Brand", "Used in", "Materials", "Active", ""].map(h => (
+                  <th key={h} className="px-3 py-2.5 text-surface-300 font-semibold text-left text-[10px] uppercase tracking-wider">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {brands.map((b, ri) => (
+                <tr key={b.id} className={`border-b border-surface-100 ${b.is_active === false ? "opacity-50" : ""} ${ri % 2 ? "bg-surface-50/40" : ""}`}>
+                  <td className="px-3 py-2.5 font-semibold text-nicara-dark w-[220px]">
+                    {editing?.id === b.id ? (
+                      <input autoFocus value={editing.name} onChange={e => setEditing({ id: b.id, name: e.target.value })}
+                        onKeyDown={e => {
+                          if (e.key === "Escape") setEditing(null);
+                          if (e.key === "Enter" && editing.name.trim()) {
+                            void run(() => libraryApi.updateBrand(b.id, { name: editing.name.trim() }), "Brand renamed");
+                            setEditing(null);
+                          }
+                        }}
+                        className="w-full px-2 py-1 border border-nicara-gold rounded-lg text-[12px] outline-none" />
+                    ) : b.name}
+                  </td>
+                  <td className="px-3 py-2.5 text-surface-500 text-[11px]">{(b.categories ?? []).join(" · ") || "—"}</td>
+                  <td className="px-3 py-2.5 font-mono">{b.item_count ?? 0}</td>
+                  <td className="px-3 py-2.5">
+                    <input type="checkbox" checked={b.is_active !== false} className="w-3.5 h-3.5 accent-nicara-gold cursor-pointer"
+                      onChange={e => run(() => libraryApi.updateBrand(b.id, { is_active: e.target.checked }),
+                        e.target.checked ? "Brand active" : "Brand hidden")} />
+                  </td>
+                  <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                    <button onClick={() => setEditing({ id: b.id, name: b.name })}
+                      className="px-2.5 py-1 bg-surface-100 rounded-lg text-[11px] cursor-pointer border-none text-surface-600 hover:bg-surface-200 mr-1.5">
+                      Rename
+                    </button>
+                    <button onClick={() => run(() => libraryApi.deleteBrand(b.id), "Brand deleted")}
+                      title={b.item_count ? "In use — reassign its materials first, or untick Active" : "Delete"}
+                      className="px-2.5 py-1 bg-red-50 rounded-lg text-[11px] cursor-pointer border-none text-red-600 hover:bg-red-100">
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
   );
 }

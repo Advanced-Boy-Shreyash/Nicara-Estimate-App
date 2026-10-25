@@ -8,8 +8,7 @@ import type {
   BasicComponent, BookingForm, CalcOptions, CatalogMeta, CatalogRoom, CatalogZone, Client,
   CrmMeta, CrmNote, Deliverable, DeliverableType, DesignRequirement, Estimate,
   EstimateItem, EstimateItemComponent, EstimateListItem, EstimateType, Furniture, FurnitureCalc,
-  FurnitureComponent, Item,
-  ItemCategory, ItemMeta, Lead, LeadPipeline, LibraryBrand, LibraryItem, LibraryItemInput, LibraryMeta,
+  FurnitureComponent, Lead, LeadPipeline, LibraryBrand, LibraryItem, LibraryItemInput, LibraryMeta,
   ModuleRegistry,
   MyPermissions, PermissionMatrixRow, Project, ProjectListItem,
   ProjectMeta, Vendor, VendorMeta,
@@ -681,16 +680,6 @@ export const estimatesApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  /** Push catalogue items onto the estimate; defaults come from the Item. */
-  addFromCatalog: (
-    projectId: number,
-    estimateId: number,
-    items: ({ item_id: number } & EstimateItemInput)[]
-  ) =>
-    apiFetch<{ detail: string; items: EstimateItem[]; estimate: Estimate }>(
-      `/projects/${projectId}/estimates/${estimateId}/items/add-from-catalog/`,
-      { method: "POST", body: JSON.stringify({ items }) }
-    ),
   updateItem: (projectId: number, estimateId: number, itemId: number, data: EstimateItemInput) =>
     apiFetch<EstimateItem>(`/projects/${projectId}/estimates/${estimateId}/items/${itemId}/`, {
       method: "PATCH",
@@ -753,11 +742,11 @@ export const estimatesApi = {
     ),
   deleteGroup: (projectId: number, estimateId: number, groupKey: string) =>
     apiFetch<void>(`/projects/${projectId}/estimates/${estimateId}/groups/${groupKey}/`, { method: "DELETE" }),
-  /** Smart Estimate Generator — apply chosen brands/models to every matching row. */
-  applySmartMaterials: (projectId: number, estimateId: number, libraryItemIds: number[]) =>
-    apiFetch<Estimate>(`/projects/${projectId}/estimates/${estimateId}/apply-smart-materials/`, {
-      method: "POST", body: JSON.stringify({ materials: libraryItemIds.map(id => ({ library_item_id: id })) }),
-    }),
+  /** Smart Estimate Generator — a brand per product group, applied to every matching row and part. */
+  applySmartBrands: (projectId: number, estimateId: number, brands: { group: string; brand_id: number }[]) =>
+    apiFetch<Estimate & { brand_result: { changed: number; unchanged: number } }>(
+      `/projects/${projectId}/estimates/${estimateId}/apply-smart-materials/`,
+      { method: "POST", body: JSON.stringify({ brands }) }),
 };
 
 // ── Initial Engagement: Booking Form ──────────────────────────
@@ -777,42 +766,6 @@ export const bookingApi = {
     }),
   downloadPdf: (projectId: number) =>
     downloadFile(`/projects/${projectId}/booking-form/pdf/`, "booking-form.pdf"),
-};
-
-// ── Items catalogue ───────────────────────────────────────────
-
-export type ItemInput = Partial<Omit<Item, "id" | "code" | "category_name" | "category_icon" | "unit_display" | "catalog_furniture_name">>;
-
-export const itemsApi = {
-  list: (params: { category?: number; search?: string; room?: string } = {}) => {
-    const query = new URLSearchParams();
-    if (params.category) query.set("category", String(params.category));
-    if (params.search) query.set("search", params.search);
-    if (params.room) query.set("default_room", params.room);
-    query.set("page_size", "200"); // the catalogue is small; fetch it in one go
-    return apiFetch<Paginated<Item>>(`/items/?${query.toString()}`);
-  },
-  get: (id: number) => apiFetch<Item>(`/items/${id}/`),
-  create: (data: ItemInput) =>
-    apiFetch<Item>("/items/", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: number, data: ItemInput) =>
-    apiFetch<Item>(`/items/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  delete: (id: number) => apiFetch<void>(`/items/${id}/`, { method: "DELETE" }),
-
-  categories: () => apiFetch<Paginated<ItemCategory>>("/items/categories/"),
-  createCategory: (data: Partial<ItemCategory>) =>
-    apiFetch<ItemCategory>("/items/categories/", { method: "POST", body: JSON.stringify(data) }),
-
-  /** Bill of materials for an item — drives future rate build-up. */
-  components: (itemId: number) => apiFetch<Paginated<unknown>>(`/items/${itemId}/components/`),
-  addComponent: (itemId: number, data: unknown) =>
-    apiFetch<unknown>(`/items/${itemId}/components/`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-
-  /** Units, calc methods, rooms and categories for the item form. */
-  meta: () => apiFetch<ItemMeta>("/items/meta/"),
 };
 
 // ── Vendors: Material Suppliers & Contractors ─────────────────
@@ -951,8 +904,9 @@ export const fileApi = {
 
 // ── Raw Material Library ──────────────────────────────────────
 
-export interface SmartOption {
-  id: number; label: string; brand: string; model: string; category: string; price: string; unit: string;
+/** A brand the Smart Estimate Generator can apply to one product group. */
+export interface SmartBrand {
+  id: number; name: string; categories: string[]; models: number;
 }
 
 export const libraryApi = {
@@ -963,7 +917,7 @@ export const libraryApi = {
   items: (params?: { search?: string; category?: number; brand?: number; is_active?: boolean }) => {
     const q = new URLSearchParams();
     if (params?.search) q.set("search", params.search);
-    if (params?.category !== undefined) q.set("brand__category", String(params.category));
+    if (params?.category !== undefined) q.set("category", String(params.category));
     if (params?.brand !== undefined) q.set("brand", String(params.brand));
     if (params?.is_active !== undefined) q.set("is_active", params.is_active ? "true" : "false");
     const qs = q.toString();
@@ -983,14 +937,15 @@ export const libraryApi = {
   categoryItems: (categoryId: number) =>
     apiFetch<Paginated<LibraryItem>>(`/library/items/?category=${categoryId}&is_active=true&page_size=200`),
 
-  /** Smart Estimate Generator choices, grouped by product group. */
-  smartOptions: () => apiFetch<Record<string, SmartOption[]>>("/library/smart-estimate-options/"),
+  /** Smart Estimate Generator: brands per product group. */
+  smartOptions: () => apiFetch<Record<string, SmartBrand[]>>("/library/smart-estimate-options/"),
 
-  // ── Brands CRUD ───────────────────────────────────────────────
+  // ── Brands (one master list) ──────────────────────────────────
   brands: (categoryId?: number) =>
-    apiFetch<Paginated<LibraryBrand>>(categoryId ? `/library/brands/?category=${categoryId}` : "/library/brands/"),
+    apiFetch<Paginated<LibraryBrand>>(
+      `/library/brands/?page_size=500${categoryId ? `&category=${categoryId}` : ""}`),
 
-  createBrand: (data: { name: string; category: number }) =>
+  createBrand: (data: { name: string; website?: string }) =>
     apiFetch<LibraryBrand>("/library/brands/", { method: "POST", body: JSON.stringify(data) }),
 
   updateBrand: (id: number, data: Partial<LibraryBrand>) =>

@@ -2,7 +2,9 @@
 NICARA Component Library — Models
 
 Materials database that designers use to build estimates.
-Hierarchy: MaterialCategory → MaterialBrand → MaterialItem
+    MaterialCategory  what the material is   (Core Material(16mm BWP Ply), Box Hinges)
+    MaterialBrand     who makes it — one master list (Austin, Hettich, Greenlam)
+    MaterialItem      a priced model: category + brand + model + rate
 Plus separate ServiceItem for labour/service-type entries.
 
 Structure mirrors the "Sample Detail" sheet in sample template.xlsx.
@@ -53,22 +55,20 @@ class MaterialCategory(models.Model):
 
 class MaterialBrand(models.Model):
     """
-    Brands within a category.
-    Examples: Category='Box Hinges' → Brand='Hettich'
-              Category='Core Material(16mm BWP Ply)' → Brand='Austin'
-              Category='Finishing - Laminate' → Brand='Greenlam'
+    A brand — one master list shared by every category. A raw material links
+    to one brand; the Smart Estimate Generator offers brands, then picks that
+    brand's model in each row's category.
+    Examples: Austin, Hettich, Greenlam, Fevicol
     """
-    category = models.ForeignKey(MaterialCategory, on_delete=models.CASCADE, related_name='brands')
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=100, unique=True)
     website = models.URLField(blank=True, default='')
     is_active = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['name']
-        unique_together = ('category', 'name')
 
     def __str__(self):
-        return f"{self.category.name} — {self.name}"
+        return self.name
 
 
 class MaterialItem(models.Model):
@@ -112,11 +112,6 @@ class MaterialItem(models.Model):
     def __str__(self):
         brand = f'{self.brand.name} — ' if self.brand_id else ''
         return f'{brand}{self.model_name}'
-
-    def save(self, *args, **kwargs):
-        if not self.category_id and self.brand_id:
-            self.category_id = self.brand.category_id
-        super().save(*args, **kwargs)
 
     @property
     def full_display(self):

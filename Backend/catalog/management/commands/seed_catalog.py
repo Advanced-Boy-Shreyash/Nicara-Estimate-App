@@ -2,7 +2,8 @@
 Seed the catalogue from Sriniketh's calculation workbook (catalog/sheet_data.py):
 
     Rooms & Zones
-    Raw Material Library  — category → brand → model + rate (the sheet's prices)
+    Raw Material Library  — category → brand → model + rate (the sheet's prices,
+                            plus the sample estimate's brands as alternatives)
     Basic Components      — one per estimate row type, each with its quantity rule
     Furniture             — finished products and the components they're estimated from
 
@@ -17,7 +18,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from catalog.models import BasicComponent, Furniture, FurnitureComponent, Room, Zone
-from catalog.sheet_data import BASIC_COMPONENTS, FURNITURE, RAW_MATERIALS
+from catalog.sheet_data import BASIC_COMPONENTS, FURNITURE, RAW_MATERIALS, SAMPLE_MATERIALS
 from library.models import MaterialBrand, MaterialCategory, MaterialItem
 
 ROOMS = [
@@ -56,22 +57,26 @@ class Command(BaseCommand):
             Zone.objects.get_or_create(name=name, defaults={'sort_order': order})
 
         # ── Raw materials ──
-        categories, items = {}, {}
+        categories, items, sheet_default = {}, {}, {}
         for order, (cat_name, (spec_type, group, rows)) in enumerate(RAW_MATERIALS.items(), start=1):
             category, _ = MaterialCategory.objects.update_or_create(
                 name=cat_name,
                 defaults={'type': spec_type, 'product_group': group, 'sort_order': order, 'is_active': True},
             )
             categories[cat_name] = category
-            for brand_name, model, unit, rate in rows:
+            for brand_name, model, unit, rate in rows + SAMPLE_MATERIALS.get(cat_name, []):
                 brand = None
                 if brand_name:
-                    brand, _ = MaterialBrand.objects.get_or_create(category=category, name=brand_name)
+                    brand = (MaterialBrand.objects.filter(name__iexact=brand_name).first()
+                             or MaterialBrand.objects.create(name=brand_name))
                 item, _ = MaterialItem.objects.update_or_create(
                     category=category, brand=brand, model_name=model,
                     defaults={'default_unit': unit, 'default_rate': Decimal(str(rate)), 'is_active': True},
                 )
-                items[(cat_name, model)] = item
+                # The calculation sheet's model is the default when furniture names it
+                # (or names none); the sample's brands are alternatives.
+                items.setdefault((cat_name, model), item)
+                sheet_default.setdefault(cat_name, item)
 
         # ── Basic components ──
         components = {}
@@ -103,7 +108,8 @@ class Command(BaseCommand):
                 bc_name, extra = (part, {}) if isinstance(part, str) else part
                 bc = components[bc_name]
                 category = bc.library_category.name if bc.library_category_id else None
-                default_material = items.get((category, extra.get('model'))) if extra.get('model') else None
+                default_material = (items.get((category, extra['model'])) if extra.get('model')
+                                    else sheet_default.get(category))
                 FurnitureComponent.objects.create(
                     furniture=furniture, basic_component=bc, default_material=default_material,
                     fixed_qty=None if extra.get('fixed_qty') is None else Decimal(str(extra['fixed_qty'])),

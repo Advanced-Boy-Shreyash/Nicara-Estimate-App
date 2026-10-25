@@ -127,9 +127,9 @@ class ItemComponentTests(APITestCase):
         self.item = Item.objects.create(name='Wardrobe', category=self.category, margin_pct=50)
 
         lib_cat = MaterialCategory.objects.create(name='Core Material')
-        brand = MaterialBrand.objects.create(category=lib_cat, name='Austin')
+        brand = MaterialBrand.objects.create(name='Austin')
         self.ply = MaterialItem.objects.create(
-            brand=brand, model_name='Lincoln BWP', default_rate=Decimal('100'),
+            category=lib_cat, brand=brand, model_name='Lincoln BWP', default_rate=Decimal('100'),
             default_unit='sheets',
         )
 
@@ -172,21 +172,19 @@ class ItemComponentTests(APITestCase):
         )
         self.assertEqual(component.effective_rate, Decimal('250'))
 
-    def test_brandless_raw_material_is_available_to_smart_estimate(self):
+    def test_brandless_raw_material_stays_in_the_library(self):
         category = MaterialCategory.objects.create(
             name='Fasteners', product_group=MaterialCategory.ProductGroup.HARDWARE,
         )
-        material = MaterialItem.objects.create(
+        MaterialItem.objects.create(
             category=category, brand=None, model_name='Screws',
             default_rate=Decimal('2.50'), default_unit='nos',
         )
 
+        # The Smart Estimate Generator offers brands only.
         response = self.client.get(reverse('smart-estimate-options'))
-
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        screws = next(option for option in response.data['hardware'] if option['id'] == material.id)
-        self.assertEqual(screws['brand'], '')
-        self.assertEqual(Decimal(str(screws['price'])), Decimal('2.50'))
+        self.assertEqual(response.data['hardware'], [])
         library_response = self.client.get('/api/library/items/', {'category': category.id})
         self.assertEqual(library_response.status_code, status.HTTP_200_OK)
         self.assertEqual(library_response.data['results'][0]['brand'], None)

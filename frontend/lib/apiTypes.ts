@@ -215,6 +215,8 @@ export interface EstimateItemComponent {
   price: string;
   amount: string;
   library_material_item: number | null;
+  /** Raw-material category of library_material_item — its brand/model choices. */
+  material_category: number | null;
 }
 
 export interface EstimateItem {
@@ -652,6 +654,20 @@ export interface CalcRow {
   basis: string;
   needs_input: boolean;
   application: string;
+  /** Doors / Drawers / Shelves: the materials the pieces are made of. */
+  parts: CalcPart[];
+}
+
+export interface CalcPart {
+  basic_component: string;
+  detail: string;
+  brand: string;
+  model: string;
+  raw_material: number | null;
+  qty: number;
+  unit: string;
+  rate: number;
+  amount: number;
 }
 
 export interface FurnitureCalc {
@@ -729,16 +745,24 @@ export interface LibraryCategory {
   type: string;
 }
 
+/** A brand from the master list — any raw material in any category can use it. */
 export interface LibraryBrand {
   id: number;
   name: string;
-  category_id: number;
+  website?: string;
+  is_active?: boolean;
+  /** Meta only: categories where the brand has a raw material. */
+  category_ids?: number[];
+  /** Brand list only. */
+  item_count?: number;
+  categories?: string[];
 }
 
 /** Full MaterialItem as returned by the API. */
 export interface LibraryItem {
   id: number;
-  brand: number;
+  category: number;
+  brand: number | null;
   brand_name: string;
   category_id: number;
   category_name: string;
@@ -761,7 +785,8 @@ export interface LibraryItem {
 
 /** Fields sent when creating or updating a MaterialItem. */
 export interface LibraryItemInput {
-  brand: number | "";
+  category: number | "";
+  brand: number | "" | null;
   model_name: string;
   description: string;
   weight: string;

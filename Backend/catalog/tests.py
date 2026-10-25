@@ -53,6 +53,29 @@ class RulesTests(SimpleTestCase):
         self.assertEqual(rules.compute('wardrobe_openable', 96, 96, 24).counts['doors'], 4)   # 4–6
         self.assertEqual(rules.compute('wardrobe_openable', 65, 96, 24).counts['doors'], 3)   # 2.7–4.1
 
+    def test_max_reading_matches_the_sample_estimate(self):
+        """The sample estimate's 8-ft and 9-ft wardrobes have 6 doors each."""
+        rules.RULES['between_mode'] = 'max'
+        self.assertEqual(rules.compute('wardrobe_openable', 96, 96, 24).counts['doors'], 6)
+        self.assertEqual(rules.compute('wardrobe_openable', 108, 108, 24).counts['doors'], 6)
+        self.assertEqual(rules.compute('wardrobe_openable', 30, 78, 15).counts['doors'], 2)   # no whole no. in 1.25–1.9
+
+    def test_shelf_spans_one_section(self):
+        c = rules.compute('wardrobe_openable', 84, 114, 24)       # 4 doors → 3 verticals → 2 sections
+        self.assertEqual(c.geometry['shelf_width'], 42)
+
+    def test_piece_shares_cover_door_drawer_and_shelf_material(self):
+        c = rules.compute('wardrobe_openable', 84, 114, 24)
+        door_area = 4 * 21 * 114
+        self.assertEqual(c.shares['carcass_ply']['doors'], door_area)
+        self.assertEqual(c.shares['carcass_ply']['shelves'], 2 * 42 * 24)
+        self.assertEqual(c.shares['finish_sheets'], {'doors': door_area, '_total': door_area})
+        self.assertEqual(c.shares['hinges'], {'doors': 1, '_total': 1})
+        self.assertNotIn('doors', c.shares['drawer_box_ply'])
+        glass = rules.compute('wardrobe_openable', 84, 114, 24, {'shelf_type': 'glass'})
+        self.assertEqual(glass.shares['carcass_ply']['shelves'], 0)
+        self.assertEqual(glass.shares['glass_shelves'], {'shelves': 1, '_total': 1})
+
     def test_sliding_wardrobe(self):
         c = rules.compute('wardrobe_sliding', 96, 96, 24)
         self.assertEqual(c.counts['doors'], 3)                      # between 96/42 and 96/30
@@ -155,7 +178,7 @@ class CatalogTestCase(APITestCase):
         grant(self.user, 'catalog')
         self.client.force_authenticate(self.user)
         self.ply = MaterialCategory.objects.create(name='Core Material(18mm BWP Ply)', product_group='plywood')
-        brand = MaterialBrand.objects.create(category=self.ply, name='Gurjan')
+        brand = MaterialBrand.objects.create(name='Gurjan')
         self.gurjan = MaterialItem.objects.create(category=self.ply, brand=brand, model_name='710 BWP',
                                                   default_rate=Decimal('80'), default_unit='sft')
         self.hinge_cat = MaterialCategory.objects.create(name='Box Hinges', product_group='hardware')
@@ -220,9 +243,14 @@ class ApiTests(CatalogTestCase):
                                format='json')
         self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
         self.assertEqual(res.data['calculation']['counts']['doors'], 4)
-        ply = res.data['rows'][1]
-        self.assertEqual((ply['qty'], ply['rate'], ply['brand']), (160.0, 80.0, 'Gurjan'))
-        self.assertEqual(res.data['total_cost'], 12800.0)
+        doors, ply = res.data['rows'][0], res.data['rows'][1]
+        # 192 sft of carcass ply: the shutters' share is priced in the Doors row.
+        shutters = doors['parts'][0]
+        self.assertEqual(shutters['basic_component'], 'Core Material(18mm BWP Ply)')
+        self.assertAlmostEqual(ply['qty'] + shutters['qty'], 192.0)
+        self.assertEqual((ply['rate'], ply['brand']), (80.0, 'Gurjan'))
+        self.assertEqual(doors['rate'], round(shutters['qty'] * 80 / 4, 2))
+        self.assertEqual(res.data['total_cost'], 15360.0)
 
     def test_calculate_with_size_and_override(self):
         res = self.client.post(reverse('catalog-furniture-calculate', args=[self.wardrobe.pk]),

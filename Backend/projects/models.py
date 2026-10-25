@@ -541,11 +541,14 @@ class EstimateItem(models.Model):
         r = self.rate or Decimal('0')
         self.cost = money(q * r)
 
-        # When a component breakdown exists, cost comes from that instead.
+        # When a component breakdown exists, cost comes from that instead. A
+        # calculated Doors / Drawers / Shelves row shows the cost of one piece.
         base = self.cost
         if self.pk and self.components.exists():
             base = money(sum((c.amount for c in self.components.all()), Decimal('0')))
             self.cost = base
+            if q and self.group_key and self.item_type == self.ItemType.SPEC_PURPOSE:
+                self.rate = money(base / q)
 
         mp = self.margin_pct or Decimal('0')
         self.margin_amount = money(base * mp / Decimal('100'))
@@ -572,7 +575,7 @@ class EstimateItem(models.Model):
         """Refresh amounts from the component breakdown (or qty × rate)."""
         self.compute_amounts()
         self.save(update_fields=[
-            'cost', 'amount', 'margin_amount', 'referral_amount',
+            'rate', 'cost', 'amount', 'margin_amount', 'referral_amount',
             'gst_amount_stored', 'total_amount', 'specifications_text',
         ])
 

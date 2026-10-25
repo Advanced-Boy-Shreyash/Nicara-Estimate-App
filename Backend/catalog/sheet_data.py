@@ -1,8 +1,11 @@
 """
 Catalogue data transcribed from Sriniketh's calculation workbook
-("Calculations.xlsx" → "Finel Estimate Detailes - V5" + Sheet1).
+("Calculations.xlsx" → "Finel Estimate Detailes - V5" + Sheet1), plus the
+brands and models of the client's sample estimate ("sample template.xlsx" →
+Sample detail) as alternatives to choose from.
 
     RAW_MATERIALS     → Raw Material Library (category → brand → model + rate)
+    SAMPLE_MATERIALS  → more brands/models for the same categories
     BASIC_COMPONENTS  → catalog.BasicComponent (one estimate row type each)
     FURNITURE         → catalog.Furniture + its FurnitureComponents
 
@@ -89,13 +92,47 @@ RAW_MATERIALS = {
     'Deep Cleaning': ('Service', 'other', [('', 'One-time deep cleaning — flooring, vacuum, gum removal', 'nos', 10500)]),
 }
 
+# Brands and models from the sample estimate, priced in the rows' units:
+# a sheet price is per 8x4 sheet, so ÷ 32 for per sft; ₹55/rft = ₹180.45/m.
+SAMPLE_MATERIALS = {
+    'Core Material(18mm BWP Ply)': [('Austin', 'Lincoln BWP', 'sft', 100)],
+    'Core Material(16mm BWP Ply)': [('Austin', 'Lincoln BWP', 'sft', 110)],          # ₹3,520 / sheet
+    'Core Material(16mm BWP B Board)': [('Austin', 'Lincoln BWP', 'sft', 110)],
+    'Core Material(12mm BWP Ply)': [('Austin', 'Lincoln BWP', 'sft', 95)],           # ₹3,040 / sheet
+    'Box Hinges': [('Hettich', 'Onsys - 0 Crank Soft Close', 'sets', 260),
+                   ('Hettich', 'Onsys - 8 Crank Soft Close', 'sets', 260)],
+    'Draw Channels': [('Hettich', 'Quadro - 18" Soft Close', 'sets', 2600),
+                      ('Hettich', 'Quadro - 12"', 'sets', 2600)],
+    'Handles/Knobs': [('', 'Handles - INR 1000 per piece', 'nos', 1200),
+                      ('', 'Foldable Handles - INR 200 per piece', 'nos', 250),
+                      ('', 'Knobs - INR 250 per piece', 'nos', 250),
+                      ('Ebco', 'Aluminium Cabinet Edge - Silver', 'nos', 1250),
+                      ('Ebco', 'Matt Black - Gola Profile', 'nos', 1250)],
+    'Draw Locks': [('Godrej', 'Nuovo - Draw locks 25mm', 'nos', 650)],
+    'Accessories': [('', 'Tower Bolts', 'nos', 120)],
+    'Kitchen Accessories': [('Hettich', 'Architech 4" Tandem Basket', 'nos', 3650),
+                            ('Hettich', 'Cutlery Tray', 'nos', 850),
+                            ('Hettich', 'Thali Tray', 'nos', 850)],
+    'Inner Liner(Fabric)': [('Fabric', '0.8mm thick', 'sft', 14.06)],                # ₹450 / sheet
+    'Finishing - Laminate': [('Greenlam', 'Grey Colour', 'sft', 109.38),            # ₹3,500 / sheet
+                             ('Greenlam', 'Off White Colour', 'sft', 109.38),
+                             ('Greenlam', 'Wooden Laminate', 'sft', 109.38),
+                             ('Greenlam', 'White', 'sft', 93.75),                   # ₹3,000 / sheet
+                             ('Thermo Laminate', 'Off White', 'sft', 171.88)],      # ₹5,500 / sheet
+    'Finishing - Acrylic': [('', 'RM 6104 Fern', 'sft', 140.63)],                  # ₹4,500 / sheet
+    'Finishing - Veneer': [('', 'Veneer (selection)', 'sft', 187.5)],               # ₹6,000 / sheet
+    'Edge Banding': [('Shape', 'PVC 22mm x 2mm', 'Mtr', 60)],
+    'Lights': [('Alt', 'Profile Light', 'Mtr', 180.45)],                            # ₹55 / rft
+    'Drivers': [('Alt', '5 Amp Driver With Sensors', 'nos', 1500)],
+}
+
 # ── Basic components ──────────────────────────────────────────────
 # name: (type, raw-material category or None, unit, price_unit, rule, default_qty, gst %)
 SP, PR, SV, PS = 'Spec Purpose', 'Procurement', 'Service', 'Procurement cum Service'
 BASIC_COMPONENTS = {
-    'Doors': (SP, None, 'nos', 'per no', 'doors', 0, 0),
-    'Drawers': (SP, None, 'nos', 'per no', 'drawers', 0, 0),
-    'Shelves': (SP, None, 'nos', 'per no', 'shelves', 0, 0),
+    'Doors': (SP, None, 'nos', 'per door', 'doors', 0, 18),
+    'Drawers': (SP, None, 'nos', 'per drawer', 'drawers', 0, 18),
+    'Shelves': (SP, None, 'nos', 'per shelf', 'shelves', 0, 18),
     'Core Material(18mm BWP Ply)': (PR, 'Core Material(18mm BWP Ply)', 'sft', 'per sft', 'carcass_ply', 0, 18),
     'Core Material(16mm BWP Ply)': (PR, 'Core Material(16mm BWP Ply)', 'sft', 'per sft', 'carcass_ply', 0, 18),
     'Core Material(16mm BWP B Board)': (PR, 'Core Material(16mm BWP B Board)', 'sft', 'per sft', 'back_panel_ply', 0, 18),

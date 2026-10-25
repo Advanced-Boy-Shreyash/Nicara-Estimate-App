@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { ApiError, catalogApi, libraryApi } from "@/lib/api";
 import type {
   CalcOptions, CatalogMeta, CatalogRoom, Furniture, FurnitureCalc, FurnitureComponent,
@@ -150,6 +150,8 @@ function FurnitureComponents({ furnitureId, meta, rooms, onBack, onChanged }: {
 
   const components = f.components ?? [];
   const rowFor = (id: number) => calc?.rows.find(r => r.component_id === id);
+  // A component with no row of its own went wholly into the doors / drawers / shelves.
+  const pieceFor = (name: string) => calc?.rows.find(r => r.parts?.some(p => p.basic_component === name));
   const counts = calc?.calculation.counts;
 
   return (
@@ -209,8 +211,10 @@ function FurnitureComponents({ furnitureId, meta, rooms, onBack, onChanged }: {
             <tbody>
               {components.map(c => {
                 const r = rowFor(c.id);
+                const inPiece = !r && calc ? pieceFor(c.basic_component_name) : undefined;
                 return (
-                  <tr key={c.id} className="border-b border-surface-100 hover:bg-surface-50">
+                  <Fragment key={c.id}>
+                  <tr className="border-b border-surface-100 hover:bg-surface-50">
                     <td className="px-3 py-2"><TypePill type={c.item_type} /></td>
                     <td className="px-3 py-2 font-semibold text-nicara-dark">
                       {c.basic_component_name}
@@ -220,11 +224,16 @@ function FurnitureComponents({ furnitureId, meta, rooms, onBack, onChanged }: {
                       {c.item_type === "Spec Purpose" ? <span className="text-surface-400">{r?.application}</span>
                         : [r?.brand, r?.model].filter(Boolean).join(" — ") || <span className="text-red-500">no price</span>}
                     </td>
-                    <td className="px-3 py-2 font-mono text-right">{r ? r.qty : "…"}</td>
+                    <td className="px-3 py-2 font-mono text-right">
+                      {r ? r.qty : inPiece ? <span className="font-sans text-[10px] text-surface-400">in {inPiece.specification}</span> : "…"}
+                    </td>
                     <td className="px-3 py-2 text-surface-500">{c.unit}</td>
-                    <td className="px-3 py-2 font-mono text-right">{r && c.item_type !== "Spec Purpose" ? inr(String(r.rate)) : ""}</td>
+                    <td className="px-3 py-2 font-mono text-right">
+                      {r && (c.item_type !== "Spec Purpose" || r.parts.length > 0) ? inr(String(r.rate)) : ""}
+                      {r && r.parts.length > 0 && <div className="text-[9px] text-surface-400 font-sans">each</div>}
+                    </td>
                     <td className="px-3 py-2 font-mono text-right font-semibold text-nicara-dark">
-                      {r && c.item_type !== "Spec Purpose" ? inr(String(r.amount)) : ""}
+                      {r && (c.item_type !== "Spec Purpose" || r.parts.length > 0) ? inr(String(r.amount)) : ""}
                     </td>
                     <td className="px-3 py-2 text-[10px] text-surface-400 max-w-[360px]">
                       {r?.basis}{r?.needs_input && <span className="text-amber-600"> — set the quantity on the estimate</span>}
@@ -236,6 +245,19 @@ function FurnitureComponents({ furnitureId, meta, rooms, onBack, onChanged }: {
                       </button>
                     </td>
                   </tr>
+                  {r?.parts.map(p => (
+                    <tr key={`${c.id}-${p.basic_component}`} className="border-b border-surface-100 bg-amber-50/40 text-[11px]">
+                      <td />
+                      <td className="px-3 py-1 pl-6 text-surface-600">↳ {p.basic_component} <span className="text-surface-400">{p.detail}</span></td>
+                      <td className="px-3 py-1 text-surface-500">{[p.brand, p.model].filter(Boolean).join(" — ") || "—"}</td>
+                      <td className="px-3 py-1 font-mono text-right text-surface-600">{p.qty}</td>
+                      <td className="px-3 py-1 text-surface-400">{p.unit}</td>
+                      <td className="px-3 py-1 font-mono text-right text-surface-600">{inr(String(p.rate))}</td>
+                      <td className="px-3 py-1 font-mono text-right text-surface-600">{inr(String(p.amount))}</td>
+                      <td colSpan={2} />
+                    </tr>
+                  ))}
+                  </Fragment>
                 );
               })}
               {components.length === 0 && (

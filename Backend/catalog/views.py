@@ -140,9 +140,17 @@ def serialize_rows(rows):
         'brand': r['brand'], 'model': r['model'],
         'raw_material': r['raw_material'].id if r['raw_material'] else None,
         'qty': float(r['qty']), 'unit': r['unit'], 'rate': float(r['rate']),
-        'price_unit': r['price_unit'], 'amount': float(r['qty'] * r['rate']),
+        'price_unit': r['price_unit'], 'amount': float(r['amount']),
         'gst_pct': float(r['gst_pct']), 'quantity_rule': r['quantity_rule'],
         'basis': r['basis'], 'needs_input': r['needs_input'], 'application': r['application'],
+        # Doors / Drawers / Shelves: what one row of pieces is made of.
+        'parts': [{
+            'basic_component': p['basic_component'].name, 'detail': p['detail'],
+            'brand': p['brand'], 'model': p['model'],
+            'raw_material': p['raw_material'].id if p['raw_material'] else None,
+            'qty': float(p['qty']), 'unit': p['unit'], 'rate': float(p['rate']),
+            'amount': float(p['qty'] * p['rate']),
+        } for p in r['parts']],
     } for r in rows]
 
 

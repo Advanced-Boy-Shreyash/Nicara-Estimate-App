@@ -450,7 +450,8 @@ and the hand-off video: **Furniture is a complete built product**, assembled fro
 | **Room** / **Zone** | Where furniture goes | Master Bedroom · East Wall |
 | **Furniture** | A built product with a cabinet type, default W × H × D and margin (15%) | Wardrobe (openable) |
 | **Basic Component** | A row of the estimate: type (*Spec Purpose* / *Procurement* / *Service*), unit, GST and a **quantity rule** | Doors · 16mm Ply · Hinges · Carpentry |
-| **Raw material** (library) | Brand · model · rate — the only source of price | Gurjan 710 BWP 16mm · ₹80/sft |
+| **Raw material** (library) | Category · brand · model · rate — the only source of price | Gurjan 710 BWP 16mm · ₹80/sft |
+| **Brand** | One master list; every raw material links to one | Austin, Hettich, Greenlam |
 
 - **Spec Purpose** rows are Doors, Drawers, Shelves — the counts every other
   quantity is worked from. **Procurement** rows are materials and hardware.
@@ -475,11 +476,13 @@ Gated by the `catalog` IAM module. Screen: **Catalogue → Furniture Catalogue**
 (tabs: Furniture · Basic Components · Rooms & Zones).
 
 ```bash
-python manage.py seed_catalog --reset   # library materials, basic components, furniture from the sheet
-python manage.py seed_items             # Items catalogue, linked to the furniture
+python manage.py seed_catalog --reset   # library materials, brands, basic components, furniture
 ```
 
-The seed data lives in `catalog/sheet_data.py` (prices, component lists).
+The seed data lives in `catalog/sheet_data.py`. It holds the calculation sheet's
+prices and component lists, plus the sample estimate's brands and models
+(Austin, Hettich, Greenlam, …) as alternatives. Sheet prices are converted to
+per sft (÷ 32).
 
 ## 13. Calculation rules
 
@@ -489,8 +492,9 @@ converted to inches first (`8'0"`, `2'3"`, `30"`, mm/cm/m all accepted).
 
 - **Doors** — openable: whole number between W/24 and W/16; sliding: W/42–W/30;
   kitchen: (W − 36″ basket − 10″ bottle pull-out)/24–/16.
-- **Drawers** — wardrobe = doors (sliding × 2); pooja/study W/24–W/12;
-  **shelves** = doors ÷ 2; **verticals** = ROUNDUP(doors/2 + 1).
+- **Drawers** — wardrobe = doors (sliding × 2); pooja/study W/24–W/12.
+- **Shelves** = doors ÷ 2, each one section wide (width ÷ (verticals − 1));
+  **verticals** = ROUNDUP(doors/2 + 1).
 - **Hardware** — 2 hinges per door up to 24″ height, +1 per extra 24″; handles =
   doors; knobs = drawers; channels = drawers; locks = drawers ÷ 2 (wardrobes).
 - **Sheets** — ply areas rounded up to 32 sft sheets; laminate = door area ÷ 32
@@ -512,14 +516,31 @@ options). The Initial Estimate is built from them on the backend:
    group* of rows (Spec Purpose → Procurement → Service). Running it again
    follows size edits and keeps brand/price choices. Unlinked units are skipped
    and listed.
-2. **Smart Estimate Generator** — choose brand/model per product group
-   (ply, laminate, hardware, …); matching rows re-price from the library.
+2. **Smart Estimate Generator** — choose a **brand** per product group (plywood,
+   hardware, kitchen accessories, finishing). Every row and part in that group
+   switches to that brand's model in its own category (16mm, 12mm, B Board…) and
+   is re-priced. Rows whose category the brand doesn't make keep theirs.
 3. Each row's **brand picker** swaps its raw material; the rate follows.
+
+**Doors, Drawers and Shelves are priced per piece.** Each of these rows carries
+what one piece is made of:
+
+- **Door:** shutter ply, laminate on the outer face, liner on the inner face,
+  edge band, hinges, handle.
+- **Drawer:** box ply, liner, channel set, knob.
+- **Shelf:** board, liner on both faces.
+
+The price column shows one piece (e.g. ₹5,938 per door) and **Detail** lists the
+parts, each with its own brand picker. Those quantities are taken out of the
+material rows, so the total is unchanged. The carcass ply and liner rows keep
+the rest; hinges, channels, handles, knobs and edge band have no row of their
+own any more. Sheet off-cuts are shared by area. The logic is
+`catalog/rules.py` (`shares`) and `catalog/pricing.py`.
 
 Editing a group:
 
 - Typing a **Doors / Drawers / Shelves** count recalculates the whole group
-  (hinges, channels, ply, locks …) — stored as `config.overrides`.
+  (their parts, ply, liner, locks …) — stored as `config.overrides`.
 - Typing any other quantity marks it **overridden** (kept on recalculation,
   shown "calc N" with a reset).
 - Changing the group's size or options re-runs the rules.
@@ -531,20 +552,33 @@ Editing a group:
 | `POST …/estimates/{id}/generate-from-design/` | Create/refresh groups from design requirements |
 | `POST …/estimates/{id}/add-furniture/` | Add one furniture group (`{furniture, width, height, depth, options}`) |
 | `POST/DELETE …/estimates/{id}/groups/{group_key}/` | Recalculate (size/options) or remove a group |
-| `POST …/estimates/{id}/apply-smart-materials/` | Apply chosen library items to matching rows |
+| `POST …/estimates/{id}/apply-smart-materials/` | `{brands: [{group, brand_id}]}` (or `{materials: [{library_item_id}]}`) |
 | `POST …/items/{id}/reset-qty/` | Undo a typed-over quantity or count |
-| `GET/POST …/items/{id}/components/` | Optional per-line breakdown (still supported) |
+| `GET/POST/PATCH …/items/{id}/components/` | A row's breakdown — the parts of a door / drawer / shelf |
 
 Code: `projects/generation.py`, tests in `projects/test_generation.py`.
 
-## 13b. Connected item dropdowns (one master, inline add)
+## 13b. Raw Material Library & brands
 
-**Design Requirements → Unit** and **Initial Estimate → Item** are searchable
-dropdowns backed by the **same Items catalogue**
-(`components/ui/SearchSelect.tsx`), with a pinned **"+ Add …"** option that
-creates a new Item inline. An Item can link to a Furniture
-(`Item.catalog_furniture`); adding a furniture-linked item to an estimate
-creates a furniture group as above.
+**Catalogue → Raw Material** has two tabs:
+
+- **Materials:** category + brand + model + rate.
+- **Brands:** the brand master list, showing where each brand is used and how
+  many materials it has. You can add, rename or hide brands; a brand that's in
+  use can't be deleted.
+
+Any brand can go with any category. The **Smart Estimate Generator** offers only
+brands, and only ones that make a category estimate rows are priced from.
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `GET/POST /api/library/brands/` (`?category=<id>`) | Brand master list |
+| `GET/POST /api/library/items/` (`?category=&brand=`) | Raw materials |
+| `GET /api/library/smart-estimate-options/` | Brands per product group |
+
+The catalogue menu holds **Furniture Catalogue** and **Raw Material** only. The
+Items screen and the old "Add from Catalogue" picker were removed from the app.
+The `items` backend app and its API still exist but nothing in the UI uses them.
 
 ## 14. Still to do
 

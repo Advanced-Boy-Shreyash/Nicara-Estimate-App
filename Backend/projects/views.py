@@ -23,7 +23,7 @@ from catalog.models import Furniture as CatalogFurniture
 from catalog.pricing import size_inches
 from items.models import Item, ItemComponent, dimension_in_feet
 from items.serializers import AddItemsToEstimateSerializer
-from library.models import MaterialItem as LibraryMaterialItem
+from library.models import MaterialBrand as LibraryMaterialBrand, MaterialItem as LibraryMaterialItem
 from nicara.media import build_derivatives
 
 from . import generation
@@ -542,23 +542,43 @@ def _matching_material(category, chosen):
     group = chosen.category.product_group
     if category.product_group != group or group == 'other' or not chosen.brand_id:
         return None
-    same_brand = category.materials.filter(is_active=True, brand__name__iexact=chosen.brand.name)
+    same_brand = category.materials.filter(is_active=True, brand_id=chosen.brand_id)
     return (same_brand.filter(model_name__iexact=chosen.model_name).first()
             or same_brand.order_by('default_rate').first())
+
+
+def _brand_material(category, brand, current=None):
+    """The brand's model in `category` for a row priced from `current`: the
+    same model name if the brand makes one, else its cheapest there."""
+    if category is None:
+        return None
+    models_ = category.materials.filter(is_active=True, brand=brand)
+    if current is not None:
+        same = models_.filter(model_name__iexact=current.model_name).first()
+        if same is not None:
+            return same
+    return models_.order_by('default_rate', 'id').first()
 
 
 class EstimateApplySmartMaterialsView(EstimateActionView):
     """
     POST …/estimates/{id}/apply-smart-materials/
-    Body: { "materials": [ {"library_item_id": 12}, … ] }
+    Body: { "brands": [ {"group": "plywood", "brand_id": 3}, … ] }
+       or { "materials": [ {"library_item_id": 12}, … ] }
 
-    Applies the chosen brands/models (Smart Estimate Generator) to the
-    estimate's rows and to any line breakdowns, re-pricing them from the Raw
-    Material Library. Quantities are untouched.
+    Smart Estimate Generator. A brand per product group (plywood, hardware,
+    kitchen accessories, finishing) switches every row — and every Doors /
+    Drawers / Shelves part — in that group to the brand's model in the row's own
+    category, re-priced from the Raw Material Library. Rows whose category the
+    brand doesn't make keep their material. Quantities are untouched.
     """
 
     def post(self, request, project_id, pk):
         estimate = self.get_estimate()
+        brand_picks = [b for b in request.data.get('brands', []) if b.get('brand_id') and b.get('group')]
+        if brand_picks:
+            return self._apply_brands(estimate, brand_picks)
+
         ids = [p.get('library_item_id') for p in request.data.get('materials', []) if p.get('library_item_id')]
         chosen = list(LibraryMaterialItem.objects.select_related('category', 'brand')
                       .filter(pk__in=ids, is_active=True))
@@ -567,37 +587,75 @@ class EstimateApplySmartMaterialsView(EstimateActionView):
             return Response({'detail': f'Unknown or inactive raw material id(s): {sorted(missing)}.'},
                             status=status.HTTP_400_BAD_REQUEST)
 
+        def pick(category, current):
+            for item in chosen:
+                target = _matching_material(category, item)
+                if target is not None:
+                    return target
+            return None
+
         with transaction.atomic():
-            rows = list(estimate.items.select_related(
-                'basic_component__library_category', 'raw_material__category'))
-            for row in rows:
-                category = (row.basic_component.library_category if row.basic_component_id
-                            else row.raw_material.category if row.raw_material_id else None)
-                for item in chosen:
-                    target = _matching_material(category, item)
-                    if target is not None:
-                        row.raw_material = target
-                        row.brand = target.brand.name if target.brand_id else ''
-                        row.model_name = target.model_name
-                        row.rate = target.default_rate
-                        row.save()
-                        break
-
-            components = (EstimateItemComponent.objects.filter(estimate_item__estimate=estimate)
-                          .select_related('library_material_item__category'))
-            for comp in components:
-                category = comp.library_material_item.category if comp.library_material_item_id else None
-                for item in chosen:
-                    target = _matching_material(category, item)
-                    if target is not None:
-                        comp.library_material_item = target
-                        comp.brand = target.brand.name if target.brand_id else ''
-                        comp.model = target.model_name
-                        comp.price = target.default_rate
-                        comp.save()
-                        break
-
+            self._switch(estimate, pick)
         return self.responded(estimate)
+
+    def _apply_brands(self, estimate, picks):
+        brands = LibraryMaterialBrand.objects.in_bulk([b['brand_id'] for b in picks])
+        missing = {b['brand_id'] for b in picks} - set(brands)
+        if missing:
+            return Response({'detail': f'Unknown brand id(s): {sorted(missing)}.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        by_group = {b['group']: brands[b['brand_id']] for b in picks}
+
+        def pick(category, current):
+            brand = by_group.get(category.product_group) if category is not None else None
+            return _brand_material(category, brand, current) if brand is not None else None
+
+        with transaction.atomic():
+            changed, kept = self._switch(estimate, pick)
+        response = self.responded(estimate)
+        response.data['brand_result'] = {'changed': changed, 'unchanged': kept}
+        return response
+
+    @staticmethod
+    def _switch(estimate, pick):
+        """Re-price rows and breakdown parts with `pick(category, current)`.
+        Returns (switched, left as they were) — counting only what the picks cover."""
+        changed, kept = 0, 0
+        rows = list(estimate.items.select_related(
+            'basic_component__library_category', 'raw_material__category'))
+        for row in rows:
+            category = (row.basic_component.library_category if row.basic_component_id
+                        and row.basic_component.library_category_id
+                        else row.raw_material.category if row.raw_material_id else None)
+            if category is None:
+                continue
+            target = pick(category, row.raw_material)
+            if target is None:
+                kept += 1
+                continue
+            row.raw_material = target
+            row.brand = target.brand.name if target.brand_id else ''
+            row.model_name = target.model_name
+            row.rate = target.default_rate
+            row.save()
+            changed += 1
+
+        components = (EstimateItemComponent.objects.filter(estimate_item__estimate=estimate)
+                      .select_related('library_material_item__category'))
+        for comp in components:
+            current = comp.library_material_item
+            target = pick(current.category if current is not None else None, current)
+            if target is None:
+                if current is not None:
+                    kept += 1
+                continue
+            comp.library_material_item = target
+            comp.brand = target.brand.name if target.brand_id else ''
+            comp.model = target.model_name
+            comp.price = target.default_rate
+            comp.save()
+            changed += 1
+        return changed, kept
 
 
 class EstimateItemListCreateView(generics.ListCreateAPIView):

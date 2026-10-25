@@ -22,41 +22,48 @@ class MaterialItemSerializer(serializers.ModelSerializer):
             'full_display',
         ]
 
-    def validate(self, data):
-        brand = data.get('brand', getattr(self.instance, 'brand', None))
-        category = data.get('category', getattr(self.instance, 'category', None))
-        if brand and category and brand.category_id != category.id:
-            raise serializers.ValidationError(
-                {'brand': 'The selected brand must belong to the selected category.'}
-            )
-        if not category and brand:
-            data['category'] = brand.category
-        elif not category:
-            raise serializers.ValidationError({'category': 'A material category is required.'})
-        return data
 
 class MaterialBrandSerializer(serializers.ModelSerializer):
-    items = MaterialItemSerializer(many=True, read_only=True)
+    """A brand from the master list, with how many raw materials use it and in which categories."""
     item_count = serializers.SerializerMethodField()
+    categories = serializers.SerializerMethodField()
 
     class Meta:
         model = MaterialBrand
-        fields = '__all__'
+        fields = ['id', 'name', 'website', 'is_active', 'item_count', 'categories']
+
+    def validate_name(self, value):
+        value = value.strip()
+        clash = MaterialBrand.objects.filter(name__iexact=value)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError(f'A brand named "{value}" already exists.')
+        return value
 
     def get_item_count(self, obj):
         return obj.items.count()
 
+    def get_categories(self, obj):
+        return sorted(set(obj.items.values_list('category__name', flat=True)))
+
 
 class MaterialCategorySerializer(serializers.ModelSerializer):
-    brands = MaterialBrandSerializer(many=True, read_only=True)
+    brands = serializers.SerializerMethodField()
     brand_count = serializers.SerializerMethodField()
 
     class Meta:
         model = MaterialCategory
         fields = '__all__'
 
+    def _brands(self, obj):
+        return MaterialBrand.objects.filter(items__category=obj).distinct()
+
+    def get_brands(self, obj):
+        return [{'id': b.id, 'name': b.name} for b in self._brands(obj)]
+
     def get_brand_count(self, obj):
-        return obj.brands.count()
+        return self._brands(obj).count()
 
 
 class MaterialCategoryListSerializer(serializers.ModelSerializer):
@@ -70,7 +77,7 @@ class MaterialCategoryListSerializer(serializers.ModelSerializer):
                   'brand_count', 'item_count']
 
     def get_brand_count(self, obj):
-        return obj.brands.count()
+        return MaterialBrand.objects.filter(items__category=obj).distinct().count()
 
     def get_item_count(self, obj):
         return MaterialItem.objects.filter(category=obj).count()

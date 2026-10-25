@@ -116,14 +116,26 @@ class DeliverableReviewSerializer(serializers.Serializer):
 
 # ── Estimate Items ──────────────────────────────────────────
 class EstimateItemComponentSerializer(serializers.ModelSerializer):
-    """One row of a line's material breakdown; `amount` is qty × price."""
+    """One row of a line's material breakdown; `amount` is qty × price.
+    Choosing another raw material re-prices the part from it (unless a price
+    is sent too)."""
+    material_category = serializers.IntegerField(
+        source='library_material_item.category_id', read_only=True, default=None)
 
     class Meta:
         model = EstimateItemComponent
         fields = ['id', 'estimate_item', 'sno', 'basic_component', 'detail',
                   'brand', 'model', 'qty', 'unit', 'price', 'amount',
-                  'library_material_item']
+                  'library_material_item', 'material_category']
         read_only_fields = ['estimate_item', 'amount']
+
+    def update(self, instance, validated_data):
+        material = validated_data.get('library_material_item')
+        if material is not None and material != instance.library_material_item:
+            validated_data.setdefault('brand', material.brand.name if material.brand_id else '')
+            validated_data.setdefault('model', material.model_name)
+            validated_data.setdefault('price', material.default_rate)
+        return super().update(instance, validated_data)
 
     def validate_qty(self, value):
         if value is not None and value < 0:
