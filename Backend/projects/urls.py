@@ -40,6 +40,9 @@ urlpatterns = [
     path('<int:project_id>/estimates/<int:pk>/request-revision/', views.EstimateRequestRevisionView.as_view(), name='estimate-revision'),
     path('<int:project_id>/estimates/<int:pk>/duplicate/', views.EstimateDuplicateView.as_view(), name='estimate-duplicate'),
     path('<int:project_id>/estimates/<int:pk>/apply-smart-materials/', views.EstimateApplySmartMaterialsView.as_view(), name='estimate-apply-materials'),
+    path('<int:project_id>/estimates/<int:pk>/generate-from-design/', views.EstimateGenerateFromDesignView.as_view(), name='estimate-generate-from-design'),
+    path('<int:project_id>/estimates/<int:pk>/add-furniture/', views.EstimateAddFurnitureView.as_view(), name='estimate-add-furniture'),
+    path('<int:project_id>/estimates/<int:pk>/groups/<str:group_key>/', views.EstimateGroupView.as_view(), name='estimate-group'),
     path('<int:project_id>/estimates/<int:pk>/pdf/', views.EstimatePDFView.as_view(), name='estimate-pdf'),
     path('<int:project_id>/estimates/<int:pk>/excel/', views.EstimateExcelView.as_view(), name='estimate-excel'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/', views.EstimateItemListCreateView.as_view(), name='estimate-item-list'),
@@ -48,8 +51,7 @@ urlpatterns = [
     # ── Line breakdown (bill of materials) ──
     path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/components/', views.EstimateItemComponentListCreateView.as_view(), name='estimate-item-component-list'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/components/<int:pk>/', views.EstimateItemComponentDetailView.as_view(), name='estimate-item-component-detail'),
-    path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/populate-from-furniture/', views.EstimatePopulateFromFurnitureView.as_view(), name='estimate-item-populate'),
-    path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/configure/', views.EstimateConfigureLineView.as_view(), name='estimate-item-configure'),
+    path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/reset-qty/', views.EstimateItemResetQtyView.as_view(), name='estimate-item-reset-qty'),
 
     # ── Booking Form ──
     path('<int:project_id>/booking-form/', views.BookingFormView.as_view(), name='booking-form'),

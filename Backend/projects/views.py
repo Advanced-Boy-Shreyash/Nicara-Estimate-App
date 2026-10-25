@@ -18,13 +18,15 @@ from rest_framework.views import APIView
 
 from decimal import Decimal
 
-from catalog import estimator
-from catalog.models import Furniture as CatalogFurniture, MaterialOption
+from catalog import rules
+from catalog.models import Furniture as CatalogFurniture
+from catalog.pricing import size_inches
 from items.models import Item, ItemComponent, dimension_in_feet
 from items.serializers import AddItemsToEstimateSerializer
 from library.models import MaterialItem as LibraryMaterialItem
 from nicara.media import build_derivatives
 
+from . import generation
 from .exports import booking_pdf, estimate_pdf, estimate_xlsx
 
 from .models import (
@@ -143,11 +145,12 @@ class DesignRequirementDetailView(generics.RetrieveUpdateDestroyAPIView):
 class DesignRequirementBulkView(APIView):
     """
     PUT /api/projects/{project_id}/design-requirements/bulk/
-    Body: { "rows": [ {room, unit, length, breadth, height, finishing, remarks,
-                       design_required}, ... ] }
+    Body: { "rows": [ {id?, room, zone, unit, furniture, length, breadth, height,
+                       finishing, options, remarks, design_required}, ... ] }
 
-    Replaces the whole set — the requirements grid is edited and saved as one
-    table, so a wholesale swap matches how the UI behaves.
+    Saves the whole grid: rows with an `id` are updated in place (so estimate
+    groups generated from them stay linked), new rows are created, and rows
+    left out are deleted.
     """
 
     def put(self, request, project_id):
@@ -156,16 +159,21 @@ class DesignRequirementBulkView(APIView):
         serializer.is_valid(raise_exception=True)
         rows = serializer.validated_data['rows']
 
-        created = []
+        saved = []
         with transaction.atomic():
-            project.design_requirements.all().delete()
+            existing = {dr.id: dr for dr in project.design_requirements.all()}
             for index, row in enumerate(rows, start=1):
-                row_serializer = DesignRequirementSerializer(data={**row, 'sort_order': index})
+                instance = existing.pop(row.get('id'), None) if row.get('id') else None
+                payload = {k: v for k, v in row.items() if k != 'id'}
+                row_serializer = DesignRequirementSerializer(
+                    instance, data={**payload, 'sort_order': index})
                 row_serializer.is_valid(raise_exception=True)
-                created.append(row_serializer.save(project=project))
+                saved.append(row_serializer.save(project=project))
+            for leftover in existing.values():
+                leftover.delete()
 
         return Response(
-            DesignRequirementSerializer(created, many=True).data,
+            DesignRequirementSerializer(saved, many=True).data,
             status=status.HTTP_200_OK,
         )
 
@@ -502,126 +510,92 @@ class EstimateDuplicateView(EstimateActionView):
                 discount_amount=source.discount_amount,
                 created_by=request.user,
             )
-            EstimateItem.objects.bulk_create([
-                EstimateItem(
-                    estimate=clone,
-                    catalog_item=item.catalog_item,
-                    sno=item.sno, area=item.area, item=item.item,
-                    description=item.description,
-                    length=item.length, breadth=item.breadth, height=item.height,
-                    qty=item.qty, unit=item.unit, rate=item.rate,
-                    amount=item.amount, gst_pct=item.gst_pct, remarks=item.remarks,
-                )
-                for item in source.items.all()
-            ])
+            # Copy every column (spreadsheet fields, generated-row links, overrides)
+            # and each line's material breakdown.
+            skip = {'id', 'estimate'}
+            fields = [f.name for f in EstimateItem._meta.concrete_fields if f.name not in skip]
+            for item in source.items.prefetch_related('components'):
+                copy = EstimateItem.objects.create(
+                    estimate=clone, **{f: getattr(item, f) for f in fields})
+                for comp in item.components.all():
+                    EstimateItemComponent.objects.create(
+                        estimate_item=copy, sno=comp.sno, basic_component=comp.basic_component,
+                        detail=comp.detail, brand=comp.brand, model=comp.model, qty=comp.qty,
+                        unit=comp.unit, price=comp.price,
+                        library_material_item=comp.library_material_item,
+                    )
 
         return Response(EstimateSerializer(clone).data, status=status.HTTP_201_CREATED)
 
 
+def _matching_material(category, chosen):
+    """
+    Which raw material a row of `category` should switch to when the user picks
+    `chosen`: the same category takes it directly; another category in the same
+    product group (e.g. a different ply thickness) takes its model from the same
+    brand — same model name if there is one — so one choice covers all of them.
+    """
+    if category is None:
+        return None
+    if category.id == chosen.category_id:
+        return chosen
+    group = chosen.category.product_group
+    if category.product_group != group or group == 'other' or not chosen.brand_id:
+        return None
+    same_brand = category.materials.filter(is_active=True, brand__name__iexact=chosen.brand.name)
+    return (same_brand.filter(model_name__iexact=chosen.model_name).first()
+            or same_brand.order_by('default_rate').first())
+
+
 class EstimateApplySmartMaterialsView(EstimateActionView):
-    """Apply selected brands/models to matching estimate breakdown components."""
+    """
+    POST …/estimates/{id}/apply-smart-materials/
+    Body: { "materials": [ {"library_item_id": 12}, … ] }
+
+    Applies the chosen brands/models (Smart Estimate Generator) to the
+    estimate's rows and to any line breakdowns, re-pricing them from the Raw
+    Material Library. Quantities are untouched.
+    """
 
     def post(self, request, project_id, pk):
         estimate = self.get_estimate()
-        materials_pref = request.data.get('materials', [])
+        ids = [p.get('library_item_id') for p in request.data.get('materials', []) if p.get('library_item_id')]
+        chosen = list(LibraryMaterialItem.objects.select_related('category', 'brand')
+                      .filter(pk__in=ids, is_active=True))
+        missing = set(ids) - {m.id for m in chosen}
+        if missing:
+            return Response({'detail': f'Unknown or inactive raw material id(s): {sorted(missing)}.'},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
-            components = EstimateItemComponent.objects.filter(estimate_item__estimate=estimate)
+            rows = list(estimate.items.select_related(
+                'basic_component__library_category', 'raw_material__category'))
+            for row in rows:
+                category = (row.basic_component.library_category if row.basic_component_id
+                            else row.raw_material.category if row.raw_material_id else None)
+                for item in chosen:
+                    target = _matching_material(category, item)
+                    if target is not None:
+                        row.raw_material = target
+                        row.brand = target.brand.name if target.brand_id else ''
+                        row.model_name = target.model_name
+                        row.rate = target.default_rate
+                        row.save()
+                        break
 
-            for pref in materials_pref:
-                basic = pref.get('basic_component')
-                brand = pref.get('brand')
-                model = pref.get('model')
-                library_item_id = pref.get('library_item_id')
-                product_group = pref.get('product_group')
-
-                if not library_item_id and (not basic or not brand or not model):
-                    continue
-
-                library_item = None
-                if library_item_id:
-                    library_item = LibraryMaterialItem.objects.select_related(
-                        'category', 'brand',
-                    ).filter(pk=library_item_id, is_active=True).first()
-                    if library_item is None:
-                        return Response(
-                            {'detail': f'Unknown or inactive library material id: {library_item_id}.'},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    product_group = product_group or library_item.category.product_group
-
-                matching_comps = components.none()
-                if library_item:
-                    matching_comps = components.filter(
-                        Q(library_material_item__category__product_group=product_group)
-                        | Q(catalog_option__library_item__category__product_group=product_group)
-                    )
-                    category_name = library_item.category.name.lower()
-                    if product_group == 'finishing':
-                        finish_type = 'laminate' if 'laminate' in category_name else (
-                            'acrylic' if 'acrylic' in category_name else ''
-                        )
-                        if finish_type:
-                            matching_comps = matching_comps.filter(
-                                Q(basic_component__icontains=finish_type)
-                                | Q(library_material_item__category__name__icontains=finish_type)
-                                | Q(catalog_option__library_item__category__name__icontains=finish_type)
-                            )
-                    if not matching_comps.exists():
-                        aliases = {
-                            'plywood': ('ply',),
-                            'hardware': ('hardware', 'hinge', 'channel', 'handle'),
-                            'kitchen_accessories': ('accessor', 'basket', 'pull'),
-                            'finishing': ('laminate', 'acrylic', 'finish'),
-                        }.get(product_group, ())
-                        if product_group == 'finishing':
-                            if 'laminate' in category_name:
-                                aliases = ('laminate',)
-                            elif 'acrylic' in category_name:
-                                aliases = ('acrylic',)
-                        predicate = Q(basic_component__iexact=basic or '')
-                        for alias in aliases:
-                            predicate |= Q(basic_component__icontains=alias)
-                        matching_comps = components.filter(predicate)
-                else:
-                    matching_comps = components.filter(basic_component__iexact=basic)
-
-                for comp in matching_comps:
-                    comp.brand = library_item.brand.name if library_item and library_item.brand_id else (brand or '')
-                    comp.model = library_item.model_name if library_item else model
-
-                    option = None
-                    if library_item:
-                        option = MaterialOption.objects.filter(
-                            library_item=library_item,
-                            material__is_active=True,
-                        ).order_by('price').first()
-                    else:
-                        option = MaterialOption.objects.filter(
-                            material__name__iexact=basic,
-                            brand__iexact=brand,
-                            model_no__iexact=model,
-                            detail__icontains=comp.detail,
-                        ).order_by('price').first()
-
-                    if not option:
-                        if not library_item:
-                            option = MaterialOption.objects.filter(
-                                material__name__iexact=basic,
-                                brand__iexact=brand,
-                                model_no__iexact=model,
-                            ).order_by('price').first()
-
-                    if option:
-                        comp.price = option.effective_price
-                        comp.catalog_option = option
-                    elif library_item:
-                        comp.price = library_item.default_rate
-                        comp.catalog_option = None
-                    if library_item:
-                        comp.library_material_item = library_item
-
-                    comp.save()
+            components = (EstimateItemComponent.objects.filter(estimate_item__estimate=estimate)
+                          .select_related('library_material_item__category'))
+            for comp in components:
+                category = comp.library_material_item.category if comp.library_material_item_id else None
+                for item in chosen:
+                    target = _matching_material(category, item)
+                    if target is not None:
+                        comp.library_material_item = target
+                        comp.brand = target.brand.name if target.brand_id else ''
+                        comp.model = target.model_name
+                        comp.price = target.default_rate
+                        comp.save()
+                        break
 
         return self.responded(estimate)
 
@@ -687,23 +661,24 @@ class EstimateAddFromCatalogView(APIView):
             for entry in entries:
                 source = catalog[entry['item_id']]
                 overrides = {k: v for k, v in entry.items() if k in self.OVERRIDABLE}
+                if source.catalog_furniture_id:
+                    # A finished product: add it as its calculation-sheet rows.
+                    furniture = source.catalog_furniture
+                    width, height, depth = size_inches(
+                        overrides.get('length') or source.default_length or furniture.default_length,
+                        overrides.get('height') or source.default_height or furniture.default_height,
+                        overrides.get('breadth') or source.default_breadth or furniture.default_breadth,
+                    )
+                    rows, _ = generation.create_group(
+                        estimate, furniture, width, height, depth,
+                        area=overrides.get('area', source.default_room), item_name=source.name)
+                    created.extend(rows)
+                    continue
                 fields = source.as_estimate_line(**overrides)
                 line = EstimateItem.objects.create(estimate=estimate, **fields)
-                # Linked to a furniture? Seed the material breakdown from its BOM
-                # so the line arrives fully costed, not just as a flat rate.
-                if source.catalog_furniture_id:
-                    populate_line_from_furniture(line, source.catalog_furniture, replace=True)
-                elif source.components.exists():
+                # An item with its own bill of materials arrives fully costed.
+                if source.components.exists():
                     populate_line_from_item(line, source, replace=True)
-                elif not source.default_rate and estimator.guess_template(line.item):
-                    # An unpriced cabinet/drawer item with no linked BOM: start
-                    # from the default template so it arrives with a baseline
-                    # cost. Items with a catalogue rate keep that rate — the
-                    # configurator is then opt-in from the line's breakdown.
-                    try:
-                        configure_line(line, None, replace_dims=False)
-                    except estimator.ConfigError:
-                        pass  # odd written sizes — leave it as a flat-rate line
                 created.append(line)
 
         return Response(
@@ -717,6 +692,13 @@ class EstimateAddFromCatalogView(APIView):
 
 
 class EstimateItemDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """
+    PATCH a row. Typing a quantity on a generated row:
+      • Doors / Drawers / Shelves → becomes the group's count, and every row of
+        that furniture (channels, hinges, ply, locks, …) recalculates;
+      • any other row → kept as an override (survives recalculation; reset via
+        …/items/{id}/reset-qty/).
+    """
     serializer_class = EstimateItemSerializer
 
     def get_queryset(self):
@@ -724,6 +706,29 @@ class EstimateItemDetailView(generics.RetrieveUpdateDestroyAPIView):
             estimate_id=self.kwargs['estimate_id'],
             estimate__project_id=self.kwargs['project_id'],
         ).prefetch_related('components')
+
+    def perform_update(self, serializer):
+        row = serializer.instance
+        new_qty = serializer.validated_data.get('qty')
+        if new_qty is not None and row.group_key and row.quantity_rule in rules.SPEC_RULES:
+            serializer.validated_data.pop('qty')
+            serializer.save()
+            generation.set_spec_count(row.estimate, row, new_qty)
+            return
+        if new_qty is not None and row.calculated_qty is not None:
+            serializer.save(qty_overridden=generation.qty_is_override(row, new_qty))
+            return
+        serializer.save()
+
+
+class EstimateItemResetQtyView(APIView):
+    """POST …/items/{item_id}/reset-qty/ — back to the calculated quantity."""
+
+    def post(self, request, project_id, estimate_id, item_id):
+        row = _get_line({'project_id': project_id, 'estimate_id': estimate_id, 'item_id': item_id})
+        generation.reset_row_qty(row.estimate, row)
+        row.refresh_from_db()
+        return Response(EstimateItemSerializer(row).data)
 
 
 # ── Estimate line breakdown (bill of materials) ────────────
@@ -822,59 +827,6 @@ def populate_line_from_item(line, item, replace=True, multiplier=None):
     return created
 
 
-def populate_line_from_furniture(line, furniture, replace=True, multiplier=None, visited=None):
-    """
-    Copy a catalogue Furniture's bill of materials onto an estimate line's
-    component breakdown, then roll the line amount up from it. Shared by the
-    explicit "Pull from Catalogue" action and the add-from-catalogue flow when
-    the source item is linked to a furniture. Returns the number of rows added.
-    """
-    if replace:
-        line.components.all().delete()
-
-    if visited is None:
-        visited = set()
-    if furniture.pk in visited:
-        raise ValidationError({'detail': 'Furniture composition contains a circular dependency.'})
-    visited.add(furniture.pk)
-    line_quantity = multiplier if multiplier is not None else (line.qty or Decimal('1'))
-    created = 0
-    for part in furniture.parts.filter(is_active=True):
-        for pm in part.materials.all():
-            option = pm.effective_option
-            wastage = pm.wastage_pct or Decimal('0')
-            qty = ((pm.qty_per_unit or Decimal('0')) * line_quantity
-                   * (Decimal('1') + wastage / Decimal('100')))
-            EstimateItemComponent.objects.create(
-                estimate_item=line,
-                basic_component=pm.material.name,
-                detail=option.detail if option else '',
-                brand=option.brand if option else '',
-                model=option.model_no if option else '',
-                qty=qty,
-                unit=pm.unit or (option.unit if option else pm.material.default_unit),
-                price=option.effective_price if option else Decimal('0'),
-                catalog_material=pm.material,
-                catalog_option=option,
-                library_material_item=option.library_item if option else None,
-            )
-            created += 1
-
-    for composed in furniture.item_components.all():
-        nested_item = composed.item
-        nested_multiplier = line_quantity * composed.qty_per_unit
-        if nested_item.catalog_furniture_id:
-            created += populate_line_from_furniture(
-                line, nested_item.catalog_furniture, replace=False,
-                multiplier=nested_multiplier, visited=visited.copy(),
-            )
-        else:
-            created += _append_item_bom(line, nested_item, nested_multiplier)
-
-    line.recompute_amount()
-    return created
-
-
 class EstimateItemComponentListCreateView(generics.ListCreateAPIView):
     """
     GET/POST …/estimates/{estimate_id}/items/{item_id}/components/
@@ -906,125 +858,116 @@ class EstimateItemComponentDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 
-def configure_line(line, config=None, *, replace_dims=True):
+# ── Generated furniture groups (calculation sheet) ─────────
+
+def _size_from_request(data, prefix):
+    """ft/in pair (`width_ft`, `width_in`) or a written size (`width`: "7'0\\"") → inches, or None."""
+    if data.get(f'{prefix}_ft') not in (None, '') or data.get(f'{prefix}_in') not in (None, ''):
+        return rules.to_inches(data.get(f'{prefix}_ft') or 0, data.get(f'{prefix}_in') or 0)
+    if data.get(prefix) not in (None, ''):
+        value = rules.parse_inches(data.get(prefix))
+        if value is None:
+            raise ValidationError({prefix: f'Could not read the size "{data.get(prefix)}".'})
+        return value
+    return None
+
+
+class EstimateGenerateFromDesignView(EstimateActionView):
     """
-    Run the cabinet calculator for an estimate line and replace its breakdown
-    with the result. With no `config`, the line's own name and written sizes
-    pick the template (default configuration). Raises estimator.ConfigError.
+    POST …/estimates/{id}/generate-from-design/
+    Turns every design requirement linked to a catalogue furniture into its
+    calculation-sheet rows; re-running refreshes those groups to the latest
+    sizes and options, keeping chosen brands and typed-over quantities.
     """
-    hint = {'name': line.item, 'length': line.length,
-            'breadth': line.breadth, 'height': line.height, 'qty': line.qty}
-    # Edits layer onto the stored configuration, which keeps exact mm — the
-    # line's ft-in text is rounded and must not feed back into the maths.
-    merged = {**(line.config or {}), **(config or {})}
-    result = estimator.calculate(merged, hint)
 
-    line.components.all().delete()
-    for row in result['rows']:
-        EstimateItemComponent.objects.create(
-            estimate_item=line,
-            basic_component=row['basic_component'],
-            detail=row['detail'],
-            brand=row['brand'],
-            model=row['model'],
-            qty=row['qty'],
-            unit=row['unit'],
-            price=row['price'],
-            catalog_material_id=row['catalog_material'],
-            catalog_option_id=row['catalog_option'],
-        )
-
-    cfg = result['config']
-    line.config = cfg
-    # The breakdown covers `quantity` units; keep Qty × Rate telling the same story.
-    line.qty = cfg['quantity']
-    line.rate = result['per_unit']
-    fields = ['config', 'qty', 'rate']
-    if replace_dims:
-        line.length = estimator.format_ft_in(cfg['length'])
-        line.breadth = estimator.format_ft_in(cfg['depth'])
-        line.height = estimator.format_ft_in(cfg['height'])
-        fields += ['length', 'breadth', 'height']
-    line.save(update_fields=fields)
-    line.recompute_amount()
-    return result
-
-class EstimatePopulateFromFurnitureView(APIView):
-    """
-    POST …/estimates/{estimate_id}/items/{item_id}/populate-from-furniture/
-    Body: { "furniture_id": 5, "replace": true }
-
-    Fills the line's component breakdown from a catalogue Furniture's bill of
-    materials — every part's materials become rows (Basic Component | Detail |
-    Brand | Model | Qty | Unit | Price | Amount), pricing against each
-    material's chosen or cheapest option. The line amount then rolls up from
-    the breakdown.
-    """
-    def post(self, request, project_id, estimate_id, item_id):
-        line = _get_line({'project_id': project_id, 'estimate_id': estimate_id, 'item_id': item_id})
-        furniture_id = request.data.get('furniture_id')
-
-        furniture = CatalogFurniture.objects.filter(pk=furniture_id).first()
-        if not furniture:
-            return Response({'detail': 'Unknown catalogue furniture.'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-        with transaction.atomic():
-            created = populate_line_from_furniture(
-                line, furniture, replace=request.data.get('replace', True))
-            if not line.item:
-                line.item = furniture.name
-                line.save(update_fields=['item'])
-
-        line.refresh_from_db()
-        return Response({
-            'detail': f'{created} component(s) added from {furniture.name}.',
-            'item': EstimateItemSerializer(line).data,
-        }, status=status.HTTP_201_CREATED)
-
-
-
-class EstimateConfigureLineView(APIView):
-    """
-    POST …/estimates/{estimate_id}/items/{item_id}/configure/
-    Body: { "config": {...} }  — apply a cabinet configuration, or
-          { "auto": true }      — default template from the line's name/sizes;
-                                  a no-op (configured: false) for non-cabinets.
-
-    Replaces the line's breakdown with the calculator's bill of materials and
-    stores the configuration on the line so it can be re-opened and edited.
-    """
-    def post(self, request, project_id, estimate_id, item_id):
-        line = _get_line({'project_id': project_id, 'estimate_id': estimate_id, 'item_id': item_id})
-        if line.estimate.status == 'approved':
+    def post(self, request, project_id, pk):
+        estimate = self.get_estimate()
+        if estimate.status == Estimate.Status.APPROVED:
             return Response({'detail': 'This estimate is approved and locked.'},
                             status=status.HTTP_400_BAD_REQUEST)
+        summary = generation.generate_from_design(estimate)
+        parts = [f"{summary['created']} added", f"{summary['updated']} refreshed"]
+        if summary['skipped']:
+            parts.append(f"{len(summary['skipped'])} without a catalogue furniture: "
+                         + ', '.join(summary['skipped'][:5]))
+        return Response({'detail': '; '.join(parts) + '.', **summary,
+                         'estimate': EstimateSerializer(estimate).data})
 
-        if request.data.get('auto'):
-            if not estimator.guess_template(line.item):
-                return Response({'configured': False,
-                                 'detail': 'Not a cabinet item — nothing to configure.'})
-            config = None
-        else:
-            config = request.data.get('config')
-            if not isinstance(config, dict):
-                return Response({'detail': 'Send a "config" object or "auto": true.'},
-                                status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            with transaction.atomic():
-                result = configure_line(line, config)
-        except estimator.ConfigError as exc:
-            return Response({'detail': 'Invalid configuration.', 'errors': {k: [v] for k, v in exc.errors.items()}},
+class EstimateAddFurnitureView(EstimateActionView):
+    """
+    POST …/estimates/{id}/add-furniture/
+    Body: { "furniture_id": 3, "area": "Master Bedroom", "zone": "East Wall",
+            "item": "Wardrobe", "width": "7'0\\"", "height": "9'6\\"", "depth": "2'0\\"",
+            "options": {...} }     (sizes may also be width_ft / width_in, …)
+    """
+
+    def post(self, request, project_id, pk):
+        estimate = self.get_estimate()
+        if estimate.status == Estimate.Status.APPROVED:
+            return Response({'detail': 'This estimate is approved and locked.'},
                             status=status.HTTP_400_BAD_REQUEST)
+        furniture = CatalogFurniture.objects.filter(pk=request.data.get('furniture_id'), is_active=True).first()
+        if furniture is None:
+            return Response({'detail': 'Pick a catalogue furniture.'}, status=status.HTTP_400_BAD_REQUEST)
+        dw, dh, dd = size_inches(furniture.default_length, furniture.default_height, furniture.default_breadth)
+        width = _size_from_request(request.data, 'width')
+        height = _size_from_request(request.data, 'height')
+        depth = _size_from_request(request.data, 'depth')
+        rows, calc = generation.create_group(
+            estimate, furniture, dw if width is None else width, dh if height is None else height,
+            dd if depth is None else depth, options=request.data.get('options') or {},
+            area=request.data.get('area', ''), zone=request.data.get('zone', ''),
+            item_name=request.data.get('item') or furniture.name)
+        return Response({'detail': f'{furniture.name}: {len(rows)} row(s) added.',
+                         'group_key': rows[0].group_key if rows else '',
+                         'warnings': calc.warnings,
+                         'estimate': EstimateSerializer(estimate).data},
+                        status=status.HTTP_201_CREATED)
 
-        line.refresh_from_db()
-        return Response({
-            'configured': True,
-            'detail': f'{len(result["rows"])} component(s) calculated.',
-            'item': EstimateItemSerializer(line).data,
-            'result': result,
-        })
+
+class EstimateGroupView(EstimateActionView):
+    """
+    POST   …/estimates/{id}/groups/{group_key}/   recalculate — body may carry
+           width/height/depth (or *_ft/*_in), options, area, zone, item
+    DELETE …/estimates/{id}/groups/{group_key}/   remove the furniture's rows
+    """
+
+    def _locked(self, estimate):
+        if estimate.status == Estimate.Status.APPROVED:
+            return Response({'detail': 'This estimate is approved and locked.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return None
+
+    def post(self, request, project_id, pk, group_key):
+        estimate = self.get_estimate()
+        locked = self._locked(estimate)
+        if locked is not None:
+            return locked
+        data = request.data
+        try:
+            rows, calc = generation.recalculate_group(
+                estimate, group_key,
+                width=_size_from_request(data, 'width'), height=_size_from_request(data, 'height'),
+                depth=_size_from_request(data, 'depth'),
+                options=data.get('options') if 'options' in data else None,
+                area=data.get('area'), zone=data.get('zone'), item_name=data.get('item'))
+        except LookupError:
+            return Response({'detail': 'No rows in that group.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'detail': f'{len(rows)} row(s) recalculated.',
+                         'calculation': calc.summary() if calc else None,
+                         'estimate': EstimateSerializer(estimate).data})
+
+    def delete(self, request, project_id, pk, group_key):
+        estimate = self.get_estimate()
+        locked = self._locked(estimate)
+        if locked is not None:
+            return locked
+        deleted, _ = EstimateItem.objects.filter(estimate=estimate, group_key=group_key).delete()
+        if not deleted:
+            return Response({'detail': 'No rows in that group.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 # ── Downloads ──────────────────────────────────────────────
 

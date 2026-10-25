@@ -2,263 +2,284 @@
 from decimal import Decimal
 
 from django.core.management import call_command
+from django.test import SimpleTestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import PagePermission, User
-from items.models import Item, ItemCategory, ItemComponent
-from library.models import MaterialBrand as LibraryBrand
-from library.models import MaterialCategory as LibraryCategory
-from library.models import MaterialItem as LibraryMaterialItem
-from catalog.models import (
-    Furniture, FurnitureItemComponent, FurniturePart, Material, MaterialOption,
-    PartMaterial, Room, Zone,
-)
+from catalog import rules
+from catalog.models import BasicComponent, Furniture, FurnitureComponent, Room
+from library.models import MaterialBrand, MaterialCategory, MaterialItem
 
 PASSWORD = 'Str0ng!Passw0rd'
 
 
 def grant(user, module, level='full'):
-    PagePermission.objects.update_or_create(
-        user=user, page_id=module, defaults={'level': level})
+    PagePermission.objects.update_or_create(user=user, page_id=module, defaults={'level': level})
 
+
+def q(calc, rule):
+    return float(calc.results[rule][0])
+
+
+# ════════════════════════════════════════════════════════════════
+# Rules (Calculations.xlsx → Sheet1 / Sheet3)
+# ════════════════════════════════════════════════════════════════
+
+class RulesTests(SimpleTestCase):
+    def tearDown(self):
+        rules.RULES['between_mode'] = 'inclusive_min'
+        rules.RULES['ply_round_sft'] = 32
+
+    def test_worked_sheet_master_wardrobe(self):
+        """7'0" × 9'6" × 2'0" openable wardrobe — the sheet's Master bedroom row."""
+        c = rules.compute('wardrobe_openable', 84, 114, 24)
+        self.assertEqual(c.counts, {'doors': 4, 'drawers': 4, 'shelves': 2, 'verticals': 3})
+        self.assertEqual(q(c, 'back_panel_ply'), 96)       # sheet: 16mm B Board 96 sft
+        self.assertEqual(q(c, 'carpentry'), 66.5)          # sheet: 66.5 sft
+        self.assertEqual(q(c, 'drawer_channels'), 4)       # sheet: 4 sets
+        self.assertEqual(q(c, 'handles'), 4)
+        self.assertEqual(q(c, 'knobs'), 4)
+        self.assertEqual(q(c, 'drawer_locks'), 2)
+
+    def test_verticals_follow_sheet3(self):
+        expected = {2: 2, 3: 3, 4: 3, 5: 4, 6: 4, 7: 5, 8: 5, 9: 6, 10: 6}   # Sheet3 column C
+        for doors, verticals in expected.items():
+            c = rules.compute('wardrobe_openable', 120, 96, 24, {'overrides': {'doors': doors}})
+            self.assertEqual(c.counts['verticals'], verticals, doors)
+
+    def test_openable_doors_between_width_over_24_and_16(self):
+        self.assertEqual(rules.compute('wardrobe_openable', 96, 96, 24).counts['doors'], 4)   # 4–6
+        self.assertEqual(rules.compute('wardrobe_openable', 65, 96, 24).counts['doors'], 3)   # 2.7–4.1
+
+    def test_sliding_wardrobe(self):
+        c = rules.compute('wardrobe_sliding', 96, 96, 24)
+        self.assertEqual(c.counts['doors'], 3)                      # between 96/42 and 96/30
+        self.assertEqual(c.counts['drawers'], 6)                    # doors × 2
+        self.assertEqual(q(c, 'hinges'), 0)
+
+    def test_kitchen_subtracts_basket_and_bottle_pullout(self):
+        c = rules.compute('kitchen_base', 120, 34, 24)
+        self.assertEqual(c.counts['doors'], 4)                      # (120 − 36 − 10) = 74 → 3.1–4.6
+        self.assertEqual(c.counts['drawers'], 0)
+
+    def test_pooja_drawers(self):
+        self.assertEqual(rules.compute('pooja', 20, 48, 15).counts['drawers'], 1)   # under 24"
+        self.assertEqual(rules.compute('pooja', 48, 48, 15).counts['drawers'], 2)   # inclusive
+        rules.RULES['between_mode'] = 'strict'
+        self.assertEqual(rules.compute('pooja', 48, 48, 15).counts['drawers'], 3)   # video's example
+
+    def test_hinges_by_door_height(self):
+        def per_door(h):
+            return q(rules.compute('wardrobe_openable', 24, h, 24, {'overrides': {'doors': 1}}), 'hinges')
+        self.assertEqual(per_door(24), 2)
+        self.assertEqual(per_door(25), 3)
+        self.assertEqual(per_door(48), 3)
+        self.assertEqual(per_door(49), 4)
+
+    def test_ply_rounds_to_whole_sheets_or_half_sheets(self):
+        c = rules.compute('wardrobe_openable', 84, 114, 24)
+        self.assertEqual(q(c, 'carcass_ply') % 32, 0)
+        rules.RULES['ply_round_sft'] = 16
+        c16 = rules.compute('wardrobe_openable', 84, 114, 24)
+        self.assertEqual(q(c16, 'carcass_ply') % 16, 0)
+        self.assertLessEqual(q(c16, 'carcass_ply'), q(c, 'carcass_ply'))
+
+    def test_inner_liner_is_ply_twice_minus_finish(self):
+        c = rules.compute('wardrobe_openable', 84, 114, 24)
+        ply_sheets = sum(q(c, k) for k in ('carcass_ply', 'back_panel_ply', 'drawer_box_ply')) / 32
+        finish = q(c, 'finish_sheets') / 32
+        self.assertEqual(q(c, 'inner_liner'), (ply_sheets * 2 - finish) * 32)
+        self.assertEqual(float(q(c, 'adhesive_bonding')), ply_sheets * 1.5)
+
+    def test_glass_shelves_leave_the_ply(self):
+        ply = rules.compute('crockery_base', 72, 60, 15)
+        glass = rules.compute('crockery_base', 72, 60, 15, {'shelf_type': 'glass'})
+        self.assertGreater(q(glass, 'glass_shelves'), 0)
+        self.assertEqual(q(ply, 'glass_shelves'), 0)
+
+    def test_handleless_drops_handles_and_knobs(self):
+        c = rules.compute('wardrobe_openable', 84, 114, 24, {'handleless': True})
+        self.assertEqual((q(c, 'handles'), q(c, 'knobs')), (0, 0))
+
+    def test_drawer_override_cascades(self):
+        c = rules.compute('wardrobe_openable', 84, 114, 24, {'overrides': {'drawers': 6}})
+        self.assertEqual(c.counts['drawers'], 6)
+        self.assertEqual(q(c, 'drawer_channels'), 6)
+        self.assertEqual(q(c, 'drawer_locks'), 3)
+
+    def test_visible_side_adds_finish(self):
+        plain = rules.compute('crockery_base', 72, 60, 15)
+        visible = rules.compute('crockery_base', 72, 60, 15, {'one_side_visible': True})
+        self.assertGreaterEqual(q(visible, 'finish_sheets'), q(plain, 'finish_sheets'))
+
+    def test_loft_and_panel(self):
+        self.assertEqual(rules.compute('loft_box', 84, 24, 24).counts['shelves'], 0)
+        panel = rules.compute('panel', 0, 0, 0)
+        self.assertEqual(panel.counts['doors'], 0)
+
+    def test_unit_top_and_dado(self):
+        c = rules.compute('kitchen_base', 120, 34, 24)
+        self.assertAlmostEqual(q(c, 'unit_top'), 120 * 24 / 144 * 1.15, places=2)
+        self.assertEqual(q(c, 'dado_tiles'), 20)
+
+    def test_fixed_and_manual_quantities(self):
+        c = rules.compute('wardrobe_openable', 84, 114, 24)
+        self.assertEqual(c.quantity('fixed', None, 2)[0], Decimal('2.00'))
+        qty, _, needs = c.quantity('manual', None, 0)
+        self.assertTrue(needs)
+        self.assertEqual(c.quantity('hinges', Decimal('5'))[0], Decimal('5.00'))   # fixed per furniture
+
+    def test_parse_inches(self):
+        self.assertEqual(rules.parse_inches("7'0\""), 84)
+        self.assertEqual(rules.parse_inches("2'3\""), 27)        # the video's example
+        self.assertEqual(rules.parse_inches('30"'), 30)
+        self.assertEqual(rules.parse_inches('8'), 96)            # bare number ≤ 20 → feet
+        self.assertAlmostEqual(rules.parse_inches('600mm'), 23.62, places=2)
+        self.assertIsNone(rules.parse_inches('—'))
+        self.assertEqual(rules.ft_in(114), (9, 6))
+
+    def test_missing_size_warns(self):
+        self.assertTrue(rules.compute('wardrobe_openable', 0, 0, 0).warnings)
+
+
+# ════════════════════════════════════════════════════════════════
+# API
+# ════════════════════════════════════════════════════════════════
 
 class CatalogTestCase(APITestCase):
     def setUp(self):
-        self.user = User.objects.create_user(
-            email='designer@nicara.design', password=PASSWORD,
-            first_name='Test', last_name='User',
-        )
+        self.user = User.objects.create_user(email='designer@nicara.design', password=PASSWORD,
+                                             first_name='Test', last_name='User')
         grant(self.user, 'catalog')
         self.client.force_authenticate(self.user)
-
-
-class CodeAndStructureTests(CatalogTestCase):
-    def test_room_code_generated(self):
-        room = Room.objects.create(name='Master Bedroom')
-        self.assertTrue(room.code.startswith('ROOM-'))
-
-    def test_furniture_code_generated(self):
-        f = Furniture.objects.create(name='Wardrobe')
-        self.assertTrue(f.code.startswith('FURN-'))
-
-    def test_material_code_generated(self):
-        m = Material.objects.create(name='Plywood')
-        self.assertTrue(m.code.startswith('MAT-'))
-
-    def test_duplicate_names_get_distinct_codes(self):
-        a = Material.objects.create(name='Plywood')
-        Material.objects.filter(pk=a.pk).update(name='Ply A')  # free the unique name
-        b = Material.objects.create(name='Plywood')
-        self.assertNotEqual(a.code, b.code)
-
-    def test_option_label(self):
-        m = Material.objects.create(name='Plywood')
-        o = MaterialOption.objects.create(
-            material=m, detail='18mm Plywood', brand='Austin', model_no='Lincoln', size='8x4')
-        self.assertEqual(o.label, '18mm Plywood · Austin · Lincoln · 8x4')
-
-
-class CostRollupTests(CatalogTestCase):
-    def setUp(self):
-        super().setUp()
-        self.ply = Material.objects.create(name='Plywood', default_unit='sft')
-        MaterialOption.objects.create(material=self.ply, detail='18mm', price=Decimal('100'), unit='sft')
-        MaterialOption.objects.create(material=self.ply, detail='8mm', price=Decimal('60'), unit='sft')
-
-        self.furniture = Furniture.objects.create(name='Wardrobe', margin_pct=Decimal('35'))
-        self.part = FurniturePart.objects.create(furniture=self.furniture, name='Cabinet')
-
-    def test_effective_option_is_cheapest_when_unpinned(self):
-        pm = PartMaterial.objects.create(part=self.part, material=self.ply, qty_per_unit=Decimal('10'))
-        self.assertEqual(pm.effective_option.price, Decimal('60'))
-
-    def test_pinned_option_wins(self):
-        pinned = self.ply.options.get(price=100)
-        pm = PartMaterial.objects.create(
-            part=self.part, material=self.ply, default_option=pinned, qty_per_unit=Decimal('10'))
-        self.assertEqual(pm.unit_price, Decimal('100'))
-
-    def test_line_cost_includes_wastage(self):
-        pinned = self.ply.options.get(price=100)
-        pm = PartMaterial.objects.create(
-            part=self.part, material=self.ply, default_option=pinned,
-            qty_per_unit=Decimal('10'), wastage_pct=Decimal('10'))
-        # 10 × 1.10 × 100 = 1100
-        self.assertEqual(pm.line_cost, Decimal('1100.00'))
-
-    def test_furniture_cost_and_suggested_rate(self):
-        pinned = self.ply.options.get(price=100)
-        PartMaterial.objects.create(
-            part=self.part, material=self.ply, default_option=pinned, qty_per_unit=Decimal('10'))
-        self.assertEqual(self.furniture.material_cost, Decimal('1000.00'))
-        # +35% margin
-        self.assertEqual(self.furniture.suggested_rate, Decimal('1350.00'))
-
-    def test_suggested_rate_zero_without_bom(self):
-        self.assertEqual(self.furniture.suggested_rate, Decimal('0.00'))
-
-    def test_library_price_and_reusable_items_roll_into_furniture_cost(self):
-        category = LibraryCategory.objects.create(name='Plywood', product_group='plywood')
-        brand = LibraryBrand.objects.create(category=category, name='Austin')
-        variant = LibraryMaterialItem.objects.create(
-            category=category, brand=brand, model_name='Lincoln',
-            default_rate=Decimal('150'), default_unit='sft',
-        )
-        option = MaterialOption.objects.create(
-            material=self.ply, detail='18mm', brand='Austin', model_no='Lincoln',
-            price=Decimal('100'), unit='sft', library_item=variant,
-        )
-        PartMaterial.objects.create(
-            part=self.part, material=self.ply, default_option=option, qty_per_unit=10,
-        )
-
-        item_category = ItemCategory.objects.create(name='Components')
-        drawer = Item.objects.create(name='Drawer', category=item_category)
-        ItemComponent.objects.create(item=drawer, material_item=variant, qty_per_unit=2)
-        FurnitureItemComponent.objects.create(furniture=self.furniture, item=drawer, qty_per_unit=3)
-
-        # Direct stock uses the central library rate (10 x 150); drawer BOM is
-        # 3 units x (2 x 150), so no duplicated line-item aggregation is needed.
-        self.assertEqual(self.furniture.material_cost, Decimal('2400.00'))
-
-
-class RoomScopingTests(CatalogTestCase):
-    def setUp(self):
-        super().setUp()
-        self.kitchen = Room.objects.create(name='Kitchen')
-        self.bedroom = Room.objects.create(name='Master Bedroom')
-
-        self.base_unit = Furniture.objects.create(name='Kitchen Base Unit')
-        self.base_unit.rooms.set([self.kitchen])
-        self.wardrobe = Furniture.objects.create(name='Wardrobe')
-        self.wardrobe.rooms.set([self.bedroom])
-        self.paint = Furniture.objects.create(name='Paint')  # universal, no rooms
-
-    def test_room_filter_returns_scoped_plus_universal(self):
-        res = self.client.get(reverse('catalog-furniture-list'), {'room': self.kitchen.pk})
-        names = {f['name'] for f in res.data['results']}
-        self.assertIn('Kitchen Base Unit', names)
-        self.assertIn('Paint', names)               # universal shows everywhere
-        self.assertNotIn('Wardrobe', names)          # bedroom-only, hidden
-
-    def test_unfiltered_returns_all(self):
-        res = self.client.get(reverse('catalog-furniture-list'))
-        self.assertEqual(res.data['count'], 3)
+        self.ply = MaterialCategory.objects.create(name='Core Material(18mm BWP Ply)', product_group='plywood')
+        brand = MaterialBrand.objects.create(category=self.ply, name='Gurjan')
+        self.gurjan = MaterialItem.objects.create(category=self.ply, brand=brand, model_name='710 BWP',
+                                                  default_rate=Decimal('80'), default_unit='sft')
+        self.hinge_cat = MaterialCategory.objects.create(name='Box Hinges', product_group='hardware')
+        self.bc_ply = BasicComponent.objects.create(
+            name='Core Material(18mm BWP Ply)', library_category=self.ply, unit='sft',
+            quantity_rule='carcass_ply')
+        self.bc_doors = BasicComponent.objects.create(
+            name='Doors', item_type='Spec Purpose', quantity_rule='doors', gst_pct=0)
+        self.wardrobe = Furniture.objects.create(
+            name='Wardrobe', cabinet_type='wardrobe_openable',
+            default_length="7'0\"", default_height="9'6\"", default_breadth="2'0\"")
+        FurnitureComponent.objects.create(furniture=self.wardrobe, basic_component=self.bc_doors, sort_order=1)
+        FurnitureComponent.objects.create(furniture=self.wardrobe, basic_component=self.bc_ply, sort_order=2)
 
 
 class ApiTests(CatalogTestCase):
-    def test_requires_permission(self):
-        stranger = User.objects.create_user(
-            email='nobody@nicara.design', password=PASSWORD,
-            first_name='No', last_name='Access')
-        self.client.force_authenticate(stranger)
-        self.assertEqual(
-            self.client.get(reverse('catalog-room-list')).status_code,
-            status.HTTP_403_FORBIDDEN)
+    def test_requires_authentication(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get(reverse('catalog-furniture-list')).status_code,
+                         status.HTTP_401_UNAUTHORIZED)
 
-    def test_view_only_blocks_writes(self):
-        viewer = User.objects.create_user(
-            email='viewer@nicara.design', password=PASSWORD,
-            first_name='View', last_name='Only')
+    def test_view_only_users_cannot_edit(self):
+        viewer = User.objects.create_user(email='v@nicara.design', password=PASSWORD,
+                                          first_name='V', last_name='W')
         grant(viewer, 'catalog', 'view')
         self.client.force_authenticate(viewer)
-        self.assertEqual(self.client.get(reverse('catalog-room-list')).status_code,
+        self.assertEqual(self.client.get(reverse('catalog-basic-component-list')).status_code,
                          status.HTTP_200_OK)
-        res = self.client.post(reverse('catalog-room-list'), {'name': 'Study'}, format='json')
+        res = self.client.post(reverse('catalog-basic-component-list'), {'name': 'X'}, format='json')
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_create_material_with_options(self):
-        material = self.client.post(reverse('catalog-material-list'),
-                                    {'name': 'Plywood', 'default_unit': 'sft'}, format='json')
-        self.assertEqual(material.status_code, status.HTTP_201_CREATED, material.data)
-        mid = material.data['id']
-        option = self.client.post(
-            reverse('catalog-option-list', args=[mid]),
-            {'detail': '18mm Plywood', 'brand': 'Austin', 'model_no': 'Lincoln',
-             'size': '8x4', 'price': '100', 'unit': 'sft'}, format='json')
-        self.assertEqual(option.status_code, status.HTTP_201_CREATED, option.data)
-        self.assertTrue(option.data['library_item'])
-        self.assertEqual(
-            LibraryMaterialItem.objects.get(pk=option.data['library_item']).default_rate,
-            Decimal('100.00'),
-        )
+    def test_create_basic_component_and_reject_unknown_rule(self):
+        ok = self.client.post(reverse('catalog-basic-component-list'), {
+            'name': 'Box Hinges', 'library_category': self.hinge_cat.pk, 'unit': 'sets',
+            'quantity_rule': 'hinges'}, format='json')
+        self.assertEqual(ok.status_code, status.HTTP_201_CREATED, ok.data)
+        self.assertTrue(ok.data['code'].startswith('BC-'))
+        bad = self.client.post(reverse('catalog-basic-component-list'),
+                               {'name': 'Mystery', 'quantity_rule': 'guess'}, format='json')
+        self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_negative_price_rejected(self):
-        m = Material.objects.create(name='Plywood')
-        res = self.client.post(reverse('catalog-option-list', args=[m.pk]),
-                               {'detail': 'x', 'price': '-5'}, format='json')
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_option_must_match_material(self):
-        ply = Material.objects.create(name='Plywood')
-        hardware = Material.objects.create(name='Hardware')
-        ply_option = MaterialOption.objects.create(material=ply, detail='18mm', price=100)
-        furniture = Furniture.objects.create(name='Wardrobe')
-        part = FurniturePart.objects.create(furniture=furniture, name='Cabinet')
-
-        res = self.client.post(
-            reverse('catalog-partmaterial-list', args=[part.pk]),
-            {'material': hardware.pk, 'default_option': ply_option.pk, 'qty_per_unit': '2'},
-            format='json')
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_furniture_can_include_reusable_item_and_reject_its_own_item(self):
-        furniture = Furniture.objects.create(name='Cabinet')
-        category = ItemCategory.objects.create(name='Components')
-        drawer = Item.objects.create(name='Drawer', category=category)
-        url = reverse('catalog-furniture-item-list', args=[furniture.pk])
-
-        response = self.client.post(url, {
-            'item': drawer.pk, 'qty_per_unit': '2',
-        }, format='json')
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
-        self.assertEqual(response.data['item_name'], 'Drawer')
-        self.assertEqual(furniture.item_components.count(), 1)
-
-        linked = Item.objects.create(
-            name='Linked Cabinet', category=category, catalog_furniture=furniture,
-        )
-        rejected = self.client.post(url, {'item': linked.pk}, format='json')
-        self.assertEqual(rejected.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_delete_deactivates(self):
-        room = Room.objects.create(name='Study')
-        res = self.client.delete(reverse('catalog-room-detail', args=[room.pk]))
-        self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
-        room.refresh_from_db()
-        self.assertFalse(room.is_active)
-
-    def test_tree_endpoint(self):
-        room = Room.objects.create(name='Kitchen')
-        Zone.objects.create(name='Island')
-        f = Furniture.objects.create(name='Kitchen Base Unit')
-        f.rooms.set([room])
-        res = self.client.get(reverse('catalog-tree'), {'room': room.pk})
+    def test_furniture_detail_lists_components_with_rates(self):
+        res = self.client.get(reverse('catalog-furniture-detail', args=[self.wardrobe.pk]))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data['rooms']), 1)
-        self.assertEqual(len(res.data['zones']), 1)
-        self.assertEqual(len(res.data['furniture']), 1)
+        names = [c['basic_component_name'] for c in res.data['components']]
+        self.assertEqual(names, ['Doors', 'Core Material(18mm BWP Ply)'])
+        self.assertEqual(res.data['components'][1]['rate'], 80.0)   # cheapest in the category
 
-    def test_meta_counts(self):
-        Room.objects.create(name='Kitchen')
+    def test_add_component_and_reject_wrong_material(self):
+        url = reverse('catalog-furniture-component-list', args=[self.wardrobe.pk])
+        bc = BasicComponent.objects.create(name='Box Hinges', library_category=self.hinge_cat,
+                                           quantity_rule='hinges', unit='sets')
+        ok = self.client.post(url, {'basic_component': bc.pk}, format='json')
+        self.assertEqual(ok.status_code, status.HTTP_201_CREATED, ok.data)
+        self.assertEqual(ok.data['sort_order'], 3)
+        bad = self.client.post(url, {'basic_component': bc.pk, 'default_material': self.gurjan.pk},
+                               format='json')
+        self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_calculate_preview_uses_default_size(self):
+        res = self.client.post(reverse('catalog-furniture-calculate', args=[self.wardrobe.pk]), {},
+                               format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.assertEqual(res.data['calculation']['counts']['doors'], 4)
+        ply = res.data['rows'][1]
+        self.assertEqual((ply['qty'], ply['rate'], ply['brand']), (160.0, 80.0, 'Gurjan'))
+        self.assertEqual(res.data['total_cost'], 12800.0)
+
+    def test_calculate_with_size_and_override(self):
+        res = self.client.post(reverse('catalog-furniture-calculate', args=[self.wardrobe.pk]),
+                               {'width': "4'0\"", 'options': {'overrides': {'doors': 3}}}, format='json')
+        self.assertEqual(res.data['rows'][0]['qty'], 3.0)
+        self.assertEqual(res.data['rows'][0]['application'], 'Ply - 3 nos')
+
+    def test_room_scoping(self):
+        kitchen = Room.objects.create(name='Kitchen')
+        base = Furniture.objects.create(name='Kitchen Base', cabinet_type='kitchen_base')
+        base.rooms.add(kitchen)
+        bedroom = Room.objects.create(name='Bedroom')
+        res = self.client.get(reverse('catalog-furniture-list'), {'room': bedroom.pk})
+        names = {r['name'] for r in res.data['results']}
+        self.assertIn('Wardrobe', names)          # no rooms set → available everywhere
+        self.assertNotIn('Kitchen Base', names)
+
+    def test_soft_delete(self):
+        self.client.delete(reverse('catalog-furniture-detail', args=[self.wardrobe.pk]))
+        self.wardrobe.refresh_from_db()
+        self.assertFalse(self.wardrobe.is_active)
+
+    def test_meta_lists_rules_and_cabinet_types(self):
         res = self.client.get(reverse('catalog-meta'))
-        self.assertEqual(res.data['counts']['rooms'], 1)
-        self.assertTrue(any(u['value'] == 'sft' for u in res.data['units']))
+        self.assertIn('hinges', [r['value'] for r in res.data['rules']])
+        self.assertIn('wardrobe_sliding', [c['value'] for c in res.data['cabinet_types']])
+        self.assertEqual(res.data['spec_rules'], ['doors', 'drawers', 'shelves'])
+
+    def test_tree(self):
+        res = self.client.get(reverse('catalog-tree'))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn('Wardrobe', [f['name'] for f in res.data['furniture']])
 
 
-class SeedTests(CatalogTestCase):
-    def test_seed_is_idempotent(self):
+class SeedTests(APITestCase):
+    def test_seed_is_idempotent_and_priced_from_the_sheet(self):
         call_command('seed_catalog', verbosity=0)
-        first = Furniture.objects.count()
-        self.assertGreater(first, 10)
+        counts = (Furniture.objects.count(), BasicComponent.objects.count(), FurnitureComponent.objects.count())
         call_command('seed_catalog', verbosity=0)
-        self.assertEqual(Furniture.objects.count(), first)
+        self.assertEqual(counts, (Furniture.objects.count(), BasicComponent.objects.count(),
+                                  FurnitureComponent.objects.count()))
+        gurjan = MaterialItem.objects.get(category__name='Core Material(16mm BWP Ply)', model_name='710 BWP')
+        self.assertEqual(gurjan.default_rate, Decimal('80.00'))
+        carpentry = BasicComponent.objects.get(name='Carpentry')
+        self.assertEqual((carpentry.item_type, carpentry.gst_pct), ('Service', Decimal('0.00')))
 
-    def test_seeded_wardrobe_has_a_cost(self):
+    def test_seeded_wardrobe_matches_the_worked_sheet(self):
         call_command('seed_catalog', verbosity=0)
-        wardrobe = Furniture.objects.get(name='Wardrobe')
-        self.assertGreater(wardrobe.material_cost, 0)
-        self.assertGreater(wardrobe.suggested_rate, wardrobe.material_cost)
+        user = User.objects.create_user(email='a@nicara.design', password=PASSWORD,
+                                        first_name='A', last_name='B', role=User.Role.ADMIN)
+        self.client.force_authenticate(user)
+        wardrobe = Furniture.objects.get(name='Wardrobe with Openable Shutters')
+        res = self.client.post(reverse('catalog-furniture-calculate', args=[wardrobe.pk]), {},
+                               format='json')
+        rows = {r['specification']: r for r in res.data['rows']}
+        self.assertEqual(rows['Drawers']['qty'], 4)
+        self.assertEqual(rows['Core Material(16mm BWP B Board)']['qty'], 96)
+        self.assertEqual(rows['Carpentry']['qty'], 66.5)
+        self.assertEqual(rows['Carpentry']['rate'], 350)
+        self.assertEqual(rows['Draw Locks']['qty'], 2)

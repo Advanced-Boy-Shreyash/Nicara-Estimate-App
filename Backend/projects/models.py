@@ -125,7 +125,16 @@ class DesignRequirement(models.Model):
     """Room/unit design requirements — generated from room selection."""
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='design_requirements')
     room = models.CharField(max_length=100, help_text='Master Bedroom, Kitchen, etc.')
+    zone = models.CharField(max_length=100, blank=True, default='', help_text='East Wall, etc.')
     unit = models.CharField(max_length=100, help_text='Wardrobe, TV Unit, etc.')
+    # The catalogue product this requirement is estimated as; its cabinet type
+    # selects the quantity rules, `options` tunes them (catalog/rules.py).
+    furniture = models.ForeignKey(
+        'catalog.Furniture', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='design_requirements',
+    )
+    options = models.JSONField(default=dict, blank=True,
+                               help_text='shelf_type, one_side_visible, handleless, overrides')
     length = models.CharField(max_length=20, blank=True, default='')
     breadth = models.CharField(max_length=20, blank=True, default='')
     height = models.CharField(max_length=20, blank=True, default='')
@@ -454,8 +463,8 @@ class EstimateItem(models.Model):
     )
 
     # ── Margin ──
-    margin_pct = models.DecimalField(max_digits=5, decimal_places=2, default=35,
-                                     help_text='Default 35%')
+    margin_pct = models.DecimalField(max_digits=5, decimal_places=2, default=15,
+                                     help_text='Default 15% (calculation sheet)')
     margin_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
 
     # ── Referral ──
@@ -473,7 +482,36 @@ class EstimateItem(models.Model):
     flag = models.BooleanField(default=False, help_text='Row-level flag for review')
 
     remarks = models.CharField(max_length=300, blank=True, default='')
+    # Calculation options shared by every row of a furniture group
+    # (shelf_type, one_side_visible, handleless, overrides of doors/drawers/shelves).
     config = models.JSONField(null=True, blank=True)
+
+    # ── Generated from the catalogue (catalog/rules.py) ──
+    # Rows of one furniture piece share a group_key; resizing or changing a
+    # door/drawer/shelf count recalculates the whole group.
+    group_key = models.CharField(max_length=40, blank=True, default='', db_index=True)
+    design_requirement = models.ForeignKey(
+        DesignRequirement, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='estimate_rows',
+    )
+    furniture = models.ForeignKey(
+        'catalog.Furniture', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='estimate_rows',
+    )
+    basic_component = models.ForeignKey(
+        'catalog.BasicComponent', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='estimate_rows',
+    )
+    raw_material = models.ForeignKey(
+        'library.MaterialItem', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='estimate_rows', help_text='Brand/model this row is priced from',
+    )
+    quantity_rule = models.CharField(max_length=40, blank=True, default='')
+    calc_basis = models.CharField(max_length=500, blank=True, default='',
+                                  help_text='How the quantity was worked out')
+    calculated_qty = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    qty_overridden = models.BooleanField(default=False,
+                                         help_text='Quantity typed in; kept when the group recalculates')
 
     class Meta:
         ordering = ['sno', 'id']
@@ -581,15 +619,7 @@ class EstimateItemComponent(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2, default=0,
                                  help_text='Auto-computed as qty × price')
 
-    # Optional trace back to the catalogue this was pulled from.
-    catalog_material = models.ForeignKey(
-        'catalog.Material', on_delete=models.SET_NULL, null=True, blank=True,
-        related_name='+',
-    )
-    catalog_option = models.ForeignKey(
-        'catalog.MaterialOption', on_delete=models.SET_NULL, null=True, blank=True,
-        related_name='+',
-    )
+    # Optional trace back to the raw material this was priced from.
     library_material_item = models.ForeignKey(
         'library.MaterialItem', on_delete=models.SET_NULL, null=True, blank=True,
         related_name='+',

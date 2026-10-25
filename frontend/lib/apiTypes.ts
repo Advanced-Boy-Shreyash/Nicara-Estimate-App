@@ -152,7 +152,13 @@ export interface ProjectMeta {
 export interface DesignRequirement {
   id: number;
   room: string;
+  zone: string;
   unit: string;
+  /** Catalogue furniture this requirement is estimated as. */
+  furniture: number | null;
+  furniture_name?: string;
+  cabinet_type?: string;
+  options: CalcOptions;
   length: string;
   breadth: string;
   height: string;
@@ -208,8 +214,7 @@ export interface EstimateItemComponent {
   unit: string;
   price: string;
   amount: string;
-  catalog_material: number | null;
-  catalog_option: number | null;
+  library_material_item: number | null;
 }
 
 export interface EstimateItem {
@@ -268,84 +273,30 @@ export interface EstimateItem {
   /** The material breakdown; when present, `amount` is its sum. */
   components: EstimateItemComponent[];
   has_components: boolean;
-  /** Cabinet-calculator configuration the breakdown was generated from. */
-  config: CabinetConfig | null;
+  /** Calculation options shared by every row of a furniture group. */
+  config: CalcOptions | null;
+  // Generated from the catalogue (calculation sheet)
+  group_key: string;
+  design_requirement: number | null;
+  furniture: number | null;
+  furniture_name: string;
+  cabinet_type: string;
+  basic_component: number | null;
+  raw_material: number | null;
+  raw_material_category: number | null;
+  quantity_rule: string;
+  calc_basis: string;
+  calculated_qty: string | null;
+  qty_overridden: boolean;
 }
 
-// ── Cabinet calculation engine (catalog/estimator.py) ─────────
-
-export interface CabinetConfig {
-  template: string;
-  quantity: number;
-  length: number;   // width, mm
-  depth: number;    // mm
-  height: number;   // mm
-  drawers: number;
-  doors: number;
-  shelves: number;
-  carcass_thickness: number;
-  shutter_thickness: number;
-  back_thickness: number;
-  drawer_box_thickness: number;
-  board: string;
-  finish: string;
-  ply_brand: string;
-  /** Cutting waste added to the final assembly, %. */
-  wastage_pct: number;
-  margin_pct: number;
-  /** Row key → user-set quantity (intermediate / final estimate overrides). */
-  overrides: Record<string, number>;
-  options?: { hinge?: number | null; channel?: number | null; handle?: number | null; finish?: number | null };
-}
-
-export interface EstimatorRow {
-  key: string;
-  basic_component: string;
-  detail: string;
-  brand: string;
-  model: string;
-  qty: string;
-  unit: string;
-  price: string;
-  amount: string;
-  source: "catalogue" | "provisional" | "calculated";
-  basis: string;
-  overridden: boolean;
-  calculated_qty?: string;
-}
-
-export interface EstimatorResult {
-  config: CabinetConfig;
-  rows: EstimatorRow[];
-  subtotal: string;
-  waste: string;
-  margin: string;
-  total: string;
-  per_unit: string;
-  quantities: {
-    plywood: Record<string, { net_sft: number; sheets: number }>;
-    hinges: number; slides: number; handles: number; screws: number;
-    edge_band_m: number; shutter_sft: number; board: string; board_sft: number; quantity: number;
-  };
-  warnings: string[];
-  formula_version: string;
-}
-
-export interface EstimatorOption { id: number; label: string; unit: string; supplier_sheet: boolean }
-
-export interface EstimatorMeta {
-  formula_version: string;
-  templates: ({ key: string; label: string } & Pick<CabinetConfig, "length" | "depth" | "height" | "drawers" | "doors" | "shelves">)[];
-  thicknesses: { carcass: number[]; shutter: number[]; back: number[]; drawer_box: number[] };
-  boards: { key: string; sft: number }[];
-  finishes: { key: string; label: string }[];
-  defaults: Partial<CabinetConfig>;
-  overridable: string[];
-  ply_brands: string[];
-  hinges: EstimatorOption[];
-  channels: EstimatorOption[];
-  handles: EstimatorOption[];
-  finish_options: Record<string, EstimatorOption[]>;
+/** Options that tune a furniture's quantity rules (catalog/rules.py). */
+export interface CalcOptions {
+  shelf_type?: "ply" | "glass";
+  one_side_visible?: boolean;
+  handleless?: boolean;
+  /** Typed door / drawer / shelf counts that replace the calculated ones. */
+  overrides?: Partial<Record<"doors" | "drawers" | "shelves", number>>;
 }
 
 export interface Estimate {
@@ -616,59 +567,39 @@ export interface CatalogZone {
   is_active: boolean;
 }
 
-export interface MaterialOption {
-  id: number;
-  material: number;
-  material_name?: string;
-  detail: string;
-  brand: string;
-  model_no: string;
-  size: string;
-  price: string;
-  unit: string;
-  notes?: string;
-  library_item?: number | null;
-  label: string;
-  sort_order: number;
-  is_active: boolean;
-}
-
-export interface CatalogMaterial {
+export interface BasicComponent {
   id: number;
   code: string;
   name: string;
-  default_unit: string;
-  icon: string;
-  option_count: number;
-  price_from?: number | null;
-  options?: MaterialOption[];
+  item_type: string;
+  library_category: number | null;
+  library_category_name: string;
+  unit: string;
+  price_unit: string;
+  quantity_rule: string;
+  default_qty: string;
+  fallback_rate: string;
+  gst_pct: string;
+  description: string;
+  used_in: number;
   sort_order: number;
   is_active: boolean;
 }
 
-export interface PartMaterial {
-  id: number;
-  part: number;
-  material: number;
-  material_name: string;
-  default_option: number | null;
-  option_label: string;
-  qty_per_unit: string;
-  unit: string;
-  wastage_pct: string;
-  unit_price: string;
-  line_cost: string;
-  notes: string;
-  sort_order: number;
-}
-
-export interface FurniturePart {
+export interface FurnitureComponent {
   id: number;
   furniture: number;
-  name: string;
-  notes: string;
-  materials: PartMaterial[];
-  material_cost: string;
+  basic_component: number;
+  basic_component_name: string;
+  item_type: string;
+  quantity_rule: string;
+  unit: string;
+  library_category: number | null;
+  default_material: number | null;
+  default_material_label: string;
+  rate: number;
+  fixed_qty: string | null;
+  application: string;
   sort_order: number;
   is_active: boolean;
 }
@@ -680,30 +611,59 @@ export interface Furniture {
   description: string;
   rooms: number[];
   room_names: string[];
-  default_unit: string;
-  default_length?: string;
-  default_breadth?: string;
-  default_height?: string;
-  base_rate: string;
-  gst_pct: string;
+  cabinet_type: string;
+  cabinet_type_display: string;
+  default_length: string;
+  default_breadth: string;
+  default_height: string;
   margin_pct: string;
-  part_count: number;
-  parts?: FurniturePart[];
-  material_cost?: string;
-  suggested_rate?: string;
+  gst_pct: string;
+  component_count: number;
+  components?: FurnitureComponent[];
   sort_order: number;
   is_active: boolean;
 }
 
 export interface CatalogMeta {
   units: Choice[];
-  counts: {
-    rooms: number;
-    zones: number;
-    furniture: number;
-    materials: number;
-    options: number;
+  cabinet_types: Choice[];
+  item_types: Choice[];
+  rules: Choice[];
+  spec_rules: string[];
+  counts: { rooms: number; zones: number; furniture: number; basic_components: number };
+}
+
+/** A row previewed by POST /catalog/furniture/{id}/calculate/. */
+export interface CalcRow {
+  component_id: number;
+  basic_component: number;
+  item_type: string;
+  specification: string;
+  brand: string;
+  model: string;
+  raw_material: number | null;
+  qty: number;
+  unit: string;
+  rate: number;
+  price_unit: string;
+  amount: number;
+  gst_pct: number;
+  quantity_rule: string;
+  basis: string;
+  needs_input: boolean;
+  application: string;
+}
+
+export interface FurnitureCalc {
+  furniture: number;
+  calculation: {
+    cabinet_type: string;
+    size: string;
+    counts: { doors: number; drawers: number; shelves: number; verticals: number };
+    warnings: string[];
   };
+  rows: CalcRow[];
+  total_cost: number;
 }
 
 /* ── Vendors ─────────────────────────────────────────────────── */

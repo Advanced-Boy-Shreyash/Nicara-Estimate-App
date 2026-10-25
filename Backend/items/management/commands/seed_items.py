@@ -1,14 +1,13 @@
 """
-Seed the Items catalogue — every item links to its Furniture catalogue entry
-so that the Initial Estimate auto-populates the material breakdown.
+Seed the Items catalogue — items that are a catalogue furniture link to it.
 
     python manage.py seed_items          # add missing, leave existing alone
     python manage.py seed_items --reset  # wipe the catalogue first
 
 Each Item's `catalog_furniture` field is set to the matching Furniture record
-created by `seed_catalog`. When a designer adds one of these items to an
-estimate, `populate_line_from_furniture()` copies the full BOM (plywood, hinges,
-channels, handles, screws, edge band, finish) onto the line's components.
+created by `seed_catalog` (run that first). Adding a linked item to an estimate
+adds the furniture's calculation-sheet rows (projects/generation.py), sized from
+the item's default dimensions.
 """
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -32,27 +31,27 @@ CATEGORIES = [
 
 ITEMS = [
     # ── Carpentry ─────────────────────────────────────────────────────────
-    ('Wardrobe', 'Carpentry', 'Wardrobe',
+    ('Wardrobe', 'Carpentry', 'Wardrobe with Openable Shutters',
      'Master Bedroom', 'unit', 'per_unit',
      "6'0\"", "2'0\"", "8'0\"", 1, 95000, 75000, 150000,
      '16mm BWP ply, 2 doors, 2 drawers, 4 shelves, laminate finish'),
 
-    ('Walk-in Wardrobe', 'Carpentry', 'Wardrobe',
+    ('Walk-in Wardrobe', 'Carpentry', 'Wardrobe with Openable Shutters',
      'Master Bedroom', 'unit', 'per_unit',
      "10'0\"", "6'0\"", "9'0\"", 1, 285000, 220000, 400000,
      'BWP ply, Italian walnut veneer, brass handles, LED strips'),
 
-    ('Wardrobe Loft', 'Carpentry', 'Wardrobe Loft',
+    ('Wardrobe Loft', 'Carpentry', 'Loft (Full Box)',
      'Master Bedroom', 'nos', 'per_unit',
      "6'0\"", "2'0\"", "1'6\"", 1, 18000, 12000, 28000,
      'Storage loft on top of wardrobe, laminate finish'),
 
-    ('TV Unit', 'Carpentry', 'TV Unit',
+    ('TV Unit', 'Carpentry', 'TV Base Unit',
      'Living Room', 'unit', 'per_unit',
      "6'0\"", "1'3\"", "4'0\"", 1, 65000, 50000, 95000,
      'Wall mounted panel with back-lit groove, veneer finish'),
 
-    ('TV Unit Console', 'Carpentry', 'TV Unit',
+    ('TV Unit Console', 'Carpentry', 'TV Base Unit',
      'Drawing Room', 'unit', 'per_unit',
      "8'0\"", "1'3\"", "1'0\"", 1, 72000, 55000, 100000,
      'Walnut veneer with concealed cable management'),
@@ -88,7 +87,7 @@ ITEMS = [
      'Display unit with glass doors, 2 drawers, 3 shelves'),
 
     # ── Modular Kitchen ───────────────────────────────────────────────────
-    ('Kitchen Base Unit', 'Modular Kitchen', 'Kitchen Base Unit',
+    ('Kitchen Base Unit', 'Modular Kitchen', 'Kitchen — L-type Base & Loft',
      'Kitchen', 'unit', 'per_unit',
      "10'0\"", "2'0\"", "2'10\"", 1, 165000, 130000, 225000,
      'BWR ply with acrylic shutters, soft-close hinges, 4 doors, 2 drawers'),
@@ -103,7 +102,7 @@ ITEMS = [
      "2'6\"", "2'0\"", "7'0\"", 1, 72000, 55000, 95000,
      'BWR ply with pull-out baskets, 2 doors, 5 shelves'),
 
-    ('Kitchen Loft', 'Modular Kitchen', 'Kitchen Loft',
+    ('Kitchen Loft', 'Modular Kitchen', 'Loft (Full Box)',
      'Kitchen', 'nos', 'per_unit',
      "10'0\"", "1'6\"", "1'6\"", 1, 32000, 22000, 45000,
      'Storage above cabinets, laminate finish, 4 doors'),

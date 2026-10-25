@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { ApiError, designRequirementsApi, itemsApi } from "@/lib/api";
-import type { DesignRequirement, Item, Project } from "@/lib/apiTypes";
+import { ApiError, catalogApi, designRequirementsApi } from "@/lib/api";
+import type { CalcOptions, CatalogZone, DesignRequirement, Furniture, Project } from "@/lib/apiTypes";
 import { useApiData } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
 import { Btn } from "@/components/ui/Form";
@@ -13,13 +13,13 @@ import { ErrorState, InlineError, Loading } from "@/components/ui/States";
 type Row = Omit<DesignRequirement, "id" | "sort_order"> & { id?: number; designImage?: string };
 
 const BLANK_ROW: Row = {
-  room: "", unit: "", length: "", breadth: "", height: "",
+  room: "", zone: "", unit: "", furniture: null, options: {}, length: "", breadth: "", height: "",
   finishing: "", remarks: "", design_required: true,
 };
 
 const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
 const TH = "px-2 py-2 text-stone-200 font-semibold text-[10px] text-left whitespace-nowrap border-r border-stone-700";
-const BD = "border-r border-surface-200";   
+const BD = "border-r border-surface-200";
 
 /* ── Room definitions with pre-filled sub-items ──────────────── */
 
@@ -113,9 +113,30 @@ const ROOMS: { name: string; icon: string; items: { unit: string; finishing: str
 
 const FINISHING_OPTIONS = ["Laminate", "Veneer", "Acrylic", "Gypsum", "Upholstery", "Paint", "PU", "Glass", "Granite", "Tile", "HPL"];
 
+/** Room-chip unit names → the catalogue furniture they're estimated as (by cabinet type). */
+const UNIT_TO_CABINET: [RegExp, string][] = [
+  [/wardrobe|closet/i, "wardrobe_openable"],
+  [/tv/i, "tv_unit"],
+  [/crockery/i, "crockery_base"],
+  [/^base unit$/i, "kitchen_base"],
+  [/^wall unit$/i, "kitchen_wall"],
+  [/loft/i, "loft_box"],
+  [/pooja/i, "pooja"],
+  [/study/i, "study"],
+  [/shoe/i, "shoe_rack"],
+];
+
+function matchFurniture(unit: string, furniture: Furniture[]): Furniture | undefined {
+  const exact = furniture.find(f => f.name.toLowerCase() === unit.toLowerCase());
+  if (exact) return exact;
+  const rule = UNIT_TO_CABINET.find(([re]) => re.test(unit));
+  return rule ? furniture.find(f => f.cabinet_type === rule[1]) : undefined;
+}
+
 /**
  * Initial Engagement → Design Requirements.
- * Room selection chips + grouped table + image upload + AutoCAD integration.
+ * Each row picks a catalogue furniture and its size; the Initial Estimate's
+ * "Generate from Design Requirements" turns them into calculation-sheet rows.
  */
 export default function DesignRequirements({ project }: { project: Project }) {
   const toast = useToast();
@@ -123,16 +144,12 @@ export default function DesignRequirements({ project }: { project: Project }) {
     () => designRequirementsApi.list(project.id),
     [project.id]
   );
-  // The master list the Unit dropdown draws from — same Items catalogue the
-  // Initial Estimate uses, so both stay in step.
-  const itemsQuery = useApiData(() => itemsApi.list({}), []);
-  const items = itemsQuery.data?.results ?? [];
-  const createItem = async (name: string): Promise<Item> => {
-    const created = await itemsApi.create({ name });
-    await itemsQuery.reload();
-    toast.success("Item added", `“${created.name}” is now in the catalogue`);
-    return created;
-  };
+  // Finished products the rows are estimated as, and the room zones.
+  const furnitureQuery = useApiData(() => catalogApi.furniture(), []);
+  const furniture = useMemo(() => (furnitureQuery.data?.results ?? []).filter(f => f.is_active),
+    [furnitureQuery.data]);
+  const zonesQuery = useApiData(() => catalogApi.zones(), []);
+  const zones = zonesQuery.data?.results ?? [];
 
   const [rows, setRows] = useState<Row[] | null>(null);
   const [banner, setBanner] = useState("");
@@ -146,6 +163,7 @@ export default function DesignRequirements({ project }: { project: Project }) {
   const serverRows = data?.results ?? [];
   const working: Row[] = rows ?? serverRows;
   const dirty = rows !== null;
+  const unlinked = working.filter(r => r.unit.trim() && !r.furniture).length;
 
   const uRooms = useMemo(() => ["All", ...Array.from(new Set(working.map(r => r.room).filter(Boolean)))], [working]);
   const uFinishings = useMemo(() => ["All", ...Array.from(new Set(working.map(r => r.finishing).filter(Boolean)))], [working]);
@@ -174,12 +192,12 @@ export default function DesignRequirements({ project }: { project: Project }) {
     return counts;
   }, [working]);
 
-  const editByRef = (actualRow: Row, key: keyof Row, value: string | boolean) => {
+  const patchByRef = (actualRow: Row, patch: Partial<Row>) => {
     const actualIndex = working.indexOf(actualRow);
     if (actualIndex === -1) return;
     setRows(current => {
       const next = [...(current ?? serverRows)];
-      next[actualIndex] = { ...next[actualIndex], [key]: value };
+      next[actualIndex] = { ...next[actualIndex], ...patch };
       return next;
     });
   };
@@ -190,32 +208,35 @@ export default function DesignRequirements({ project }: { project: Project }) {
     setRows((rows ?? serverRows).filter((_, i) => i !== actualIndex));
   };
 
-  const addRow = () => setRows([...(rows ?? serverRows), { ...BLANK_ROW }]);
+  /** Pick a catalogue furniture; an empty size takes the furniture's default. */
+  const withFurniture = (row: Row, f: Furniture): Partial<Row> => ({
+    furniture: f.id, furniture_name: f.name, cabinet_type: f.cabinet_type, unit: f.name,
+    length: row.length || f.default_length, height: row.height || f.default_height,
+    breadth: row.breadth || f.default_breadth,
+  });
 
-  const addRowToRoom = (roomName: string) => {
-    setRows([...(rows ?? serverRows), { ...BLANK_ROW, room: roomName }]);
-  };
+  const addRow = () => setRows([...(rows ?? serverRows), { ...BLANK_ROW }]);
+  const addRowToRoom = (roomName: string) => setRows([...(rows ?? serverRows), { ...BLANK_ROW, room: roomName }]);
 
   const addRoomRows = (room: typeof ROOMS[number]) => {
-    const newRows: Row[] = room.items.map(item => ({
-      ...BLANK_ROW,
-      room: room.name,
-      unit: item.unit,
-      finishing: item.finishing,
-    }));
+    const newRows: Row[] = room.items.map(item => {
+      const base: Row = { ...BLANK_ROW, room: room.name, unit: item.unit, finishing: item.finishing };
+      const match = matchFurniture(item.unit, furniture);
+      return match ? { ...base, ...withFurniture(base, match), unit: item.unit } : base;
+    });
     setRows([...(rows ?? serverRows), ...newRows]);
   };
 
   const handleImageUpload = (row: Row, file: File) => {
-    const url = URL.createObjectURL(file);
-    editByRef(row, "designImage" as keyof Row, url);
+    patchByRef(row, { designImage: URL.createObjectURL(file) });
   };
 
   const save = async () => {
     const payload = working
       .filter(r => r.room.trim() || r.unit.trim())
       .map(r => ({
-        room: r.room, unit: r.unit, length: r.length, breadth: r.breadth,
+        id: r.id, room: r.room, zone: r.zone, unit: r.unit, furniture: r.furniture,
+        options: r.options ?? {}, length: r.length, breadth: r.breadth,
         height: r.height, finishing: r.finishing, remarks: r.remarks,
         design_required: r.design_required,
       }));
@@ -255,7 +276,7 @@ export default function DesignRequirements({ project }: { project: Project }) {
       <div className="bg-white border border-surface-200 rounded-2xl p-4 mb-4">
         <div className="flex items-center gap-2 mb-3">
           <span className="text-[10px] font-bold text-nicara-gold uppercase tracking-wider">Select Rooms</span>
-          <span className="text-[10px] text-surface-400">Click a room to add pre-filled rows</span>
+          <span className="text-[10px] text-surface-400">Click a room to add pre-filled rows — catalogue furniture is linked automatically</span>
         </div>
         <div className="flex flex-wrap gap-2">
           {ROOMS.map(room => {
@@ -329,15 +350,20 @@ export default function DesignRequirements({ project }: { project: Project }) {
           <button onClick={() => { setFRoom("All"); setFFinishing("All"); }}
             className="px-2.5 py-1 bg-transparent border border-surface-200 rounded-md text-[11px] text-surface-400 cursor-pointer hover:bg-surface-50">✕ Clear</button>
         )}
+        {unlinked > 0 && (
+          <span className="text-[11px] text-amber-700">
+            {unlinked} row(s) not linked to catalogue furniture — they won&apos;t be estimated
+          </span>
+        )}
         <span className="ml-auto text-[11px] text-surface-400">{filtered.length}/{working.length}</span>
       </div>
 
       {/* ── Table (grouped by Room like Initial Estimate) ── */}
       <div className="overflow-x-auto border border-surface-200 rounded-xl">
-        <table className="w-full text-[11px] min-w-[1000px]">
+        <table className="w-full text-[11px] min-w-[1200px]">
           <thead>
             <tr className="bg-nicara-dark">
-              {["Unit Selection", "L", "B", "H", "Finishing", "Remarks", "Design Ref.", "Del"].map(h => (
+              {["Furniture / Unit", "Zone", "W", "H", "D", "Options", "Finishing", "Remarks", "Design Ref.", "Del"].map(h => (
                 <th key={h} className={TH}>{h}</th>
               ))}
             </tr>
@@ -347,10 +373,11 @@ export default function DesignRequirements({ project }: { project: Project }) {
               <RoomGroup
                 key={group.room}
                 group={group}
-                items={items}
-                itemsLoading={itemsQuery.loading}
-                onCreateItem={createItem}
-                editByRef={editByRef}
+                furniture={furniture}
+                furnitureLoading={furnitureQuery.loading}
+                zones={zones}
+                patchByRef={patchByRef}
+                withFurniture={withFurniture}
                 removeByRef={removeByRef}
                 onImageUpload={handleImageUpload}
                 onViewImage={setViewingImage}
@@ -358,7 +385,7 @@ export default function DesignRequirements({ project }: { project: Project }) {
               />
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={9} className="px-3 py-8 text-center text-surface-400">
+              <tr><td colSpan={10} className="px-3 py-8 text-center text-surface-400">
                 {working.length === 0 ? "No requirements yet — select a room above or add a blank row." : "No rows match the current filter."}
               </td></tr>
             )}
@@ -403,22 +430,26 @@ export default function DesignRequirements({ project }: { project: Project }) {
 
 /* ── Room group with heading row (like Initial Estimate area grouping) ── */
 
-function RoomGroup({ group, items, itemsLoading, onCreateItem, editByRef, removeByRef, onImageUpload, onViewImage, onAddRow }: {
-  group: { room: string; items: Row[] };
-  items: Item[];
-  itemsLoading: boolean;
-  onCreateItem: (name: string) => Promise<Item>;
-  editByRef: (row: Row, key: keyof Row, value: string | boolean) => void;
+type RowProps = {
+  furniture: Furniture[];
+  furnitureLoading: boolean;
+  zones: CatalogZone[];
+  patchByRef: (row: Row, patch: Partial<Row>) => void;
+  withFurniture: (row: Row, f: Furniture) => Partial<Row>;
   removeByRef: (row: Row) => void;
   onImageUpload: (row: Row, file: File) => void;
   onViewImage: (url: string) => void;
+};
+
+function RoomGroup({ group, onAddRow, ...props }: RowProps & {
+  group: { room: string; items: Row[] };
   onAddRow: () => void;
 }) {
   return (
     <>
       {/* Room heading */}
       <tr className="bg-nicara-gold/10">
-        <td colSpan={8} className="px-3 py-2">
+        <td colSpan={10} className="px-3 py-2">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.room}</span>
             <span className="text-[10px] text-surface-400">{group.items.length} item(s)</span>
@@ -429,20 +460,8 @@ function RoomGroup({ group, items, itemsLoading, onCreateItem, editByRef, remove
           </div>
         </td>
       </tr>
-      {/* Rows under this room */}
       {group.items.map((row, i) => (
-        <DesignRow
-          key={row.id ?? `new-${group.room}-${i}`}
-          row={row}
-          ri={i}
-          items={items}
-          itemsLoading={itemsLoading}
-          onCreateItem={onCreateItem}
-          editByRef={editByRef}
-          removeByRef={removeByRef}
-          onImageUpload={onImageUpload}
-          onViewImage={onViewImage}
-        />
+        <DesignRow key={row.id ?? `new-${group.room}-${i}`} row={row} ri={i} {...props} />
       ))}
     </>
   );
@@ -450,45 +469,73 @@ function RoomGroup({ group, items, itemsLoading, onCreateItem, editByRef, remove
 
 /* ── Single design requirement row ── */
 
-function DesignRow({ row, ri, items, itemsLoading, onCreateItem, editByRef, removeByRef, onImageUpload, onViewImage }: {
-  row: Row;
-  ri: number;
-  items: Item[];
-  itemsLoading: boolean;
-  onCreateItem: (name: string) => Promise<Item>;
-  editByRef: (row: Row, key: keyof Row, value: string | boolean) => void;
-  removeByRef: (row: Row) => void;
-  onImageUpload: (row: Row, file: File) => void;
-  onViewImage: (url: string) => void;
-}) {
+function DesignRow({ row, ri, furniture, furnitureLoading, zones, patchByRef, withFurniture, removeByRef,
+  onImageUpload, onViewImage }: RowProps & { row: Row; ri: number }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const options: CalcOptions = row.options ?? {};
+  const setOption = (patch: Partial<CalcOptions>) => patchByRef(row, { options: { ...options, ...patch } });
+  const linked = furniture.find(f => f.id === row.furniture);
 
   return (
     <tr className={`border-b border-surface-100 ${ri % 2 === 0 ? "bg-white" : "bg-surface-50/50"}`}>
-      {/* Unit Selection — searchable Items dropdown with inline add */}
-      <td className={`px-2 py-1.5 min-w-[160px] ${BD}`}>
+      {/* Furniture — catalogue product; free text keeps a unit that isn't estimated */}
+      <td className={`px-2 py-1.5 min-w-[220px] ${BD}`}>
         <SearchSelect
           value={row.unit}
-          options={items}
-          loading={itemsLoading}
-          getLabel={i => i.name}
-          getSublabel={i => i.category_name}
-          placeholder="Wardrobe"
-          onPick={i => editByRef(row, "unit", i.name)}
-          onCreate={async name => { const it = await onCreateItem(name); editByRef(row, "unit", it.name); }}
+          options={furniture}
+          loading={furnitureLoading}
+          getLabel={f => f.name}
+          getSublabel={f => f.cabinet_type_display}
+          placeholder="Pick furniture…"
+          onPick={f => patchByRef(row, withFurniture(row, f))}
+          onCreate={name => patchByRef(row, { unit: name, furniture: null, furniture_name: "", cabinet_type: "" })}
+          addLabel={q => `Use “${q}” (not in catalogue — won't be estimated)`}
         />
+        <div className="px-2 text-[9px]">
+          {linked ? <span className="text-emerald-700">⇄ {linked.name}</span>
+            : row.unit ? <span className="text-amber-600">not in catalogue</span> : null}
+        </div>
       </td>
-      {/* L B H */}
-      <td className={`px-2 py-1.5 w-[60px] ${BD}`}><input className={`${CELL} font-mono`} value={row.length}
-        onChange={e => editByRef(row, "length", e.target.value)} placeholder={`8'0"`} /></td>
-      <td className={`px-2 py-1.5 w-[60px] ${BD}`}><input className={`${CELL} font-mono`} value={row.breadth}
-        onChange={e => editByRef(row, "breadth", e.target.value)} placeholder={`2'0"`} /></td>
-      <td className={`px-2 py-1.5 w-[60px] ${BD}`}><input className={`${CELL} font-mono`} value={row.height}
-        onChange={e => editByRef(row, "height", e.target.value)} placeholder={`8'0"`} /></td>
+      {/* Zone */}
+      <td className={`px-2 py-1.5 min-w-[110px] ${BD}`}>
+        <select className={`${CELL} cursor-pointer`} value={row.zone}
+          onChange={e => patchByRef(row, { zone: e.target.value })}>
+          <option value="">—</option>
+          {zones.map(z => <option key={z.id} value={z.name}>{z.name}</option>)}
+        </select>
+      </td>
+      {/* W H D (width = length, depth = breadth) */}
+      <td className={`px-2 py-1.5 w-[64px] ${BD}`}><input className={`${CELL} font-mono`} value={row.length}
+        onChange={e => patchByRef(row, { length: e.target.value })} placeholder={`7'0"`} /></td>
+      <td className={`px-2 py-1.5 w-[64px] ${BD}`}><input className={`${CELL} font-mono`} value={row.height}
+        onChange={e => patchByRef(row, { height: e.target.value })} placeholder={`9'6"`} /></td>
+      <td className={`px-2 py-1.5 w-[64px] ${BD}`}><input className={`${CELL} font-mono`} value={row.breadth}
+        onChange={e => patchByRef(row, { breadth: e.target.value })} placeholder={`2'0"`} /></td>
+      {/* Options for the quantity rules */}
+      <td className={`px-2 py-1.5 whitespace-nowrap ${BD}`}>
+        {row.furniture ? (
+          <div className="flex items-center gap-2 text-[10px] text-surface-600">
+            <select value={options.shelf_type ?? "ply"} title="Shelves"
+              onChange={e => setOption({ shelf_type: e.target.value as "ply" | "glass" })}
+              className="px-1 py-0.5 border border-surface-200 rounded text-[10px] bg-white cursor-pointer">
+              <option value="ply">Ply shelves</option>
+              <option value="glass">Glass shelves</option>
+            </select>
+            <label className="flex items-center gap-1 cursor-pointer" title="Handleless design — no handles or knobs">
+              <input type="checkbox" checked={!!options.handleless} onChange={e => setOption({ handleless: e.target.checked })}
+                className="accent-nicara-gold" />Handleless
+            </label>
+            <label className="flex items-center gap-1 cursor-pointer" title="One side visible — finish the side panel too">
+              <input type="checkbox" checked={!!options.one_side_visible}
+                onChange={e => setOption({ one_side_visible: e.target.checked })} className="accent-nicara-gold" />Side
+            </label>
+          </div>
+        ) : <span className="text-surface-300">—</span>}
+      </td>
       {/* Finishing */}
       <td className={`px-2 py-1.5 min-w-[100px] ${BD}`}>
         <select className={`${CELL} cursor-pointer`} value={row.finishing}
-          onChange={e => editByRef(row, "finishing", e.target.value)}>
+          onChange={e => patchByRef(row, { finishing: e.target.value })}>
           <option value="">Select…</option>
           {FINISHING_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
         </select>
@@ -496,7 +543,7 @@ function DesignRow({ row, ri, items, itemsLoading, onCreateItem, editByRef, remo
       {/* Remarks */}
       <td className={`px-2 py-1.5 ${BD}`}>
         <input className={CELL} value={row.remarks}
-          onChange={e => editByRef(row, "remarks", e.target.value)} placeholder="—" />
+          onChange={e => patchByRef(row, { remarks: e.target.value })} placeholder="—" />
       </td>
       {/* Design Ref — Image Upload */}
       <td className={`px-2 py-1.5 ${BD}`}>

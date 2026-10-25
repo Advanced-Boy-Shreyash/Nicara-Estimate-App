@@ -441,158 +441,114 @@ Screens: **Customers → Leads** and **Customers → Clients**.
 
 ## 12. Furniture Catalogue (master data)
 
-`Backend/catalog/` models the room → furniture → material hierarchy the team
-maintains, so estimates are built from a consistent palette. The spreadsheet's
-vague column names were renamed for clarity:
+`Backend/catalog/` follows the client's calculation sheet (**Calculations.xlsx**)
+and the hand-off video: **Furniture is a complete built product**, assembled from
+**Basic Components**, priced from the **Raw Material Library**.
 
-| Spreadsheet column | Clear name | What it is | Example |
-| ------------------ | ---------- | ---------- | ------- |
-| Rooms | **Room** | A room type | Kitchen, Master Bedroom |
-| Sub category in rooms | **Zone** | A part/area of a room | East Wall, Island, Walk-in Closet |
-| Item Names | **Furniture** | The product installed | Wardrobe, Kitchen Base Unit |
-| Item Type | **Part** | A build element of furniture | Cabinet, Shutter, Panel, Light |
-| Basic components | **Material** | A material type | Plywood, Hardware, Laminate |
-| Detail / Brand / Model / Size / Price / Unit | **Material Option** | A priced material SKU | 18mm Plywood · Austin Lincoln · 8×4 · ₹100/sft |
+| Level | What it is | Example |
+| ----- | ---------- | ------- |
+| **Room** / **Zone** | Where furniture goes | Master Bedroom · East Wall |
+| **Furniture** | A built product with a cabinet type, default W × H × D and margin (15%) | Wardrobe (openable) |
+| **Basic Component** | A row of the estimate: type (*Spec Purpose* / *Procurement* / *Service*), unit, GST and a **quantity rule** | Doors · 16mm Ply · Hinges · Carpentry |
+| **Raw material** (library) | Brand · model · rate — the only source of price | Gurjan 710 BWP 16mm · ₹80/sft |
 
-Read plainly: **a Room has Zones; on a Zone you place Furniture; Furniture is
-built from Parts; each Part uses Materials; each Material has priced Options.**
-
-- **Room scoping** — Furniture links to rooms via a many-to-many, so Kitchen
-  Base Unit only shows for Kitchen. Leaving the rooms empty makes a piece
-  universal (Paint, Lights).
-- **Cost roll-up** — a `PartMaterial` records qty-per-unit, wastage and which
-  option to price against (cheapest active if unpinned). That rolls up:
-  material → part → furniture, then `+ margin` gives a suggested rate. Seeded
-  Wardrobe = ₹10,679.20 material cost → ₹14,416.92 at 35%.
+- **Spec Purpose** rows are Doors, Drawers, Shelves — the counts every other
+  quantity is worked from. **Procurement** rows are materials and hardware.
+  **Service** rows are labour (0% GST).
+- A Furniture links the basic components it uses (`FurnitureComponent`), each
+  optionally pinned to a library material; unpinned rows use the cheapest active
+  material in the component's library category.
+- **Calculate** (on the furniture screen) previews the whole estimate block for
+  any size, live, without saving.
 
 | Endpoint | Purpose |
 | -------- | ------- |
 | `GET/POST /api/catalog/rooms/` · `zones/` | Rooms and zones |
-| `GET/POST /api/catalog/materials/` (`?with_options=1`) | Materials, options nested on request |
-| `…/materials/{id}/options/` | Priced options |
+| `GET/POST /api/catalog/basic-components/` | Basic components (rule validated) |
 | `GET/POST /api/catalog/furniture/` (`?room=<id>`) | Furniture, room-scoped |
-| `…/furniture/{id}/parts/` · `…/parts/{id}/materials/` | Build sheet |
-| `GET /api/catalog/tree/?room=<id>` | Whole hierarchy in one call |
+| `…/furniture/{id}/components/` · `…/furniture/components/{id}/` | Furniture → component links |
+| `POST /api/catalog/furniture/{id}/calculate/` | Preview rows for `{width, height, depth, options}` |
+| `GET /api/catalog/meta/` | Cabinet types, item types, rules, counts |
+| `GET /api/catalog/tree/?room=<id>` | Rooms → zones → furniture in one call |
 
-Gated by the `catalog` IAM module. Screen: **Catalogue → Furniture Catalogue**,
-with tabs for Furniture (drill into the build sheet), Materials (drill into
-options) and Rooms & Zones. Seed with
-`python manage.py seed_catalog` (mirrors the shared components sheet).
-
-## 13. Estimate line breakdown (bill of materials)
-
-Each Initial Estimate line can expand to a material breakdown, matching the
-shared sheet: **Basic Component | Detail | Brand | Model | Qty | Unit | Price |
-Amount**, each row editable.
-
-- The line's **amount rolls up from its components** when a breakdown exists
-  (Wardrobe = 6400 + 960 + 2560 = **₹9,920**); otherwise it stays qty × rate.
-  Estimate subtotal/GST/grand total follow automatically.
-- **Pull from Catalogue** fills the breakdown from a catalogue Furniture's BOM —
-  every part's materials become component rows, priced against each material's
-  chosen (or cheapest) option, with wastage applied.
-- Lines also carry **Room Area** (zone) and **Finishing** to match the sheet's
-  columns; both appear in the PDF and Excel exports, with the component
-  breakdown shown as indented sub-rows.
-
-| Endpoint | Purpose |
-| -------- | ------- |
-| `GET/POST …/items/{id}/components/` | The line's breakdown |
-| `PATCH/DELETE …/items/{id}/components/{cid}/` | Edit / remove a component |
-| `POST …/items/{id}/populate-from-furniture/` | Fill from a catalogue furniture BOM |
-
-In the UI: open the Initial Estimate, expand a line's **Detail** chevron.
-
-## 13a. Connected item dropdowns (one master, inline add)
-
-**Design Requirements → Unit** and **Initial Estimate → Item** are no longer free
-text — both are searchable dropdowns backed by the **same Items catalogue**, so
-the two screens draw from one master. Component: `components/ui/SearchSelect.tsx`.
-
-- Type to filter; each option shows its category (and its linked furniture, if
-  any) as a sub-label.
-- A **“+ Add …”** button sits pinned at the end of the list and stays visible
-  while you search — pick it to create a brand-new Item inline (`POST /api/items/`,
-  no category needed — a `General` category is assigned automatically).
-
-**Items ↔ Furniture link (“keep both, link them”).** An Item can point at a
-Furniture Catalogue entry via `Item.catalog_furniture`, set on the **Items** form
-(*Linked Furniture (Bill of Materials)*). When a furniture-linked item is added to
-an estimate — through **Add from Catalogue**, or by picking it in the line’s Item
-dropdown — the line’s **material breakdown is auto-filled from that furniture’s
-BOM** and the amount rolls up. Example: the seeded *Wardrobe* item linked to the
-*Wardrobe* furniture arrives with 6 components totalling **₹10,679.20**.
-
-The estimate grid drops the **Category** and **Sub Cat** columns (the sheet has
-neither); it now reads Area · Item · L · B · H · Qty · Unit · Rate · Amount · GST.
-The **Blank Line** button also works now — a fresh line may have an empty room.
-
-## 13b. Cabinet calculator (parametric BOM)
-
-Every estimate line — Initial, Intermediate and Final — has a **Cabinet
-Calculator** in its breakdown. The Intermediate/Final estimate is where the
-client customises: size (mm / in / ft), **quantity**, board thicknesses
-(incl. 10 mm), procurement sheet (8x4 = 32 sft, 4x4 = 16 sft, …), drawer /
-door / shelf counts, finish (laminate, acrylic, veneer, **polish**, none),
-brand and hardware. Every change **recalculates live** (nothing saved);
-**Apply to line** replaces the breakdown, stores the configuration on the line
-(`EstimateItem.config`) and sets the line's Qty × Rate to match.
-
-- **Default configuration** — an unconfigured cabinet starts from its template
-  (Base Cabinet = **2 drawers, 1 door, 1 shelf**) and the line's written size
-  and qty. Adding or picking an **unpriced** cabinet/drawer item applies it
-  automatically; items with a catalogue rate keep their rate.
-- **Scaling** — 1 drawer = 2 slides (2 drawers → 4, 3 → 6; priced per Quadro
-  *set* = one pair), one handle per door/drawer, hinges by door height, screws
-  by panel/drawer/hinge/slide, ply area per thickness → sheets to procure,
-  edge band, finish sheets, adhesive. Everything × quantity.
-- **Cost build-up** — materials at exact quantities → **+10% cutting waste on
-  the assembly** (sheet off-cuts) → **+35% margin** (as in the supplier sheet).
-  Both percentages are editable per line and appear as their own rows.
-- **Overrides** — hardware, screws, edge band, finish and adhesive quantities
-  can be typed over in the live table (shown "calculated N", with a reset).
-  Overrides don't follow later size/count changes; a warning says so.
-- Every row shows **how its quantity was worked out**. Rows without a
-  supplier-sheet price use a fallback rate and are flagged **PROV** (today:
-  10 mm ply and per-sft polish — the sheet quotes polish per rft only).
-
-### Base components ← the supplier price sheet
-
-The client's estimate workbook (`sample template.xlsx` → **Sample detail**) is
-the source for base raw materials: Austin Lincoln **BWP** ply 8/12/16 mm
-(₹2,560/3,040/3,520 per 8x4 sheet), Hettich Onsys hinges, Hettich Quadro
-channels, handles, Shape PVC edging, PTA screws, Greenlam/Thermo laminates,
-acrylic, veneer, Fevicol, inner liner, Godrej locks. They land in the
-Furniture Catalogue (the single store) tagged `source = supplier_sheet`, which
-the calculator prefers.
+Gated by the `catalog` IAM module. Screen: **Catalogue → Furniture Catalogue**
+(tabs: Furniture · Basic Components · Rooms & Zones).
 
 ```bash
-python manage.py seed_catalog                         # includes a bundled copy of the sheet
-python manage.py import_supplier_specs --file "sample template.xlsx"   # refresh from the workbook
-python manage.py import_supplier_specs --file "…" --dry-run
+python manage.py seed_catalog --reset   # library materials, basic components, furniture from the sheet
+python manage.py seed_items             # Items catalogue, linked to the furniture
 ```
 
-Mapping lives in `catalog/supplier_specs.py` (`map_row`); the bundled copy is
-`catalog/supplier_specs_data.py`.
+The seed data lives in `catalog/sheet_data.py` (prices, component lists).
 
-> **Replacing the formulas.** Quantity rules, allowances, waste/margin defaults
-> and fallback rates live in one place: `RULES` (plus the panel maths in
-> `_panels()`) in `Backend/catalog/estimator.py`. When the formula sheet is
-> signed off with the client, update that file and bump `FORMULA_VERSION`;
-> prices stay in the catalogue, and the API, UI and stored estimates need no
-> changes. `catalog/test_estimator.py` checks behaviour, so only its few
-> exact-number assertions should need touching.
+## 13. Calculation rules
+
+All formulas live in **`Backend/catalog/rules.py`** (`RULES` + `compute()`),
+transcribed from **Sheet1** (rule book) and **Sheet3** (verticals). Sizes are
+converted to inches first (`8'0"`, `2'3"`, `30"`, mm/cm/m all accepted).
+
+- **Doors** — openable: whole number between W/24 and W/16; sliding: W/42–W/30;
+  kitchen: (W − 36″ basket − 10″ bottle pull-out)/24–/16.
+- **Drawers** — wardrobe = doors (sliding × 2); pooja/study W/24–W/12;
+  **shelves** = doors ÷ 2; **verticals** = ROUNDUP(doors/2 + 1).
+- **Hardware** — 2 hinges per door up to 24″ height, +1 per extra 24″; handles =
+  doors; knobs = drawers; channels = drawers; locks = drawers ÷ 2 (wardrobes).
+- **Sheets** — ply areas rounded up to 32 sft sheets; laminate = door area ÷ 32
+  (+ visible side); liner = ply sheets × 2 − finish sheets; adhesive = ply
+  sheets × 1.5 kg; tape = sheets × 25 m.
+- **Services** — carpentry W × H; unit top W × D × 1.15; dado W × 24″.
+
+Where Sheet1 and the worked estimate disagree, the system follows Sheet1 and
+every quantity can be typed over. The open questions for the client are in
+[`docs/calculation-questions.md`](docs/calculation-questions.md); each answer is
+a one-line change in `RULES`.
+
+## 13a. Initial Estimate generation
+
+**Design Requirements** now pick a catalogue **Furniture** (plus zone, W/H/D and
+options). The Initial Estimate is built from them on the backend:
+
+1. **Generate from Design Req** — every linked requirement becomes a *furniture
+   group* of rows (Spec Purpose → Procurement → Service). Running it again
+   follows size edits and keeps brand/price choices. Unlinked units are skipped
+   and listed.
+2. **Smart Estimate Generator** — choose brand/model per product group
+   (ply, laminate, hardware, …); matching rows re-price from the library.
+3. Each row's **brand picker** swaps its raw material; the rate follows.
+
+Editing a group:
+
+- Typing a **Doors / Drawers / Shelves** count recalculates the whole group
+  (hinges, channels, ply, locks …) — stored as `config.overrides`.
+- Typing any other quantity marks it **overridden** (kept on recalculation,
+  shown "calc N" with a reset).
+- Changing the group's size or options re-runs the rules.
+- Each row: cost = qty × rate → +15% margin → referral → GST → total.
+  **Add Furniture** adds a group without a design requirement.
 
 | Endpoint | Purpose |
 | -------- | ------- |
-| `GET /api/catalog/estimator/meta/` | Templates, sheets, thicknesses, finishes, supplier options |
-| `POST /api/catalog/estimator/preview/` | Recalculate without saving |
-| `POST …/items/{id}/configure/` | Apply a config (`{config}`) or the default (`{auto: true}`) |
+| `POST …/estimates/{id}/generate-from-design/` | Create/refresh groups from design requirements |
+| `POST …/estimates/{id}/add-furniture/` | Add one furniture group (`{furniture, width, height, depth, options}`) |
+| `POST/DELETE …/estimates/{id}/groups/{group_key}/` | Recalculate (size/options) or remove a group |
+| `POST …/estimates/{id}/apply-smart-materials/` | Apply chosen library items to matching rows |
+| `POST …/items/{id}/reset-qty/` | Undo a typed-over quantity or count |
+| `GET/POST …/items/{id}/components/` | Optional per-line breakdown (still supported) |
 
+Code: `projects/generation.py`, tests in `projects/test_generation.py`.
+
+## 13b. Connected item dropdowns (one master, inline add)
+
+**Design Requirements → Unit** and **Initial Estimate → Item** are searchable
+dropdowns backed by the **same Items catalogue**
+(`components/ui/SearchSelect.tsx`), with a pinned **"+ Add …"** option that
+creates a new Item inline. An Item can link to a Furniture
+(`Item.catalog_furniture`); adding a furniture-linked item to an estimate
+creates a furniture group as above.
 
 ## 14. Still to do
 
-- Quote calculation engine (item BOM → cost → margin → rate).
+- Confirm the open calculation questions (`docs/calculation-questions.md`) with the client.
 - Design/Execution phase screens are **read-only** — measurements, material
   selections, execution stages, payments and quality render live data but have
   no edit forms yet.

@@ -270,19 +270,20 @@ class EstimateTests(EngagementTestCase):
                                     qty=1, rate=Decimal('1000'), gst_pct=18)
         EstimateItem.objects.create(estimate=estimate, area='B', item='Y',
                                     qty=2, rate=Decimal('500'), gst_pct=18)
-        self.assertEqual(estimate.subtotal, Decimal('2700'))
-        self.assertEqual(estimate.gst_total, Decimal('486'))
-        self.assertEqual(estimate.grand_total, Decimal('3186'))
+        # ₹2,000 base + 15% default margin, then 18% GST.
+        self.assertEqual(estimate.subtotal, Decimal('2300'))
+        self.assertEqual(estimate.gst_total, Decimal('414'))
+        self.assertEqual(estimate.grand_total, Decimal('2714'))
 
     def test_percentage_discount_reduces_gst_proportionally(self):
         estimate = self.make_estimate(discount_pct=Decimal('10'))
         EstimateItem.objects.create(estimate=estimate, area='A', item='X',
                                     qty=1, rate=Decimal('1000'), gst_pct=18)
-        self.assertEqual(estimate.subtotal, Decimal('1350'))
-        self.assertEqual(estimate.total_discount, Decimal('135'))
-        self.assertEqual(estimate.taxable_amount, Decimal('1215'))
-        self.assertEqual(estimate.gst_total, Decimal('218.70'))
-        self.assertEqual(estimate.grand_total, Decimal('1433.70'))
+        self.assertEqual(estimate.subtotal, Decimal('1150'))
+        self.assertEqual(estimate.total_discount, Decimal('115'))
+        self.assertEqual(estimate.taxable_amount, Decimal('1035'))
+        self.assertEqual(estimate.gst_total, Decimal('186.30'))
+        self.assertEqual(estimate.grand_total, Decimal('1221.30'))
 
     def test_totals_include_referral_and_round_gst_per_line(self):
         estimate = self.make_estimate(discount_amount=Decimal('25'))
@@ -442,9 +443,9 @@ class AddFromCatalogTests(EngagementTestCase):
     def test_response_carries_recalculated_estimate_totals(self):
         res = self.client.post(self.url, {'items': [{'item_id': self.ceiling.pk}]},
                                format='json')
-        # ₹27,720 base + 35% margin, then 18% GST.
-        self.assertEqual(Decimal(res.data['estimate']['subtotal']), Decimal('37422.00'))
-        self.assertEqual(Decimal(res.data['estimate']['grand_total']), Decimal('44157.96'))
+        # ₹27,720 base + 15% margin, then 18% GST.
+        self.assertEqual(Decimal(res.data['estimate']['subtotal']), Decimal('31878.00'))
+        self.assertEqual(Decimal(res.data['estimate']['grand_total']), Decimal('37616.04'))
 
     def test_unknown_item_id_is_rejected_without_partial_writes(self):
         res = self.client.post(self.url, {'items': [
@@ -492,7 +493,7 @@ class BookingFormTests(EngagementTestCase):
 
         res = self.client.post(self.url, {'advance_amount': 100}, format='json')
         self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
-        self.assertEqual(Decimal(res.data['total_value']), Decimal('1593.00'))
+        self.assertEqual(Decimal(res.data['total_value']), Decimal('1357.00'))  # 1000 + 15% + 18% GST
         self.assertEqual(res.data['estimate'], estimate.pk)
 
     def test_only_one_booking_form_per_project(self):

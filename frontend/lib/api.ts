@@ -5,12 +5,13 @@
 // this layer transparently redeems the refresh token and replays the request.
 
 import type {
-  BookingForm, CabinetConfig, CatalogMaterial, CatalogMeta, CatalogRoom, CatalogZone, Client,
+  BasicComponent, BookingForm, CalcOptions, CatalogMeta, CatalogRoom, CatalogZone, Client,
   CrmMeta, CrmNote, Deliverable, DeliverableType, DesignRequirement, Estimate,
-  EstimateItem, EstimateItemComponent, EstimateListItem, EstimatorMeta, EstimatorResult, EstimateType, Furniture, FurniturePart, Item,
+  EstimateItem, EstimateItemComponent, EstimateListItem, EstimateType, Furniture, FurnitureCalc,
+  FurnitureComponent, Item,
   ItemCategory, ItemMeta, Lead, LeadPipeline, LibraryBrand, LibraryItem, LibraryItemInput, LibraryMeta,
-  MaterialOption, ModuleRegistry,
-  MyPermissions, PartMaterial, PermissionMatrixRow, Project, ProjectListItem,
+  ModuleRegistry,
+  MyPermissions, PermissionMatrixRow, Project, ProjectListItem,
   ProjectMeta, Vendor, VendorMeta,
 } from "@/lib/apiTypes";
 
@@ -416,7 +417,8 @@ export const designRequirementsApi = {
       body: JSON.stringify(data),
     }),
   /** Replace the whole grid in one call. */
-  saveAll: (projectId: number, rows: Partial<DesignRequirementInput>[]) =>
+  /** Rows with an `id` are updated in place (keeps generated estimate groups linked). */
+  saveAll: (projectId: number, rows: (Partial<DesignRequirementInput> & { id?: number })[]) =>
     apiFetch<DesignRequirement[]>(`/projects/${projectId}/design-requirements/bulk/`, {
       method: "PUT",
       body: JSON.stringify({ rows }),
@@ -547,7 +549,7 @@ export const crmApi = {
   meta: () => apiFetch<CrmMeta>("/crm/meta/"),
 };
 
-// ── Catalogue: Rooms → Furniture → Materials ──────────────────
+// ── Catalogue: Rooms · Basic Components · Furniture ──────────
 
 export const catalogApi = {
   meta: () => apiFetch<CatalogMeta>("/catalog/meta/"),
@@ -568,35 +570,20 @@ export const catalogApi = {
     apiFetch<CatalogZone>(`/catalog/zones/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteZone: (id: number) => apiFetch<void>(`/catalog/zones/${id}/`, { method: "DELETE" }),
 
-  // Materials + their priced options
-  materials: (withOptions = false) =>
-    apiFetch<Paginated<CatalogMaterial>>(
-      `/catalog/materials/?page_size=200${withOptions ? "&with_options=1" : ""}`
-    ),
-  material: (id: number) => apiFetch<CatalogMaterial>(`/catalog/materials/${id}/`),
-  createMaterial: (data: Partial<CatalogMaterial>) =>
-    apiFetch<CatalogMaterial>("/catalog/materials/", { method: "POST", body: JSON.stringify(data) }),
-  updateMaterial: (id: number, data: Partial<CatalogMaterial>) =>
-    apiFetch<CatalogMaterial>(`/catalog/materials/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteMaterial: (id: number) => apiFetch<void>(`/catalog/materials/${id}/`, { method: "DELETE" }),
+  // Basic components — estimate row types and their quantity rules
+  basicComponents: () =>
+    apiFetch<Paginated<BasicComponent>>("/catalog/basic-components/?page_size=500"),
+  createBasicComponent: (data: Partial<BasicComponent>) =>
+    apiFetch<BasicComponent>("/catalog/basic-components/", { method: "POST", body: JSON.stringify(data) }),
+  updateBasicComponent: (id: number, data: Partial<BasicComponent>) =>
+    apiFetch<BasicComponent>(`/catalog/basic-components/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteBasicComponent: (id: number) =>
+    apiFetch<void>(`/catalog/basic-components/${id}/`, { method: "DELETE" }),
 
-  options: (materialId: number) =>
-    apiFetch<Paginated<MaterialOption>>(`/catalog/materials/${materialId}/options/?page_size=200`),
-  createOption: (materialId: number, data: Partial<MaterialOption>) =>
-    apiFetch<MaterialOption>(`/catalog/materials/${materialId}/options/`, {
-      method: "POST", body: JSON.stringify(data),
-    }),
-  updateOption: (materialId: number, id: number, data: Partial<MaterialOption>) =>
-    apiFetch<MaterialOption>(`/catalog/materials/${materialId}/options/${id}/`, {
-      method: "PATCH", body: JSON.stringify(data),
-    }),
-  deleteOption: (materialId: number, id: number) =>
-    apiFetch<void>(`/catalog/materials/${materialId}/options/${id}/`, { method: "DELETE" }),
-
-  // Furniture → parts → part-materials
+  // Furniture — finished products and the components they're estimated from
   furniture: (roomId?: number) =>
     apiFetch<Paginated<Furniture>>(
-      `/catalog/furniture/?page_size=200${roomId ? `&room=${roomId}` : ""}`
+      `/catalog/furniture/?page_size=500${roomId ? `&room=${roomId}` : ""}`
     ),
   furnitureDetail: (id: number) => apiFetch<Furniture>(`/catalog/furniture/${id}/`),
   createFurniture: (data: Partial<Furniture>) =>
@@ -605,37 +592,21 @@ export const catalogApi = {
     apiFetch<Furniture>(`/catalog/furniture/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteFurniture: (id: number) => apiFetch<void>(`/catalog/furniture/${id}/`, { method: "DELETE" }),
 
-  createPart: (furnitureId: number, data: Partial<FurniturePart>) =>
-    apiFetch<FurniturePart>(`/catalog/furniture/${furnitureId}/parts/`, {
+  addComponent: (furnitureId: number, data: Partial<FurnitureComponent>) =>
+    apiFetch<FurnitureComponent>(`/catalog/furniture/${furnitureId}/components/`, {
       method: "POST", body: JSON.stringify(data),
     }),
-  updatePart: (id: number, data: Partial<FurniturePart>) =>
-    apiFetch<FurniturePart>(`/catalog/furniture/parts/${id}/`, {
+  updateComponent: (id: number, data: Partial<FurnitureComponent>) =>
+    apiFetch<FurnitureComponent>(`/catalog/furniture/components/${id}/`, {
       method: "PATCH", body: JSON.stringify(data),
     }),
-  deletePart: (id: number) => apiFetch<void>(`/catalog/furniture/parts/${id}/`, { method: "DELETE" }),
+  deleteComponent: (id: number) =>
+    apiFetch<void>(`/catalog/furniture/components/${id}/`, { method: "DELETE" }),
 
-  addPartMaterial: (partId: number, data: Partial<PartMaterial>) =>
-    apiFetch<PartMaterial>(`/catalog/furniture/parts/${partId}/materials/`, {
-      method: "POST", body: JSON.stringify(data),
-    }),
-  updatePartMaterial: (id: number, data: Partial<PartMaterial>) =>
-    apiFetch<PartMaterial>(`/catalog/furniture/part-materials/${id}/`, {
-      method: "PATCH", body: JSON.stringify(data),
-    }),
-  deletePartMaterial: (id: number) =>
-    apiFetch<void>(`/catalog/furniture/part-materials/${id}/`, { method: "DELETE" }),
-};
-
-// ── Cabinet calculation engine ────────────────────────────────
-
-export const estimatorApi = {
-  meta: () => apiFetch<EstimatorMeta>("/catalog/estimator/meta/"),
-  /** Recalculate without saving — called live as the configurator changes. */
-  preview: (config: Partial<CabinetConfig>,
-            hint?: { name?: string; length?: string; breadth?: string; height?: string; qty?: string }) =>
-    apiFetch<EstimatorResult>("/catalog/estimator/preview/", {
-      method: "POST", body: JSON.stringify({ config, hint }),
+  /** Preview a furniture's rows at a size — nothing is saved. Blank sizes use its defaults. */
+  calculate: (id: number, body: { width?: string; height?: string; depth?: string; options?: CalcOptions } = {}) =>
+    apiFetch<FurnitureCalc>(`/catalog/furniture/${id}/calculate/`, {
+      method: "POST", body: JSON.stringify(body),
     }),
 };
 
@@ -645,7 +616,7 @@ export type EstimateItemInput = Partial<
   Pick<EstimateItem, "area" | "zone" | "finishing" | "category" | "subcategory" |
        "item" | "description" | "length" | "breadth" | "height" | "unit" | "remarks" |
        "item_type" | "specification" | "brand" | "model_name" | "application" |
-       "estimate_spec_flag" | "price_unit" | "flag">
+       "estimate_spec_flag" | "price_unit" | "flag" | "raw_material">
   & { qty: number | string; rate: number | string; gst_pct: number | string;
       margin_pct?: number | string; referral_pct?: number | string;
       width_ft?: number; width_in?: number;
@@ -655,7 +626,7 @@ export type EstimateItemInput = Partial<
 
 export type ComponentInput = Partial<
   Pick<EstimateItemComponent, "basic_component" | "detail" | "brand" | "model" | "unit">
-  & { qty: number | string; price: number | string; catalog_material: number | null; catalog_option: number | null }
+  & { qty: number | string; price: number | string; library_material_item: number | null }
 >;
 
 export const estimatesApi = {
@@ -750,22 +721,43 @@ export const estimatesApi = {
       `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/components/${componentId}/`,
       { method: "DELETE" }
     ),
-  /**
-   * Run the cabinet calculator for a line and replace its breakdown.
-   * `{ auto: true }` applies the default template when the line is a cabinet.
-   */
-  configure: (projectId: number, estimateId: number, itemId: number,
-              body: { config: Partial<CabinetConfig> } | { auto: true }) =>
-    apiFetch<{ configured: boolean; detail: string; item?: EstimateItem; result?: EstimatorResult }>(
-      `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/configure/`,
+  /** Undo a typed-over quantity (or a door/drawer/shelf count). */
+  resetQty: (projectId: number, estimateId: number, itemId: number) =>
+    apiFetch<EstimateItem>(`/projects/${projectId}/estimates/${estimateId}/items/${itemId}/reset-qty/`, {
+      method: "POST",
+    }),
+
+  // ── Calculation-sheet generation ──
+  /** Create / refresh a furniture group for every linked design requirement. */
+  generateFromDesign: (projectId: number, estimateId: number) =>
+    apiFetch<{ detail: string; created: number; updated: number; skipped: string[]; estimate: Estimate }>(
+      `/projects/${projectId}/estimates/${estimateId}/generate-from-design/`, { method: "POST" }
+    ),
+  /** Add one catalogue furniture as its rows. Sizes like "7'0\"" (blank = furniture default). */
+  addFurniture: (projectId: number, estimateId: number, body: {
+    furniture_id: number; area?: string; zone?: string; item?: string;
+    width?: string; height?: string; depth?: string; options?: CalcOptions;
+  }) =>
+    apiFetch<{ detail: string; group_key: string; warnings: string[]; estimate: Estimate }>(
+      `/projects/${projectId}/estimates/${estimateId}/add-furniture/`,
       { method: "POST", body: JSON.stringify(body) }
     ),
-  /** Fill a line's breakdown from a catalogue furniture's bill of materials. */
-  populateFromFurniture: (projectId: number, estimateId: number, itemId: number, furnitureId: number) =>
-    apiFetch<{ detail: string; item: EstimateItem }>(
-      `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/populate-from-furniture/`,
-      { method: "POST", body: JSON.stringify({ furniture_id: furnitureId, replace: true }) }
+  /** Re-run a furniture group's rules after a size / option change. */
+  recalculateGroup: (projectId: number, estimateId: number, groupKey: string, body: {
+    width_ft?: number; width_in?: number; height_ft?: number; height_in?: number;
+    depth_ft?: number; depth_in?: number; options?: CalcOptions; area?: string; zone?: string; item?: string;
+  }) =>
+    apiFetch<{ detail: string; estimate: Estimate }>(
+      `/projects/${projectId}/estimates/${estimateId}/groups/${groupKey}/`,
+      { method: "POST", body: JSON.stringify(body) }
     ),
+  deleteGroup: (projectId: number, estimateId: number, groupKey: string) =>
+    apiFetch<void>(`/projects/${projectId}/estimates/${estimateId}/groups/${groupKey}/`, { method: "DELETE" }),
+  /** Smart Estimate Generator — apply chosen brands/models to every matching row. */
+  applySmartMaterials: (projectId: number, estimateId: number, libraryItemIds: number[]) =>
+    apiFetch<Estimate>(`/projects/${projectId}/estimates/${estimateId}/apply-smart-materials/`, {
+      method: "POST", body: JSON.stringify({ materials: libraryItemIds.map(id => ({ library_item_id: id })) }),
+    }),
 };
 
 // ── Initial Engagement: Booking Form ──────────────────────────
@@ -959,6 +951,10 @@ export const fileApi = {
 
 // ── Raw Material Library ──────────────────────────────────────
 
+export interface SmartOption {
+  id: number; label: string; brand: string; model: string; category: string; price: string; unit: string;
+}
+
 export const libraryApi = {
   /** Dropdown data: categories, brands, units, counts. */
   meta: () => apiFetch<LibraryMeta>("/library/meta/"),
@@ -982,6 +978,13 @@ export const libraryApi = {
 
   deleteItem: (id: number) =>
     apiFetch<void>(`/library/items/${id}/`, { method: "DELETE" }),
+
+  /** Every active model in one raw-material category (incl. ones without a brand). */
+  categoryItems: (categoryId: number) =>
+    apiFetch<Paginated<LibraryItem>>(`/library/items/?category=${categoryId}&is_active=true&page_size=200`),
+
+  /** Smart Estimate Generator choices, grouped by product group. */
+  smartOptions: () => apiFetch<Record<string, SmartOption[]>>("/library/smart-estimate-options/"),
 
   // ── Brands CRUD ───────────────────────────────────────────────
   brands: (categoryId?: number) =>

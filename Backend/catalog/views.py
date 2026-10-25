@@ -1,32 +1,30 @@
 """
 NICARA Catalogue — Views  (mounted at /api/catalog/, module 'catalog')
 
-    rooms/                 room types
-    zones/                 room zones (walls, areas)
-    materials/             material types  (?with_options=1 nests the options)
-    materials/{id}/options/    priced options for a material
-    furniture/             furniture products  (?room=<id> scopes to a room)
-    furniture/{id}/parts/      build elements
-    furniture/parts/{id}/materials/   BOM lines for a part
-    meta/                  units + counts for the forms
-    tree/                  the whole hierarchy for a drill-down UI
+    rooms/                          room types
+    zones/                          room zones (walls, areas)
+    basic-components/               estimate row types + their quantity rules
+    furniture/                      finished products (?room=<id> scopes to a room)
+    furniture/{id}/components/      the basic components a furniture is estimated from
+    furniture/components/{id}/      one component link
+    furniture/{id}/calculate/       preview rows for a size (nothing saved)
+    meta/                           units, cabinet types, rules, item types, counts
+    tree/                           rooms, zones and furniture in one call
 """
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
-from rest_framework import generics, permissions
+from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import HasModulePermission
 
-from .models import (
-    Furniture, FurnitureItemComponent, FurniturePart, Material, MaterialOption,
-    PartMaterial, Room, Zone,
-)
+from . import rules
+from .models import BasicComponent, CabinetType, Furniture, FurnitureComponent, ItemType, Room, Zone
+from .pricing import breakdown, size_inches
 from .serializers import (
-    FurnitureItemComponentSerializer, FurnitureListSerializer, FurniturePartSerializer, FurnitureSerializer,
-    MaterialListSerializer, MaterialOptionSerializer, MaterialSerializer,
-    PartMaterialSerializer, RoomSerializer, ZoneSerializer,
+    BasicComponentSerializer, FurnitureComponentSerializer, FurnitureListSerializer,
+    FurnitureSerializer, RoomSerializer, ZoneSerializer,
 )
 
 MODULE = 'catalog'
@@ -38,7 +36,13 @@ class CatalogView:
     module = MODULE
 
 
-# ── Rooms ───────────────────────────────────────────────────
+class SoftDeleteMixin:
+    def perform_destroy(self, instance):
+        instance.is_active = False
+        instance.save(update_fields=['is_active'])
+
+
+# ── Rooms & zones ───────────────────────────────────────────
 
 class RoomListCreateView(CatalogView, generics.ListCreateAPIView):
     queryset = Room.objects.all()
@@ -47,16 +51,10 @@ class RoomListCreateView(CatalogView, generics.ListCreateAPIView):
     search_fields = ['name', 'code']
 
 
-class RoomDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
+class RoomDetailView(CatalogView, SoftDeleteMixin, generics.RetrieveUpdateDestroyAPIView):
     queryset = Room.objects.all()
     serializer_class = RoomSerializer
 
-    def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=['is_active'])
-
-
-# ── Zones ───────────────────────────────────────────────────
 
 class ZoneListCreateView(CatalogView, generics.ListCreateAPIView):
     queryset = Zone.objects.all()
@@ -65,78 +63,40 @@ class ZoneListCreateView(CatalogView, generics.ListCreateAPIView):
     search_fields = ['name', 'code']
 
 
-class ZoneDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
+class ZoneDetailView(CatalogView, SoftDeleteMixin, generics.RetrieveUpdateDestroyAPIView):
     queryset = Zone.objects.all()
     serializer_class = ZoneSerializer
 
-    def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=['is_active'])
 
+# ── Basic components ────────────────────────────────────────
 
-# ── Materials & options ─────────────────────────────────────
-
-class MaterialListCreateView(CatalogView, generics.ListCreateAPIView):
-    filterset_fields = ['is_active']
+class BasicComponentListCreateView(CatalogView, generics.ListCreateAPIView):
+    queryset = BasicComponent.objects.select_related('library_category')
+    serializer_class = BasicComponentSerializer
+    filterset_fields = ['is_active', 'item_type', 'quantity_rule', 'library_category']
     search_fields = ['name', 'code']
 
-    def get_queryset(self):
-        qs = Material.objects.annotate(
-            option_count=Count('options', filter=Q(options__is_active=True))
-        )
-        if self.request.query_params.get('with_options'):
-            qs = qs.prefetch_related('options')
-        return qs
 
-    def get_serializer_class(self):
-        # Nest options on request; otherwise return the light row.
-        if self.request.method == 'POST' or self.request.query_params.get('with_options'):
-            return MaterialSerializer
-        return MaterialListSerializer
+class BasicComponentDetailView(CatalogView, SoftDeleteMixin, generics.RetrieveUpdateDestroyAPIView):
+    queryset = BasicComponent.objects.select_related('library_category')
+    serializer_class = BasicComponentSerializer
 
 
-class MaterialDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
-    serializer_class = MaterialSerializer
+# ── Furniture ───────────────────────────────────────────────
 
-    def get_queryset(self):
-        return Material.objects.annotate(
-            option_count=Count('options', filter=Q(options__is_active=True))
-        ).prefetch_related('options')
+def _furniture_qs():
+    return (Furniture.objects
+            .annotate(component_count=Count('components', filter=Q(components__is_active=True)))
+            .prefetch_related('rooms'))
 
-    def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=['is_active'])
-
-
-class MaterialOptionListCreateView(CatalogView, generics.ListCreateAPIView):
-    serializer_class = MaterialOptionSerializer
-
-    def get_queryset(self):
-        return MaterialOption.objects.filter(material_id=self.kwargs['material_id'])
-
-    def perform_create(self, serializer):
-        serializer.save(material_id=self.kwargs['material_id'])
-
-
-class MaterialOptionDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
-    serializer_class = MaterialOptionSerializer
-
-    def get_queryset(self):
-        return MaterialOption.objects.filter(material_id=self.kwargs['material_id'])
-
-
-# ── Furniture → parts → materials ───────────────────────────
 
 class FurnitureListCreateView(CatalogView, generics.ListCreateAPIView):
-    filterset_fields = ['is_active', 'rooms']
+    filterset_fields = ['is_active', 'rooms', 'cabinet_type']
     search_fields = ['name', 'code', 'description']
 
     def get_queryset(self):
-        qs = (Furniture.objects
-              .annotate(part_count=Count('parts', filter=Q(parts__is_active=True)))
-              .prefetch_related('rooms'))
-        # ?room=<id> → furniture linked to that room, plus universal furniture
-        # (no rooms set), matching "kitchen furniture only shows for kitchen".
+        qs = _furniture_qs()
+        # ?room=<id> → furniture linked to that room, plus universal furniture.
         room = self.request.query_params.get('room')
         if room:
             qs = qs.filter(Q(rooms__id=room) | Q(rooms__isnull=True)).distinct()
@@ -146,89 +106,78 @@ class FurnitureListCreateView(CatalogView, generics.ListCreateAPIView):
         return FurnitureSerializer if self.request.method == 'POST' else FurnitureListSerializer
 
 
-class FurnitureDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
+class FurnitureDetailView(CatalogView, SoftDeleteMixin, generics.RetrieveUpdateDestroyAPIView):
     serializer_class = FurnitureSerializer
 
     def get_queryset(self):
-        return (Furniture.objects
-                .annotate(part_count=Count('parts', filter=Q(parts__is_active=True)))
-                .prefetch_related(
-                    'rooms', 'parts__materials__material',
-                    'parts__materials__default_option',
-                    'item_components__item__components__material_item__category',
-                    'item_components__item__components__material_item__brand',
-                    'item_components__item__components__service_item',
-                ))
-
-    def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=['is_active'])
+        return _furniture_qs().prefetch_related(
+            'components__basic_component__library_category', 'components__default_material__brand')
 
 
-class FurniturePartListCreateView(CatalogView, generics.ListCreateAPIView):
-    serializer_class = FurniturePartSerializer
+class FurnitureComponentListCreateView(CatalogView, generics.ListCreateAPIView):
+    serializer_class = FurnitureComponentSerializer
 
     def get_queryset(self):
-        return FurniturePart.objects.filter(
-            furniture_id=self.kwargs['furniture_id']
-        ).prefetch_related('materials__material')
+        return (FurnitureComponent.objects.filter(furniture_id=self.kwargs['furniture_id'])
+                .select_related('basic_component', 'default_material__brand'))
 
     def perform_create(self, serializer):
-        serializer.save(furniture_id=self.kwargs['furniture_id'])
+        furniture = get_object_or_404(Furniture, pk=self.kwargs['furniture_id'])
+        last = furniture.components.order_by('-sort_order').first()
+        serializer.save(furniture=furniture, sort_order=(last.sort_order + 1) if last else 1)
 
 
-class FurniturePartDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
-    serializer_class = FurniturePartSerializer
-    queryset = FurniturePart.objects.all()
+class FurnitureComponentDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = FurnitureComponentSerializer
+    queryset = FurnitureComponent.objects.select_related('basic_component', 'default_material__brand')
 
 
-class PartMaterialListCreateView(CatalogView, generics.ListCreateAPIView):
-    serializer_class = PartMaterialSerializer
-
-    def get_queryset(self):
-        return PartMaterial.objects.filter(
-            part_id=self.kwargs['part_id']
-        ).select_related('material', 'default_option')
-
-    def perform_create(self, serializer):
-        serializer.save(part_id=self.kwargs['part_id'])
-
-
-class PartMaterialDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
-    serializer_class = PartMaterialSerializer
-    queryset = PartMaterial.objects.all()
+def serialize_rows(rows):
+    return [{
+        'component_id': r['component'].id,
+        'basic_component': r['basic_component'].id,
+        'item_type': r['item_type'], 'specification': r['specification'],
+        'brand': r['brand'], 'model': r['model'],
+        'raw_material': r['raw_material'].id if r['raw_material'] else None,
+        'qty': float(r['qty']), 'unit': r['unit'], 'rate': float(r['rate']),
+        'price_unit': r['price_unit'], 'amount': float(r['qty'] * r['rate']),
+        'gst_pct': float(r['gst_pct']), 'quantity_rule': r['quantity_rule'],
+        'basis': r['basis'], 'needs_input': r['needs_input'], 'application': r['application'],
+    } for r in rows]
 
 
-class FurnitureItemComponentListCreateView(CatalogView, generics.ListCreateAPIView):
-    serializer_class = FurnitureItemComponentSerializer
+class FurnitureCalculateView(APIView):
+    """
+    POST /api/catalog/furniture/{id}/calculate/
+    Body: { "width": "7'0\"", "height": "9'6\"", "depth": "2'0\"",
+            "options": {"shelf_type": "ply", "overrides": {"drawers": 5}} }
+    Blank sizes fall back to the furniture's defaults. Nothing is saved.
+    """
+    permission_classes = [permissions.IsAuthenticated]
 
-    def get_queryset(self):
-        return FurnitureItemComponent.objects.filter(
-            furniture_id=self.kwargs['furniture_id'],
-        ).select_related('item').prefetch_related('item__components')
-
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['furniture'] = get_object_or_404(Furniture, pk=self.kwargs['furniture_id'])
-        return context
-
-    def perform_create(self, serializer):
-        serializer.save(furniture_id=self.kwargs['furniture_id'])
-
-
-class FurnitureItemComponentDetailView(CatalogView, generics.RetrieveUpdateDestroyAPIView):
-    serializer_class = FurnitureItemComponentSerializer
-    queryset = FurnitureItemComponent.objects.select_related('item', 'furniture')
-
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['furniture'] = self.get_object().furniture
-        return context
+    def post(self, request, pk):
+        furniture = get_object_or_404(Furniture, pk=pk)
+        data = request.data
+        width, height, depth = size_inches(
+            data.get('width') or furniture.default_length,
+            data.get('height') or furniture.default_height,
+            data.get('depth') or furniture.default_breadth,
+        )
+        rows, calc = breakdown(furniture, width, height, depth, data.get('options') or {})
+        payload = serialize_rows(rows)
+        return Response({
+            'furniture': furniture.id, 'calculation': calc.summary(), 'rows': payload,
+            'total_cost': round(sum(r['amount'] for r in payload), 2),
+        }, status=status.HTTP_200_OK)
 
 
 # ── Meta & tree ─────────────────────────────────────────────
 
-UNIT_CHOICES = ['nos', 'set', 'sft', 'rft', 'sqm', 'sheets', 'kg', 'litre', 'lot', 'lumpsum']
+UNIT_CHOICES = ['nos', 'sets', 'sft', 'rft', 'Mtr', 'kg', 'slab', 'lengths', 'lot', 'lumpsum']
+
+
+def _choices(items):
+    return [{'value': v, 'label': label} for v, label in items]
 
 
 class CatalogMetaView(APIView):
@@ -237,69 +186,29 @@ class CatalogMetaView(APIView):
     def get(self, request):
         return Response({
             'units': [{'value': u, 'label': u} for u in UNIT_CHOICES],
+            'cabinet_types': _choices(CabinetType.choices),
+            'item_types': _choices(ItemType.choices),
+            'rules': _choices(rules.RULE_CHOICES),
+            'spec_rules': list(rules.SPEC_RULES),
             'counts': {
                 'rooms': Room.objects.filter(is_active=True).count(),
                 'zones': Zone.objects.filter(is_active=True).count(),
                 'furniture': Furniture.objects.filter(is_active=True).count(),
-                'materials': Material.objects.filter(is_active=True).count(),
-                'options': MaterialOption.objects.filter(is_active=True).count(),
+                'basic_components': BasicComponent.objects.filter(is_active=True).count(),
             },
         })
 
 
 class CatalogTreeView(CatalogView, APIView):
-    """
-    GET /api/catalog/tree/?room=<id>
-    The whole hierarchy in one call, for a drill-down UI: rooms, zones, and the
-    furniture (with parts → materials) available in the chosen room.
-    """
+    """GET /api/catalog/tree/?room=<id> — rooms, zones and the furniture available in a room."""
+
     def get(self, request):
         room_id = request.query_params.get('room')
-
-        furniture_qs = Furniture.objects.filter(is_active=True).prefetch_related(
-            'rooms', 'parts__materials__material', 'parts__materials__default_option',
-            'item_components__item__components__material_item__category',
-            'item_components__item__components__material_item__brand',
-            'item_components__item__components__service_item',
-        )
+        furniture_qs = _furniture_qs().filter(is_active=True)
         if room_id:
-            furniture_qs = furniture_qs.filter(
-                Q(rooms__id=room_id) | Q(rooms__isnull=True)
-            ).distinct()
-
+            furniture_qs = furniture_qs.filter(Q(rooms__id=room_id) | Q(rooms__isnull=True)).distinct()
         return Response({
             'rooms': RoomSerializer(Room.objects.filter(is_active=True), many=True).data,
             'zones': ZoneSerializer(Zone.objects.filter(is_active=True), many=True).data,
-            'furniture': FurnitureSerializer(furniture_qs, many=True).data,
+            'furniture': FurnitureListSerializer(furniture_qs, many=True).data,
         })
-
-
-# ── Cabinet calculation engine ─────────────────────────────
-
-class EstimatorMetaView(APIView):
-    """GET /api/catalog/estimator/meta/ — templates, thicknesses, boards, options."""
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request):
-        from . import estimator
-        return Response(estimator.meta())
-
-
-class EstimatorPreviewView(APIView):
-    """
-    POST /api/catalog/estimator/preview/
-    Body: { "config": {...partial...}, "hint": {"name", "length", "breadth", "height"} }
-
-    Recalculates the bill of materials without saving anything — the
-    configurator calls this on every change for live totals.
-    """
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        from . import estimator
-        try:
-            result = estimator.calculate(request.data.get('config') or {},
-                                         request.data.get('hint') or {})
-        except estimator.ConfigError as exc:
-            return Response({'detail': 'Invalid configuration.', 'errors': {k: [v] for k, v in exc.errors.items()}}, status=400)
-        return Response(result)

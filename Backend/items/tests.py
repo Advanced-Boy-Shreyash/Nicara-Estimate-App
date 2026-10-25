@@ -221,10 +221,10 @@ class SeedItemsCommandTests(APITestCase):
 
     def test_seeded_items_carry_estimate_fields(self):
         call_command('seed_items', verbosity=0)
-        wardrobe = Item.objects.get(name="Wardrobe 8'x2'x8'")
+        wardrobe = Item.objects.get(name='Wardrobe')
         self.assertEqual(wardrobe.default_room, 'Master Bedroom')
-        self.assertEqual(wardrobe.default_rate, Decimal('145000.00'))
-        self.assertEqual(wardrobe.default_length, "8'0\"")
+        self.assertEqual(wardrobe.default_rate, Decimal('95000.00'))
+        self.assertEqual(wardrobe.default_length, "6'0\"")
         self.assertEqual(wardrobe.gst_pct, Decimal('18.00'))
 
         ceiling = Item.objects.get(name='False Ceiling — Gypsum')

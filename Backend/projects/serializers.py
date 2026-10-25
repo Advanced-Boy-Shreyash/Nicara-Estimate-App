@@ -12,6 +12,9 @@ from .models import (
 
 # ── Design Requirements ─────────────────────────────────────
 class DesignRequirementSerializer(serializers.ModelSerializer):
+    furniture_name = serializers.CharField(source='furniture.name', read_only=True, default='')
+    cabinet_type = serializers.CharField(source='furniture.cabinet_type', read_only=True, default='')
+
     class Meta:
         model = DesignRequirement
         fields = '__all__'
@@ -119,7 +122,7 @@ class EstimateItemComponentSerializer(serializers.ModelSerializer):
         model = EstimateItemComponent
         fields = ['id', 'estimate_item', 'sno', 'basic_component', 'detail',
                   'brand', 'model', 'qty', 'unit', 'price', 'amount',
-                  'catalog_material', 'catalog_option', 'library_material_item']
+                  'library_material_item']
         read_only_fields = ['estimate_item', 'amount']
 
     def validate_qty(self, value):
@@ -143,6 +146,10 @@ class EstimateItemSerializer(serializers.ModelSerializer):
     catalog_item_code = serializers.CharField(source='catalog_item.code', read_only=True)
     components = EstimateItemComponentSerializer(many=True, read_only=True)
     has_components = serializers.BooleanField(read_only=True)
+    furniture_name = serializers.CharField(source='furniture.name', read_only=True, default='')
+    cabinet_type = serializers.CharField(source='furniture.cabinet_type', read_only=True, default='')
+    raw_material_category = serializers.IntegerField(
+        source='basic_component.library_category_id', read_only=True, default=None)
 
     class Meta:
         model = EstimateItem
@@ -169,12 +176,18 @@ class EstimateItemSerializer(serializers.ModelSerializer):
             'total_with_gst',
             # Flag & misc
             'flag', 'remarks', 'config',
+            # Generated from the catalogue
+            'group_key', 'design_requirement', 'furniture', 'furniture_name', 'cabinet_type',
+            'basic_component', 'raw_material', 'raw_material_category', 'quantity_rule',
+            'calc_basis', 'calculated_qty', 'qty_overridden',
             # Breakdown
             'components', 'has_components',
         ]
         read_only_fields = [
             'estimate', 'amount', 'cost', 'margin_amount', 'referral_amount',
             'gst_amount_stored', 'total_amount', 'specifications_text',
+            'group_key', 'design_requirement', 'furniture', 'basic_component',
+            'quantity_rule', 'calc_basis', 'calculated_qty', 'qty_overridden',
         ]
 
     def validate_qty(self, value):
@@ -191,6 +204,22 @@ class EstimateItemSerializer(serializers.ModelSerializer):
         if value is not None and not (0 <= value <= 100):
             raise serializers.ValidationError('GST percentage must be between 0 and 100.')
         return value
+
+    def validate_raw_material(self, value):
+        component = getattr(self.instance, 'basic_component', None)
+        if value and component and component.library_category_id                 and value.category_id != component.library_category_id:
+            raise serializers.ValidationError(
+                f'Pick a {component.library_category.name} raw material.')
+        return value
+
+    def update(self, instance, validated_data):
+        # Switching brand/model re-prices the row unless a rate was typed too.
+        material = validated_data.get('raw_material')
+        if material is not None and material != instance.raw_material:
+            validated_data.setdefault('brand', material.brand.name if material.brand_id else '')
+            validated_data.setdefault('model_name', material.model_name)
+            validated_data.setdefault('rate', material.default_rate)
+        return super().update(instance, validated_data)
 
 
 class EstimateSerializer(serializers.ModelSerializer):

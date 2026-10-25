@@ -11,9 +11,6 @@ from rest_framework.test import APITestCase
 
 from accounts.models import User
 from items.models import Item, ItemCategory, ItemComponent
-from catalog.models import (
-    Furniture, FurnitureItemComponent, FurniturePart, Material, MaterialOption, PartMaterial,
-)
 from library.models import MaterialBrand, MaterialCategory, MaterialItem
 from projects.models import (
     Estimate, EstimateItem, EstimateItemComponent, Project,
@@ -92,8 +89,8 @@ class RollupTests(ComponentTestCase):
             qty=Decimal('64'), price=Decimal('100'))  # 6400
         self.estimate.refresh_from_db()
         # The component amount is the base cost; estimate subtotal also includes
-        # the line's default 35% margin.
-        self.assertEqual(self.estimate.subtotal, Decimal('8640.00'))
+        # the line's default 15% margin.
+        self.assertEqual(self.estimate.subtotal, Decimal('7360.00'))
 
 
 class ComponentApiTests(ComponentTestCase):
@@ -135,133 +132,6 @@ class ComponentApiTests(ComponentTestCase):
         self.assertTrue(res.data['has_components'])
 
 
-class PopulateFromFurnitureTests(ComponentTestCase):
-    def setUp(self):
-        super().setUp()
-        # A small catalogue furniture: Wardrobe → Cabinet → Plywood + Hardware
-        self.ply = Material.objects.create(name='Plywood', default_unit='sft')
-        MaterialOption.objects.create(
-            material=self.ply, detail='18mm', brand='Austin', model_no='Lincoln',
-            price=Decimal('100'), unit='sft')
-        self.hardware = Material.objects.create(name='Hardware', default_unit='nos')
-        MaterialOption.objects.create(
-            material=self.hardware, detail='Hinge', brand='Hettich', model_no='Onsys',
-            price=Decimal('45'), unit='nos')
-
-        self.furniture = Furniture.objects.create(name='Wardrobe')
-        cabinet = FurniturePart.objects.create(furniture=self.furniture, name='Cabinet')
-        PartMaterial.objects.create(part=cabinet, material=self.ply,
-                                    qty_per_unit=Decimal('64'), unit='sft')
-        PartMaterial.objects.create(part=cabinet, material=self.hardware,
-                                    qty_per_unit=Decimal('12'), unit='nos')
-
-    def populate_url(self):
-        return reverse('estimate-item-populate',
-                       args=[self.project.pk, self.estimate.pk, self.line.pk])
-
-    def test_populates_breakdown_from_furniture(self):
-        res = self.client.post(self.populate_url(), {'furniture_id': self.furniture.pk}, format='json')
-        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
-        self.assertEqual(self.line.components.count(), 2)
-
-        plywood = self.line.components.get(basic_component='Plywood')
-        self.assertEqual(plywood.detail, '18mm')
-        self.assertEqual(plywood.brand, 'Austin')
-        self.assertEqual(plywood.price, Decimal('100.00'))
-        self.assertEqual(plywood.amount, Decimal('6400.00'))  # 64 × 100
-
-    def test_furniture_bom_scales_with_estimate_line_quantity(self):
-        self.line.qty = Decimal('2')
-        self.line.save()
-        res = self.client.post(self.populate_url(), {'furniture_id': self.furniture.pk}, format='json')
-        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
-        self.assertEqual(self.line.components.get(basic_component='Plywood').qty, Decimal('128.00'))
-
-    def test_furniture_composes_item_bom_without_duplicating_component_costs(self):
-        category = MaterialCategory.objects.create(name='Drawer Plywood')
-        brand = MaterialBrand.objects.create(category=category, name='Austin')
-        variant = MaterialItem.objects.create(
-            category=category, brand=brand, model_name='18mm',
-            default_rate=Decimal('50'), default_unit='sft',
-        )
-        item_category = ItemCategory.objects.create(name='Components')
-        drawer = Item.objects.create(name='Drawer', category=item_category)
-        ItemComponent.objects.create(item=drawer, material_item=variant, qty_per_unit=2)
-        FurnitureItemComponent.objects.create(
-            furniture=self.furniture, item=drawer, qty_per_unit=3,
-        )
-        self.line.qty = Decimal('2')
-        self.line.save()
-
-        response = self.client.post(
-            self.populate_url(), {'furniture_id': self.furniture.pk}, format='json',
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
-        self.assertEqual(self.line.components.count(), 3)
-        item_component = self.line.components.get(library_material_item=variant)
-        self.assertEqual(item_component.qty, Decimal('12.00'))
-        self.assertEqual(item_component.amount, Decimal('600.00'))
-        self.line.refresh_from_db()
-        self.assertEqual(self.line.amount, Decimal('14480.00'))
-
-
-    def test_line_amount_updates_after_populate(self):
-        self.client.post(self.populate_url(), {'furniture_id': self.furniture.pk}, format='json')
-        self.line.refresh_from_db()
-        # 64×100 + 12×45 = 6400 + 540 = 6940
-        self.assertEqual(self.line.amount, Decimal('6940.00'))
-
-    def test_replace_clears_previous_breakdown(self):
-        EstimateItemComponent.objects.create(
-            estimate_item=self.line, basic_component='Old', qty=Decimal('1'), price=Decimal('1'))
-        self.client.post(self.populate_url(), {'furniture_id': self.furniture.pk, 'replace': True}, format='json')
-        self.assertFalse(self.line.components.filter(basic_component='Old').exists())
-
-    def test_wastage_is_applied(self):
-        cabinet = self.furniture.parts.first()
-        pm = cabinet.materials.get(material=self.ply)
-        pm.wastage_pct = Decimal('10')
-        pm.save()
-        self.client.post(self.populate_url(), {'furniture_id': self.furniture.pk}, format='json')
-        plywood = self.line.components.get(basic_component='Plywood')
-        # 64 × 1.10 = 70.4 qty
-        self.assertEqual(plywood.qty, Decimal('70.40'))
-
-    def test_unknown_furniture_rejected(self):
-        res = self.client.post(self.populate_url(), {'furniture_id': 99999}, format='json')
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_add_from_catalog_seeds_breakdown_for_linked_item(self):
-        """An Item linked to a furniture arrives on the estimate fully costed."""
-        from items.models import Item as MasterItem, ItemCategory
-        cat = ItemCategory.objects.create(name='Carpentry')
-        master = MasterItem.objects.create(
-            name='Wardrobe', category=cat, default_rate=Decimal('0'),
-            catalog_furniture=self.furniture)
-
-        url = reverse('estimate-item-from-catalog', args=[self.project.pk, self.estimate.pk])
-        res = self.client.post(url, {'items': [{'item_id': master.pk, 'area': 'Master Bedroom'}]}, format='json')
-        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
-
-        line = self.estimate.items.get(catalog_item=master)
-        self.assertEqual(line.components.count(), 2)          # Plywood + Hardware
-        self.assertEqual(line.amount, Decimal('6940.00'))     # rolled up from BOM
-
-    def test_add_from_catalog_without_link_stays_flat(self):
-        from items.models import Item as MasterItem, ItemCategory
-        cat = ItemCategory.objects.create(name='Carpentry')
-        master = MasterItem.objects.create(
-            name='Loose Item', category=cat, default_qty=Decimal('2'), default_rate=Decimal('500'))
-
-        url = reverse('estimate-item-from-catalog', args=[self.project.pk, self.estimate.pk])
-        self.client.post(url, {'items': [{'item_id': master.pk}]}, format='json')
-
-        line = self.estimate.items.get(catalog_item=master)
-        self.assertEqual(line.components.count(), 0)
-        self.assertEqual(line.amount, Decimal('1000.00'))     # 2 × 500
-
-
 class PopulateFromItemTests(ComponentTestCase):
     def test_item_bom_uses_library_price_quantity_and_dimensions(self):
         raw_category = MaterialCategory.objects.create(
@@ -300,80 +170,57 @@ class PopulateFromItemTests(ComponentTestCase):
 
 
 class SmartMaterialTests(ComponentTestCase):
-    def test_applies_selected_materials_and_matching_catalogue_prices(self):
-        plywood = Material.objects.create(name='Plywood', default_unit='sft')
-        option_18mm = MaterialOption.objects.create(
-            material=plywood, detail='18mm', brand='Austin', model_no='Lincoln',
-            price=Decimal('100'), unit='sft',
-        )
-        MaterialOption.objects.create(
-            material=plywood, detail='8mm', brand='Austin', model_no='Lincoln',
-            price=Decimal('60'), unit='sft',
-        )
-        comp_18mm = EstimateItemComponent.objects.create(
-            estimate_item=self.line, basic_component='Plywood', detail='18mm',
-            qty=Decimal('10'), unit='sft', price=Decimal('1'),
-        )
-        comp_8mm = EstimateItemComponent.objects.create(
-            estimate_item=self.line, basic_component='Plywood', detail='8mm',
-            qty=Decimal('5'), unit='sft', price=Decimal('1'),
-        )
+    """Smart Estimate Generator choices re-price line breakdowns from the library."""
+
+    def setUp(self):
+        super().setUp()
+        self.ply18 = MaterialCategory.objects.create(
+            name='Core Material(18mm BWP Ply)', product_group=MaterialCategory.ProductGroup.PLYWOOD)
+        self.ply12 = MaterialCategory.objects.create(
+            name='Core Material(12mm BWP Ply)', product_group=MaterialCategory.ProductGroup.PLYWOOD)
+        gurjan18 = MaterialBrand.objects.create(category=self.ply18, name='Gurjan')
+        gurjan12 = MaterialBrand.objects.create(category=self.ply12, name='Gurjan')
+        austin18 = MaterialBrand.objects.create(category=self.ply18, name='Austin')
+        self.g18 = MaterialItem.objects.create(category=self.ply18, brand=gurjan18, model_name='710 BWP',
+                                               default_rate=Decimal('80'), default_unit='sft')
+        self.g12 = MaterialItem.objects.create(category=self.ply12, brand=gurjan12, model_name='710 BWP',
+                                               default_rate=Decimal('75'), default_unit='sft')
+        self.a18 = MaterialItem.objects.create(category=self.ply18, brand=austin18, model_name='Lincoln',
+                                               default_rate=Decimal('100'), default_unit='sft')
+
+    def apply(self, item):
+        return self.client.post(
+            reverse('estimate-apply-materials', args=[self.project.pk, self.estimate.pk]),
+            {'materials': [{'library_item_id': item.id}]}, format='json')
+
+    def test_same_category_takes_the_chosen_model(self):
+        comp = EstimateItemComponent.objects.create(
+            estimate_item=self.line, basic_component='Plywood 18mm', qty=Decimal('4'),
+            price=Decimal('1'), library_material_item=self.g18)
+        res = self.apply(self.a18)
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        comp.refresh_from_db()
+        self.assertEqual((comp.brand, comp.model, comp.price), ('Austin', 'Lincoln', Decimal('100.00')))
+        self.assertEqual(comp.amount, Decimal('400.00'))
+
+    def test_brand_carries_across_ply_thicknesses(self):
+        comp12 = EstimateItemComponent.objects.create(
+            estimate_item=self.line, basic_component='Plywood 12mm', qty=Decimal('2'),
+            price=Decimal('1'), library_material_item=self.g12)
+        self.apply(self.g18)
+        comp12.refresh_from_db()
+        self.assertEqual(comp12.library_material_item, self.g12)   # Gurjan has a 12mm model
+        self.assertEqual(comp12.price, Decimal('75.00'))
+
+    def test_unmatched_breakdown_rows_are_left_alone(self):
         other = EstimateItemComponent.objects.create(
-            estimate_item=self.line, basic_component='Hardware',
-            qty=Decimal('1'), unit='nos', price=Decimal('20'),
-        )
-
-        response = self.client.post(
-            reverse('estimate-apply-materials', args=[self.project.pk, self.estimate.pk]),
-            {'materials': [
-                {'basic_component': 'Plywood', 'brand': 'Austin', 'model': 'Lincoln'},
-            ]},
-            format='json',
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
-        comp_18mm.refresh_from_db()
-        comp_8mm.refresh_from_db()
+            estimate_item=self.line, basic_component='Hardware', qty=Decimal('1'), price=Decimal('20'))
+        self.apply(self.a18)
         other.refresh_from_db()
-        self.line.refresh_from_db()
-        self.assertEqual((comp_18mm.brand, comp_18mm.model), ('Austin', 'Lincoln'))
-        self.assertEqual(comp_18mm.price, Decimal('100.00'))
-        self.assertEqual(comp_18mm.catalog_option, option_18mm)
-        self.assertEqual(comp_8mm.price, Decimal('60.00'))
-        self.assertEqual(other.brand, '')
-        self.assertEqual(self.line.amount, Decimal('1320.00'))
+        self.assertEqual((other.brand, other.price), ('', Decimal('20.00')))
 
-    def test_library_variant_drives_smart_material_price(self):
-        category = MaterialCategory.objects.create(
-            name='Plywood', product_group=MaterialCategory.ProductGroup.PLYWOOD,
-        )
-        brand = MaterialBrand.objects.create(category=category, name='Austin')
-        variant = MaterialItem.objects.create(
-            category=category, brand=brand, model_name='Lincoln BWP',
-            default_rate=Decimal('125'), default_unit='sft',
-        )
-        material = Material.objects.create(name='Plywood')
-        option = MaterialOption.objects.create(
-            material=material, detail='18mm', brand='Austin',
-            model_no='Lincoln BWP', price=Decimal('90'), library_item=variant,
-        )
-        component = EstimateItemComponent.objects.create(
-            estimate_item=self.line, basic_component='Plywood',
-            qty=Decimal('4'), price=Decimal('1'),
-        )
-
-        response = self.client.post(
+    def test_unknown_material_is_rejected(self):
+        res = self.client.post(
             reverse('estimate-apply-materials', args=[self.project.pk, self.estimate.pk]),
-            {'materials': [{
-                'library_item_id': variant.id, 'product_group': 'plywood',
-                'basic_component': 'Plywood',
-            }]},
-            format='json',
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
-        component.refresh_from_db()
-        self.assertEqual(component.library_material_item_id, variant.id)
-        self.assertEqual(component.catalog_option_id, option.id)
-        self.assertEqual(component.price, Decimal('125.00'))
-        self.assertEqual(component.amount, Decimal('500.00'))
+            {'materials': [{'library_item_id': 99999}]}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)

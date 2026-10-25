@@ -1,24 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
-  ApiError, catalogApi, designRequirementsApi, estimatesApi, itemsApi,
-  type ComponentInput,
+  ApiError, catalogApi, estimatesApi, itemsApi, libraryApi,
+  type ComponentInput, type SmartOption,
 } from "@/lib/api";
 import type {
-  Estimate, EstimateItem, EstimateItemComponent, EstimateType, Item, Project,
+  CalcOptions, Estimate, EstimateItem, EstimateItemComponent, EstimateType, Item, LibraryItem, Project,
 } from "@/lib/apiTypes";
 import { useApiData, inr, inrExact } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
 import Modal from "@/components/ui/Modal";
 import { Btn, Field } from "@/components/ui/Form";
 import SearchSelect from "@/components/ui/SearchSelect";
-import CabinetConfigurator from "./CabinetConfigurator";
+import { OptionsControls } from "@/components/catalog/FurnitureTab";
 import { EmptyState, ErrorState, InlineError, Loading, StatusPill } from "@/components/ui/States";
 import {
   Download, Upload, FileText, FileSpreadsheet, Send,
   RotateCcw, CheckCircle, Copy, Brain, Plus, Trash2, ChevronDown, ChevronUp,
-  ClipboardList, X, Calculator,
+  ClipboardList, X, Armchair, RefreshCw,
 } from "lucide-react";
 
 const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
@@ -43,6 +43,7 @@ export default function EstimateTab({
   const [importing, setImporting] = useState(false);
   const [showGenerator, setShowGenerator] = useState(false);
   const [populating, setPopulating] = useState(false);
+  const [addingFurniture, setAddingFurniture] = useState(false);
   const [downloading, setDownloading] = useState<"pdf" | "excel" | null>(null);
 
   const listQuery = useApiData(() => estimatesApi.list(project.id, type), [project.id, type]);
@@ -189,56 +190,30 @@ export default function EstimateTab({
               onClick={() => download("excel")}>
               {downloading === "excel" ? "Preparing…" : <><FileSpreadsheet size={13} /> Excel</>}
             </Btn>
-            <Btn variant="ghost" disabled={busy || locked || populating}
+            <Btn disabled={busy || locked || populating}
               onClick={async () => {
-                if (!estimate) return;
                 setPopulating(true);
                 setBanner("");
                 try {
-                  const drData = await designRequirementsApi.list(project.id);
-                  const rows = drData.results ?? [];
-                  if (rows.length === 0) {
-                    setBanner("No design requirements found. Add them first.");
-                    setPopulating(false);
-                    return;
-                  }
-                  let added = 0;
-                  for (const row of rows) {
-                    if (!row.unit?.trim()) continue;
-                    // Try to find matching catalogue item
-                    let rate = 0;
-                    let unit = "Sft";
-                    try {
-                      const items = await itemsApi.list({ search: row.unit });
-                      const match = (items.results ?? []).find(
-                        (i: Item) => i.name.toLowerCase().includes(row.unit.toLowerCase())
-                      );
-                      if (match) {
-                        rate = parseFloat(match.default_rate) || 0;
-                        unit = match.unit || "Sft";
-                      }
-                    } catch { /* no match */ }
-                    // Calculate qty from dimensions
-                    const l = parseFloat(row.length) || 1;
-                    const b = parseFloat(row.breadth) || 1;
-                    const h = parseFloat(row.height) || 1;
-                    const qty = Math.round(l * b * 100) / 100; // L×B area
-                    await estimatesApi.addItem(project.id, estimate.id, {
-                      area: row.room,
-                      item: row.unit,
-                      qty, unit, rate, gst_pct: 18,
-                    });
-                    added++;
-                  }
+                  const res = await estimatesApi.generateFromDesign(project.id, estimate.id);
                   await refresh();
-                  toast.success("Populated", `${added} item(s) from Design Requirements`);
+                  if (res.created + res.updated === 0) {
+                    setBanner(res.skipped.length
+                      ? `No design requirement is linked to catalogue furniture yet (${res.skipped.slice(0, 4).join(", ")}…). Pick a furniture for each row in Design Requirements.`
+                      : "No design requirements found. Add them first.");
+                  } else {
+                    toast.success("Calculated from Design Requirements", res.detail);
+                  }
                 } catch (e) {
-                  setBanner(e instanceof ApiError ? e.message : "Failed to populate.");
+                  setBanner(e instanceof ApiError ? e.message : "Could not generate the estimate.");
                 } finally {
                   setPopulating(false);
                 }
               }}>
-              {populating ? "Populating…" : <><ClipboardList size={13} /> Populate from Design Req</>}
+              {populating ? "Calculating…" : <><ClipboardList size={13} /> Generate from Design Req</>}
+            </Btn>
+            <Btn variant="ghost" disabled={busy || locked} onClick={() => setAddingFurniture(true)}>
+              <Armchair size={13} /> Add Furniture
             </Btn>
             <div className="flex-1" />
             {estimate.status === "draft" && (
@@ -292,7 +267,7 @@ export default function EstimateTab({
               onGenerated={async () => {
                 await refresh();
                 setShowGenerator(false);
-                toast.success("Generated", "Estimate items created from material preferences");
+                toast.success("Applied", "Chosen brands and models applied to the estimate rows");
               }}
               onError={setBanner}
             />
@@ -320,6 +295,16 @@ export default function EstimateTab({
               () => estimatesApi.addFromCatalog(project.id, estimate.id, selections),
               `${selections.length} item(s) added`
             );
+          }}
+        />
+      )}
+
+      {addingFurniture && estimate && (
+        <AddFurnitureModal
+          onClose={() => setAddingFurniture(false)}
+          onAdd={async body => {
+            setAddingFurniture(false);
+            await guard(() => estimatesApi.addFurniture(project.id, estimate.id, body), "Furniture added");
           }}
         />
       )}
@@ -507,7 +492,7 @@ function LineItems({
   if (estimate.items.length === 0) {
     return (
       <EmptyState icon="" title="No line items yet"
-        hint={'Use "Add from Catalogue" to pull in items with their standard rates.'} />
+        hint={'Use "Generate from Design Req" or "Add Furniture" to calculate rows from the catalogue.'} />
     );
   }
 
@@ -638,10 +623,22 @@ function GroupBlock({
           </div>
         </td>
       </tr>
-      {/* Item rows */}
+      {/* Item rows — each furniture piece gets a header with its size and options */}
       {group.items.map((item, ri) => {
         const isOpen = expanded[item.id];
+        const startsGroup = !!item.group_key && (ri === 0 || group.items[ri - 1].group_key !== item.group_key);
         return (
+          <Fragment key={item.id}>
+          {startsGroup && (
+            <FurnitureGroupHeader
+              // Re-mount when the stored size/options change, so the header never
+              // edits (or sends back) a stale copy of them.
+              key={`${item.group_key}:${[item.width_ft, item.width_in, item.height_ft, item.height_in,
+                item.depth_ft, item.depth_in].join(".")}:${JSON.stringify(item.config ?? {})}`}
+              rows={group.items.filter(r => r.group_key === item.group_key)}
+              project={project} estimate={estimate} locked={locked}
+              onChanged={onChanged} onError={onError} />
+          )}
           <ItemRow
             key={item.id}
             item={item}
@@ -663,6 +660,7 @@ function GroupBlock({
             onToggle={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))}
             BD={BD}
           />
+          </Fragment>
         );
       })}
     </>
@@ -694,26 +692,29 @@ function ItemRow({
   onToggle: () => void;
   BD: string;
 }) {
-  // Picking a master item names the line, copies its rate/unit, and — when the
-  // item is linked to a furniture — pulls that furniture's material breakdown.
+  const generated = !!item.group_key;
+
+  // Picking a master item names the line and copies its rate/unit/size. An item
+  // that is a catalogue furniture is replaced by that furniture's calculated rows.
   const applyMaster = async (master: Item) => {
     try {
-      // Copy defaults: name, rate, unit AND dimensions + quantity
-      await estimatesApi.updateItem(project.id, estimate.id, item.id, {
-        item: master.name,
-        rate: master.default_rate,
-        unit: master.unit,
-        length: master.default_length || "",
-        breadth: master.default_breadth || "",
-        height: master.default_height || "",
-        qty: master.default_qty || "1",
-      });
       if (master.catalog_furniture) {
-        await estimatesApi.populateFromFurniture(project.id, estimate.id, item.id, master.catalog_furniture);
-      } else if (!parseFloat(master.default_rate)) {
-        // Unpriced cabinet/drawer item: start from the default template so the
-        // line gets a baseline cost (the server skips non-cabinet items).
-        await estimatesApi.configure(project.id, estimate.id, item.id, { auto: true });
+        await estimatesApi.addFurniture(project.id, estimate.id, {
+          furniture_id: master.catalog_furniture, area: item.area, zone: item.zone, item: master.name,
+          width: master.default_length || undefined, height: master.default_height || undefined,
+          depth: master.default_breadth || undefined,
+        });
+        await estimatesApi.deleteItem(project.id, estimate.id, item.id);
+      } else {
+        await estimatesApi.updateItem(project.id, estimate.id, item.id, {
+          item: master.name,
+          rate: master.default_rate,
+          unit: master.unit,
+          length: master.default_length || "",
+          breadth: master.default_breadth || "",
+          height: master.default_height || "",
+          qty: master.default_qty || "1",
+        });
       }
       await onChanged();
     } catch (e) {
@@ -725,7 +726,6 @@ function ItemRow({
     try {
       const master = await onCreateItem(name);
       await estimatesApi.updateItem(project.id, estimate.id, item.id, { item: master.name });
-      await estimatesApi.configure(project.id, estimate.id, item.id, { auto: true });
       await onChanged();
     } catch (e) {
       onError(e instanceof ApiError ? e.message : "Could not add the item.");
@@ -743,7 +743,7 @@ function ItemRow({
         </td>
         {/* Item — searchable Items dropdown with inline add */}
         <td className={`px-2 py-1.5 font-semibold text-nicara-dark min-w-[160px] ${BD}`}>
-          {locked ? (
+          {locked || generated ? (
             <div className="px-2 py-1.5 font-semibold text-nicara-dark">{val(item, "item") || "—"}</div>
           ) : (
             <SearchSelect
@@ -765,7 +765,7 @@ function ItemRow({
         {/* Width ft/in */}
         {(["width_ft", "width_in", "height_ft", "height_in", "depth_ft", "depth_in"] as const).map(dim => (
           <td key={dim} className={`px-2 py-1.5 w-[42px] ${BD}`}>
-            <EditableCell locked={locked} value={String(val(item, dim) || "0")} mono type="number"
+            <EditableCell locked={locked || generated} value={String(val(item, dim) || "0")} mono type="number"
               onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], [dim]: parseInt(v) || 0 } }))}
               onCommit={() => commit(item)} />
           </td>
@@ -794,11 +794,16 @@ function ItemRow({
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], specification: v } }))}
             onCommit={() => commit(item)} placeholder="Spec" />
         </td>
-        {/* Brand */}
+        {/* Brand — generated rows pick a model from the component's raw-material category */}
         <td className={`px-2 py-1.5 min-w-[80px] ${BD}`}>
+          {generated && item.raw_material_category && !locked ? (
+            <RawMaterialPicker item={item} project={project} estimate={estimate}
+              onChanged={onChanged} onError={onError} />
+          ) : (
           <EditableCell locked={locked} value={val(item, "brand")}
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], brand: v } }))}
             onCommit={() => commit(item)} placeholder="Brand" />
+          )}
         </td>
         {/* Model */}
         <td className={`px-2 py-1.5 min-w-[120px] ${BD}`}>
@@ -829,11 +834,14 @@ function ItemRow({
               className="w-3.5 h-3.5 accent-nicara-gold cursor-pointer" />
           )}
         </td>
-        {/* Qty */}
-        <td className={`px-2 py-1.5 w-[55px] text-right font-mono ${BD}`}>
+        {/* Qty — generated rows explain their quantity; a typed value is an override */}
+        <td className={`px-2 py-1.5 w-[70px] text-right font-mono ${BD} ${item.qty_overridden ? "bg-blue-50" : ""}`}
+          title={item.calc_basis || undefined}>
           <EditableCell locked={locked} value={val(item, "qty")} mono type="number"
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], qty: v } }))}
             onCommit={() => commit(item)} />
+          {generated && <QtyNote item={item} locked={locked} project={project} estimate={estimate}
+            onChanged={onChanged} onError={onError} />}
         </td>
         {/* Unit */}
         <td className={`px-2 py-1.5 w-[55px] ${BD}`}>
@@ -947,9 +955,6 @@ function ComponentBreakdown({
   const toast = useToast();
   const components = item.components ?? [];
   const [editing, setEditing] = useState<EstimateItemComponent | "new" | null>(null);
-  const [pulling, setPulling] = useState(false);
-  const [showPull, setShowPull] = useState(false);
-  const [configuring, setConfiguring] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const removeComponent = async (id: number) => {
@@ -960,18 +965,6 @@ function ComponentBreakdown({
     } catch (e) {
       onError(e instanceof ApiError ? e.message : "Could not remove the component.");
     } finally { setBusy(false); }
-  };
-
-  const pull = async (furnitureId: number) => {
-    setPulling(true);
-    try {
-      const res = await estimatesApi.populateFromFurniture(project.id, estimate.id, item.id, furnitureId);
-      setShowPull(false);
-      toast.success("Breakdown pulled", res.detail);
-      await onChanged();
-    } catch (e) {
-      onError(e instanceof ApiError ? e.message : "Could not pull the breakdown.");
-    } finally { setPulling(false); }
   };
 
   return (
@@ -987,16 +980,6 @@ function ComponentBreakdown({
         </div>
         {!locked && (
           <div className="flex items-center gap-2">
-            <button onClick={() => setConfiguring(c => !c)}
-              className={`flex items-center gap-1 px-2.5 py-1 border rounded-lg text-[10px] font-semibold cursor-pointer ${configuring
-                ? "bg-nicara-dark border-nicara-dark text-nicara-gold"
-                : "bg-white border-amber-300 text-amber-700 hover:bg-amber-100"}`}>
-              <Calculator size={11} /> {item.config ? "Edit Calculation" : "Cabinet Calculator"}
-            </button>
-            <button onClick={() => setShowPull(true)} disabled={pulling}
-              className="px-2.5 py-1 bg-white border border-amber-300 rounded-lg text-[10px] font-semibold text-amber-700 cursor-pointer hover:bg-amber-100">
-              {pulling ? "Pulling…" : "⇊ Pull from Catalogue"}
-            </button>
             <button onClick={() => setEditing("new")}
               className="px-2.5 py-1 bg-nicara-gold border-none rounded-lg text-[10px] font-bold text-white cursor-pointer">
               + Basic Component
@@ -1004,20 +987,6 @@ function ComponentBreakdown({
           </div>
         )}
       </div>
-
-      {configuring && !locked && (
-        <CabinetConfigurator
-          project={project} estimate={estimate} item={item}
-          onApplied={onChanged} onClose={() => setConfiguring(false)} />
-      )}
-      {item.config && !configuring && (
-        <div className="mb-2 text-[10px] text-amber-700">
-          Calculated from: {(item.config.quantity ?? 1) > 1 ? `${item.config.quantity} × ` : ""}{item.config.template.replace(/_/g, " ")} · {Math.round(item.config.length)}×{Math.round(item.config.depth)}×{Math.round(item.config.height)} mm
-          · {item.config.drawers} drawer(s), {item.config.doors} door(s), {item.config.shelves} shelf(s)
-          · {item.config.carcass_thickness}mm carcass on {item.config.board} sheets · {item.config.finish}
-          · +{item.config.wastage_pct ?? 0}% waste, {item.config.margin_pct ?? 0}% margin
-        </div>
-      )}
 
       <div className="overflow-x-auto">
         <table className="w-full text-[10px] min-w-[760px] border border-amber-200 rounded-lg overflow-hidden bg-white">
@@ -1054,7 +1023,7 @@ function ComponentBreakdown({
             {components.length === 0 && (
               <tr className="border-t border-amber-200">
                 <td colSpan={9} className="px-2 py-3 text-center text-surface-400 text-[10px] italic">
-                  No breakdown yet. Add a basic component, or pull one from the catalogue.
+                  No breakdown yet. Add a basic component to cost this line from its parts.
                   {" "}Until then the line uses qty × rate.
                 </td>
               </tr>
@@ -1078,9 +1047,6 @@ function ComponentBreakdown({
           project={project} estimate={estimate} itemId={item.id}
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); toast.success("Saved", "Breakdown updated"); await onChanged(); }} />
-      )}
-      {showPull && (
-        <PullFromCatalogueModal onClose={() => setShowPull(false)} onPick={pull} busy={pulling} />
       )}
     </div>
   );
@@ -1143,53 +1109,6 @@ function ComponentModal({
       <div className="mt-3 text-right text-[12px] text-surface-500">
         Amount: <span className="font-bold text-nicara-dark">{inr(String(previewAmount))}</span>
       </div>
-    </Modal>
-  );
-}
-
-function PullFromCatalogueModal({
-  onClose, onPick, busy,
-}: {
-  onClose: () => void;
-  onPick: (furnitureId: number) => void;
-  busy: boolean;
-}) {
-  const [search, setSearch] = useState("");
-  const { data, loading, error, reload } = useApiData(() => catalogApi.furniture(), []);
-  const furniture = (data?.results ?? []).filter(f =>
-    !search || f.name.toLowerCase().includes(search.toLowerCase()));
-
-  return (
-    <Modal open onClose={onClose} size="md" title="Pull Breakdown from Catalogue"
-      subtitle="Copies the furniture's bill of materials into this line's breakdown"
-      footer={<Btn variant="ghost" onClick={onClose} disabled={busy}>Cancel</Btn>}>
-      <div className="relative mb-3">
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-surface-400">🔍</span>
-        <input value={search} onChange={e => setSearch(e.target.value)} autoFocus
-          placeholder="Search wardrobe, kitchen base unit…"
-          className="w-full pl-9 pr-3 py-2.5 border border-surface-200 rounded-xl text-[12px] outline-none focus:border-nicara-gold" />
-      </div>
-      {loading && <Loading />}
-      {error && <ErrorState message={error} onRetry={reload} />}
-      {!loading && (
-        <div className="max-h-[360px] overflow-y-auto border border-surface-200 rounded-xl">
-          {furniture.map(f => (
-            <button key={f.id} onClick={() => onPick(f.id)} disabled={busy}
-              className="w-full flex items-center justify-between px-3 py-2.5 border-b border-surface-100 last:border-0 cursor-pointer hover:bg-nicara-gold/5 text-left bg-white">
-              <div>
-                <div className="text-[12px] font-semibold text-nicara-dark">{f.name}</div>
-                <div className="text-[10px] text-surface-400">
-                  {f.room_names.length ? f.room_names.join(", ") : "All rooms"} · {f.part_count} part(s)
-                </div>
-              </div>
-              <span className="text-[11px] text-nicara-gold font-semibold">Pull →</span>
-            </button>
-          ))}
-          {furniture.length === 0 && (
-            <div className="px-3 py-6 text-center text-surface-400 text-[12px]">No furniture matches</div>
-          )}
-        </div>
-      )}
     </Modal>
   );
 }
@@ -1385,9 +1304,218 @@ function CatalogPicker({
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   SMART ESTIMATE GENERATOR — Picks items from catalogue, auto-fills
-   BOM via add-from-catalog (which triggers populate_line_from_furniture)
+   CALCULATED FURNITURE GROUPS — size, options, recalculation
    ══════════════════════════════════════════════════════════════════ */
+
+const SIZE_IN = "w-[38px] px-1 py-0.5 border border-surface-200 rounded text-[10px] font-mono text-center outline-none focus:border-nicara-gold bg-white";
+
+/** Header above one furniture piece's rows: its size (ft/in) and options; changes recalculate the group. */
+function FurnitureGroupHeader({ rows, project, estimate, locked, onChanged, onError }: {
+  rows: EstimateItem[];
+  project: Project;
+  estimate: Estimate;
+  locked: boolean;
+  onChanged: () => Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const first = rows[0];
+  const initial = {
+    width_ft: first.width_ft, width_in: first.width_in, height_ft: first.height_ft,
+    height_in: first.height_in, depth_ft: first.depth_ft, depth_in: first.depth_in,
+  };
+  const [size, setSize] = useState(initial);
+  const [options, setOptions] = useState<CalcOptions>(first.config ?? {});
+  const [busy, setBusy] = useState(false);
+  const dirty = JSON.stringify(size) !== JSON.stringify(initial)
+    || JSON.stringify(options) !== JSON.stringify(first.config ?? {});
+  const subtotal = rows.reduce((s, r) => s + parseFloat(r.total_amount || "0"), 0);
+  const overrides = first.config?.overrides ?? {};
+  const needsInput = rows.filter(r => r.flag).length;
+
+  const run = async (action: () => Promise<unknown>) => {
+    setBusy(true);
+    try { await action(); await onChanged(); }
+    catch (e) { onError(e instanceof ApiError ? e.message : "Could not update the furniture."); }
+    finally { setBusy(false); }
+  };
+
+  const dim = (k: keyof typeof size) => (
+    <input className={SIZE_IN} type="number" min={0} value={size[k]} disabled={locked || busy}
+      onChange={e => setSize(s => ({ ...s, [k]: parseInt(e.target.value) || 0 }))} />
+  );
+
+  return (
+    <tr className="bg-surface-50 border-t-2 border-nicara-gold/30">
+      <td colSpan={30} className="px-3 py-1.5">
+        <div className="flex items-center gap-3 flex-wrap text-[10px]">
+          <span className="text-[11px] font-bold text-nicara-dark flex items-center gap-1.5">
+            <Armchair size={12} className="text-nicara-gold" /> {first.item}
+          </span>
+          {first.furniture_name && first.furniture_name !== first.item && (
+            <span className="text-surface-400">{first.furniture_name}</span>
+          )}
+          {first.zone && <span className="text-surface-500">· {first.zone}</span>}
+          <span className="flex items-center gap-1 text-surface-500">
+            W {dim("width_ft")}′{dim("width_in")}″ · H {dim("height_ft")}′{dim("height_in")}″ · D {dim("depth_ft")}′{dim("depth_in")}″
+          </span>
+          {!locked && <OptionsControls compact options={options} onChange={setOptions} />}
+          {Object.keys(overrides).length > 0 && (
+            <span className="text-blue-600" title="Counts typed on the Doors / Drawers / Shelves rows">
+              set: {Object.entries(overrides).map(([k, v]) => `${k} ${v}`).join(", ")}
+            </span>
+          )}
+          {needsInput > 0 && <span className="text-amber-600">⚑ {needsInput} row(s) need a quantity</span>}
+          <span className="ml-auto font-semibold text-nicara-gold">{inr(String(subtotal))}</span>
+          {!locked && (
+            <>
+              <button disabled={!dirty || busy}
+                onClick={() => run(() => estimatesApi.recalculateGroup(project.id, estimate.id, first.group_key, { ...size, options }))}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border-none cursor-pointer ${dirty
+                  ? "bg-nicara-gold text-white" : "bg-surface-100 text-surface-400 cursor-default"}`}>
+                <RefreshCw size={10} /> {busy ? "Recalculating…" : "Recalculate"}
+              </button>
+              <button disabled={busy} title="Remove this furniture's rows"
+                onClick={() => run(() => estimatesApi.deleteGroup(project.id, estimate.id, first.group_key))}
+                className="bg-transparent border-none text-red-300 cursor-pointer p-0 hover:text-red-500"><Trash2 size={12} /></button>
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+/** Under a generated row's qty: typed-over marker with reset, else the rule's calculated value. */
+function QtyNote({ item, locked, project, estimate, onChanged, onError }: {
+  item: EstimateItem; locked: boolean; project: Project; estimate: Estimate;
+  onChanged: () => Promise<void>; onError: (msg: string) => void;
+}) {
+  const override = !!(item.config?.overrides && item.quantity_rule in item.config.overrides);
+  if (!item.qty_overridden && !override) return null;
+  const reset = async () => {
+    try { await estimatesApi.resetQty(project.id, estimate.id, item.id); await onChanged(); }
+    catch (e) { onError(e instanceof ApiError ? e.message : "Could not reset."); }
+  };
+  return (
+    <div className="flex items-center justify-end gap-1 px-2 text-[9px] text-blue-600 whitespace-nowrap">
+      {item.qty_overridden ? `calc ${parseFloat(item.calculated_qty ?? "0")}` : "set"}
+      {!locked && (
+        <button onClick={reset} title="Back to the calculated quantity"
+          className="bg-transparent border-none p-0 cursor-pointer text-blue-500 hover:text-nicara-gold"><RotateCcw size={9} /></button>
+      )}
+    </div>
+  );
+}
+
+/* Raw materials per category, fetched once per page view. */
+const categoryCache = new Map<number, Promise<LibraryItem[]>>();
+function categoryItems(id: number) {
+  if (!categoryCache.has(id)) {
+    categoryCache.set(id, libraryApi.categoryItems(id).then(r => r.results).catch(err => {
+      categoryCache.delete(id);
+      throw err;
+    }));
+  }
+  return categoryCache.get(id)!;
+}
+
+/** Brand / model for a generated row — any model in its component's raw-material category. */
+function RawMaterialPicker({ item, project, estimate, onChanged, onError }: {
+  item: EstimateItem; project: Project; estimate: Estimate;
+  onChanged: () => Promise<void>; onError: (msg: string) => void;
+}) {
+  const [choices, setChoices] = useState<LibraryItem[] | null>(null);
+  const load = () => {
+    if (choices === null && item.raw_material_category) {
+      categoryItems(item.raw_material_category).then(setChoices).catch(() => setChoices([]));
+    }
+  };
+  const label = (m: LibraryItem) => [m.brand_name, m.model_name].filter(Boolean).join(" — ");
+  const choose = async (id: string) => {
+    if (!id) return;
+    try {
+      await estimatesApi.updateItem(project.id, estimate.id, item.id, { raw_material: Number(id) });
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Could not change the brand.");
+    }
+  };
+  return (
+    <select value={item.raw_material ? String(item.raw_material) : ""} onFocus={load} onMouseDown={load}
+      onChange={e => choose(e.target.value)} title="Brand / model — re-prices the row"
+      className="w-full px-1 py-1 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white cursor-pointer">
+      {(choices ?? []).length === 0 && <option value={item.raw_material ?? ""}>{item.brand || "—"}</option>}
+      {(choices ?? []).map(m => (
+        <option key={m.id} value={m.id}>{label(m)} (₹{parseFloat(m.default_rate)})</option>
+      ))}
+    </select>
+  );
+}
+
+/** Pick a catalogue furniture, its room/zone, size and options. */
+function AddFurnitureModal({ onClose, onAdd }: {
+  onClose: () => void;
+  onAdd: (body: Parameters<typeof estimatesApi.addFurniture>[2]) => void;
+}) {
+  const furniture = useApiData(() => catalogApi.furniture(), []);
+  const zones = useApiData(() => catalogApi.zones(), []);
+  const [furnitureId, setFurnitureId] = useState<number | null>(null);
+  const [form, setForm] = useState({ area: "", zone: "", item: "", width: "", height: "", depth: "" });
+  const [options, setOptions] = useState<CalcOptions>({});
+  const chosen = (furniture.data?.results ?? []).find(f => f.id === furnitureId);
+  const set = (k: keyof typeof form, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  return (
+    <Modal open onClose={onClose} size="lg" title="Add Furniture"
+      subtitle="Adds the furniture's rows with quantities calculated from its size"
+      footer={<>
+        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn disabled={!furnitureId}
+          onClick={() => furnitureId && onAdd({
+            furniture_id: furnitureId, area: form.area, zone: form.zone, item: form.item || undefined,
+            width: form.width || undefined, height: form.height || undefined, depth: form.depth || undefined, options,
+          })}>Add</Btn>
+      </>}>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2">
+          <div className="text-[10px] font-bold text-surface-500 uppercase tracking-wider mb-1.5">Furniture</div>
+          <SearchSelect value={chosen?.name ?? ""} options={(furniture.data?.results ?? []).filter(f => f.is_active)}
+            loading={furniture.loading} getLabel={f => f.name} getSublabel={f => f.cabinet_type_display}
+            placeholder="Search wardrobe, crockery unit…" onPick={f => setFurnitureId(f.id)}
+            className="w-full px-3 py-2.5 border border-surface-200 rounded-xl text-[12px] bg-white outline-none focus:border-nicara-gold" />
+        </div>
+        <Field label="Room / Area" value={form.area} onChange={v => set("area", v)} placeholder="Master Bedroom" />
+        <label className="block">
+          <span className="text-[10px] font-bold text-surface-500 uppercase tracking-wider block mb-1.5">Zone</span>
+          <select value={form.zone} onChange={e => set("zone", e.target.value)}
+            className="w-full px-3 py-2.5 border border-surface-200 rounded-xl text-[12px] bg-white cursor-pointer outline-none focus:border-nicara-gold">
+            <option value="">—</option>
+            {(zones.data?.results ?? []).map(z => <option key={z.id} value={z.name}>{z.name}</option>)}
+          </select>
+        </label>
+        <div className="col-span-2">
+          <Field label="Name on the estimate" value={form.item} onChange={v => set("item", v)}
+            placeholder={chosen?.name ?? "Defaults to the furniture name"} />
+        </div>
+        <Field label="Width" value={form.width} onChange={v => set("width", v)} placeholder={chosen?.default_length || `7'0"`} />
+        <Field label="Height" value={form.height} onChange={v => set("height", v)} placeholder={chosen?.default_height || `9'6"`} />
+        <Field label="Depth" value={form.depth} onChange={v => set("depth", v)} placeholder={chosen?.default_breadth || `2'0"`} />
+        <div className="flex items-end pb-2"><OptionsControls compact options={options} onChange={setOptions} /></div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SMART ESTIMATE GENERATOR — brand/model preferences applied to rows
+   ══════════════════════════════════════════════════════════════════ */
+
+const SMART_GROUPS: { key: string; label: string; hint: string }[] = [
+  { key: "plywood", label: "Plywood", hint: "Applies to every ply thickness that brand makes" },
+  { key: "hardware", label: "Hardware", hint: "Hinges, channels, handles, locks" },
+  { key: "kitchen_accessories", label: "Kitchen Accessories", hint: "Baskets, trays, organisers" },
+  { key: "finishing", label: "Finishing", hint: "Laminate, acrylic, liner, edging" },
+];
 
 function SmartEstimateGenerator({
   projectId, estimateId, disabled, onGenerated, onError,
@@ -1398,133 +1526,70 @@ function SmartEstimateGenerator({
   onGenerated: () => Promise<void>;
   onError: (msg: string) => void;
 }) {
-  const [generating, setGenerating] = useState(false);
-  // Fetch real items from catalogue
-  const itemsQuery = useApiData(() => itemsApi.list({}), []);
-  const masterItems: Item[] = itemsQuery.data?.results ?? [];
+  const options = useApiData(() => libraryApi.smartOptions(), []);
+  const [chosen, setChosen] = useState<Record<string, string>>({});
+  const [applying, setApplying] = useState(false);
+  const picked = Object.values(chosen).filter(Boolean).map(Number);
 
-  // Group items by category
-  const grouped = useMemo(() => {
-    const map = new Map<string, Item[]>();
-    masterItems.forEach(item => {
-      const cat = item.category_name || "Other";
-      if (!map.has(cat)) map.set(cat, []);
-      map.get(cat)!.push(item);
-    });
-    return Array.from(map.entries());
-  }, [masterItems]);
-
-  // Track selected items with area + qty overrides
-  const [selected, setSelected] = useState<Map<number, { area: string; qty: number }>>(new Map());
-
-  const toggle = (item: Item) => {
-    setSelected(prev => {
-      const next = new Map(prev);
-      if (next.has(item.id)) next.delete(item.id);
-      else next.set(item.id, { area: item.default_room || "", qty: parseFloat(item.default_qty) || 1 });
-      return next;
-    });
-  };
-
-  const update = (id: number, patch: Partial<{ area: string; qty: number }>) => {
-    setSelected(prev => {
-      const next = new Map(prev);
-      const existing = next.get(id);
-      if (existing) next.set(id, { ...existing, ...patch });
-      return next;
-    });
-  };
-
-  const generate = async () => {
-    if (selected.size === 0) return;
-    setGenerating(true);
+  const apply = async () => {
+    if (picked.length === 0) return;
+    setApplying(true);
     try {
-      const selections = [...selected.entries()].map(([item_id, v]) => ({
-        item_id, area: v.area, qty: v.qty,
-      }));
-      await estimatesApi.addFromCatalog(projectId, estimateId, selections);
+      await estimatesApi.applySmartMaterials(projectId, estimateId, picked);
       await onGenerated();
     } catch (e) {
-      onError(e instanceof ApiError ? e.message : "Failed to generate estimate.");
+      onError(e instanceof ApiError ? e.message : "Could not apply the preferences.");
     } finally {
-      setGenerating(false);
+      setApplying(false);
     }
+  };
+
+  const grouped = (key: string) => {
+    const byCategory = new Map<string, SmartOption[]>();
+    (options.data?.[key] ?? []).forEach(o => {
+      if (!byCategory.has(o.category)) byCategory.set(o.category, []);
+      byCategory.get(o.category)!.push(o);
+    });
+    return Array.from(byCategory.entries());
   };
 
   return (
     <div className="mb-4 bg-gradient-to-br from-nicara-dark to-[#2a1f18] rounded-2xl overflow-hidden border border-stone-700">
-      {/* Header */}
       <div className="px-5 py-3 border-b border-stone-700">
         <div className="text-[14px] font-bold text-white flex items-center gap-2">
           <Brain size={16} /> Smart Estimate Generator
         </div>
         <div className="text-[11px] text-stone-400 mt-0.5">
-          Select items for a typical scope — each item auto-populates its full material breakdown (BOM) from the catalogue
+          Choose brands and models — every matching row is re-priced from Raw Material. Quantities don&apos;t change.
         </div>
       </div>
 
-      {/* Items grouped by category */}
-      <div className="max-h-[380px] overflow-y-auto">
-        {itemsQuery.loading && <div className="p-4 text-center text-stone-400 text-[11px]">Loading catalogue…</div>}
-        {grouped.map(([cat, items]) => (
-          <div key={cat}>
-            <div className="px-5 py-1.5 bg-stone-800/60 text-[10px] font-bold text-stone-300 uppercase tracking-wider border-b border-stone-700">
-              {items[0]?.category_icon} {cat} ({items.length})
-            </div>
-            {items.map(item => {
-              const picked = selected.get(item.id);
-              const dims = [item.default_length, item.default_breadth, item.default_height].filter(d => d && d !== "—" && d !== "-").join(" × ");
-              return (
-                <div key={item.id}
-                  className={`flex items-center gap-3 px-5 py-2 border-b border-stone-700/50 transition-colors ${
-                    picked ? "bg-nicara-gold/10" : "hover:bg-stone-800/40"
-                  }`}>
-                  <input type="checkbox" checked={!!picked} onChange={() => toggle(item)}
-                    className="w-3.5 h-3.5 accent-nicara-gold cursor-pointer flex-shrink-0" />
-                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => toggle(item)}>
-                    <div className="text-[11px] font-semibold text-white truncate">
-                      {item.name}
-                      {item.catalog_furniture_name && (
-                        <span className="ml-1.5 text-[9px] text-nicara-gold font-normal">⇄ {item.catalog_furniture_name}</span>
-                      )}
-                    </div>
-                    <div className="text-[9px] text-stone-400 truncate">
-                      {dims && <span className="font-mono mr-2">{dims}</span>}
-                      {item.description}
-                    </div>
-                  </div>
-                  <div className="text-[11px] text-nicara-gold font-semibold whitespace-nowrap">
-                    {inr(item.default_rate)}<span className="text-[9px] text-stone-400">/{item.unit}</span>
-                  </div>
-                  {picked && (
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <input value={picked.area} onChange={e => update(item.id, { area: e.target.value })}
-                        placeholder="Room"
-                        className="w-[110px] px-2 py-1 bg-stone-800 border border-stone-600 rounded-lg text-[10px] text-white outline-none focus:border-nicara-gold" />
-                      <input type="number" value={picked.qty}
-                        onChange={e => update(item.id, { qty: parseFloat(e.target.value) || 0 })}
-                        className="w-[50px] px-2 py-1 bg-stone-800 border border-stone-600 rounded-lg text-[10px] text-white font-mono outline-none focus:border-nicara-gold" />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+      {options.loading && <div className="p-4 text-center text-stone-400 text-[11px]">Loading raw materials…</div>}
+      <div className="grid grid-cols-4 gap-3 p-5">
+        {SMART_GROUPS.map(g => (
+          <label key={g.key} className="block">
+            <span className="text-[10px] font-bold text-stone-300 uppercase tracking-wider block mb-1">{g.label}</span>
+            <select value={chosen[g.key] ?? ""} onChange={e => setChosen(c => ({ ...c, [g.key]: e.target.value }))}
+              className="w-full px-2 py-2 bg-stone-800 border border-stone-600 rounded-lg text-[11px] text-white outline-none focus:border-nicara-gold cursor-pointer">
+              <option value="">Keep current</option>
+              {grouped(g.key).map(([category, items]) => (
+                <optgroup key={category} label={category}>
+                  {items.map(o => <option key={o.id} value={o.id}>{o.label} (₹{parseFloat(o.price)}/{o.unit})</option>)}
+                </optgroup>
+              ))}
+            </select>
+            <span className="text-[9px] text-stone-500 mt-1 block">{g.hint}</span>
+          </label>
         ))}
       </div>
 
-      {/* Selected count + Generate */}
       <div className="px-5 py-3 border-t border-stone-700 flex items-center justify-between">
-        <div className="flex flex-wrap gap-1.5">
-          {selected.size > 0 && (
-            <span className="text-[11px] text-stone-300">
-              {selected.size} item(s) selected — each will auto-generate its material breakdown
-            </span>
-          )}
-        </div>
-        <button onClick={generate} disabled={disabled || generating || selected.size === 0}
+        <span className="text-[11px] text-stone-300">
+          {picked.length ? `${picked.length} preference(s) chosen` : "Pick at least one brand / model"}
+        </span>
+        <button onClick={apply} disabled={disabled || applying || picked.length === 0}
           className="px-6 py-2.5 bg-nicara-gold border-none rounded-xl text-white text-[12px] font-bold cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50">
-          {generating ? "Generating…" : `Generate ${selected.size > 0 ? `${selected.size} Item(s)` : "Estimate"}`}
+          {applying ? "Applying…" : "Apply to Estimate"}
         </button>
       </div>
     </div>
