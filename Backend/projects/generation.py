@@ -2,13 +2,9 @@
 Initial Estimate generation — furniture + size → the calculation sheet's rows.
 
 Each furniture piece becomes a *group* of estimate rows sharing a group_key:
-Spec Purpose rows (Doors, Drawers, Shelves), Procurement rows (ply, liner,
-adhesive, …) and Service rows (carpentry, fixing). Quantities come from
+Spec Purpose rows (Doors, Drawers, Shelves), Procurement rows (ply, hinges,
+liner, laminate, …) and Service rows (carpentry, fixing). Quantities come from
 catalog/rules.py; brand, model and rate from the Raw Material Library.
-
-Doors, Drawers and Shelves are priced per piece: their material (shutter ply,
-laminate, hinges, handles; drawer boxes, channels, knobs; shelf boards, lining)
-is stored as the row's component breakdown, and taken out of the material rows.
 
     create_group()         add one furniture piece to an estimate
     recalculate_group()    re-run the rules after a size / option / count change —
@@ -24,7 +20,12 @@ from django.db import transaction
 from catalog import rules
 from catalog.pricing import application_text, breakdown, size_inches
 
-from .models import EstimateItem, EstimateItemComponent
+from .models import EstimateItem
+
+# Rows that the short-lived per-piece pricing (Oct 2026) folded into the
+# Doors / Drawers / Shelves rows; recalculating such a group brings them back.
+FOLDED_RULES = {'hinges', 'handles', 'knobs', 'drawer_channels', 'drawer_box_ply',
+                'edge_banding', 'finish_sheets', 'glass_shelves'}
 
 
 def _dims(width, height, depth):
@@ -47,30 +48,6 @@ def row_size(row):
             rules.to_inches(row.depth_ft, row.depth_in))
 
 
-def write_parts(row, parts):
-    """Replace a Doors/Drawers/Shelves row's breakdown with `parts` (from
-    catalog.pricing.breakdown). A brand/model or price already chosen for a
-    part (matched by its basic component) is kept."""
-    kept = {c.basic_component: c for c in row.components.all()}
-    row.components.all().delete()
-    new = []
-    for sno, part in enumerate(parts, start=1):
-        name = part['basic_component'].name
-        old = kept.get(name)
-        if old is not None and (old.library_material_item_id or old.price):
-            material, brand, model, price = old.library_material_item, old.brand, old.model, old.price
-        else:
-            material, brand, model, price = part['raw_material'], part['brand'], part['model'], part['rate']
-        qty = part['qty']
-        new.append(EstimateItemComponent(
-            estimate_item=row, sno=sno, basic_component=name, detail=part['detail'][:150],
-            brand=brand, model=model, qty=qty, unit=part['unit'], price=price,
-            amount=rules.d2(qty * price), library_material_item=material,
-        ))
-    EstimateItemComponent.objects.bulk_create(new)
-    row.recompute_amount()
-
-
 def group_rows(estimate, group_key):
     return list(EstimateItem.objects.filter(estimate=estimate, group_key=group_key)
                 .select_related('furniture', 'basic_component').order_by('sno', 'id'))
@@ -84,30 +61,21 @@ def create_group(estimate, furniture, width, height, depth, *, options=None, are
     rows, calc = breakdown(furniture, width, height, depth, options)
     key = uuid.uuid4().hex
     dims = _dims(width, height, depth)
-    created = [
-        _new_row(estimate, key, furniture, r, dims, options, area=area, zone=zone,
-                 item_name=item_name or furniture.name, design_requirement=design_requirement)
-        for r in rows
-    ]
+    created = []
+    for r in rows:
+        created.append(EstimateItem.objects.create(
+            estimate=estimate, group_key=key, design_requirement=design_requirement,
+            furniture=furniture, basic_component=r['basic_component'], raw_material=r['raw_material'],
+            area=area, zone=zone, item=item_name or furniture.name, **dims,
+            item_type=r['item_type'], specification=r['specification'],
+            brand=r['brand'], model_name=r['model'], application=r['application'],
+            qty=r['qty'], calculated_qty=r['qty'], unit=r['unit'],
+            rate=r['rate'], price_unit=r['price_unit'],
+            margin_pct=furniture.margin_pct, gst_pct=r['gst_pct'],
+            quantity_rule=r['quantity_rule'], calc_basis=r['basis'][:500],
+            flag=r['needs_input'], config=options,
+        ))
     return created, calc
-
-
-def _new_row(estimate, key, furniture, r, dims, options, *, area, zone, item_name, design_requirement, sno=0):
-    row = EstimateItem.objects.create(
-        estimate=estimate, group_key=key, design_requirement=design_requirement, sno=sno,
-        furniture=furniture, basic_component=r['basic_component'], raw_material=r['raw_material'],
-        area=area, zone=zone, item=item_name, **dims,
-        item_type=r['item_type'], specification=r['specification'],
-        brand=r['brand'], model_name=r['model'], application=r['application'],
-        qty=r['qty'], calculated_qty=r['qty'], unit=r['unit'],
-        rate=r['rate'], price_unit=r['price_unit'],
-        margin_pct=furniture.margin_pct, gst_pct=r['gst_pct'],
-        quantity_rule=r['quantity_rule'], calc_basis=r['basis'][:500],
-        flag=r['needs_input'], config=options,
-    )
-    if r['parts']:
-        write_parts(row, r['parts'])
-    return row
 
 
 @transaction.atomic
@@ -116,10 +84,7 @@ def recalculate_group(estimate, group_key, *, width=None, height=None, depth=Non
     """
     Re-run the rules for a group. Sizes/options not given keep their current
     values. Rows whose quantity was typed over keep it (their calculated value
-    and basis still refresh); fixed-quantity rows are left alone. Doors /
-    Drawers / Shelves rebuild their per-piece breakdown; a material row whose
-    whole quantity now sits in those pieces is removed, and one that gets a
-    quantity back (e.g. a visible side to laminate) is added again.
+    and basis still refresh); fixed-quantity rows are left alone.
     """
     rows = group_rows(estimate, group_key)
     if not rows:
@@ -139,20 +104,10 @@ def recalculate_group(estimate, group_key, *, width=None, height=None, depth=Non
         if 'overrides' not in options and current.get('overrides'):
             options['overrides'] = current['overrides']
     furniture = first.furniture
+    calc = rules.compute(furniture.cabinet_type, width, height, depth, options) if furniture else None
     dims = _dims(width, height, depth)
-    plan, calc, linked = {}, None, set()
-    if furniture is not None:
-        planned, calc = breakdown(furniture, width, height, depth, options)
-        plan = {r['basic_component'].id: r for r in planned}
-        linked = set(furniture.components.values_list('basic_component_id', flat=True))
 
-    seen, kept = set(), []
     for row in rows:
-        r = plan.get(row.basic_component_id)
-        if (r is None and row.basic_component_id in linked and row.quantity_rule != 'fixed'
-                and not row.qty_overridden):
-            row.delete()            # its whole quantity is now inside the doors / drawers / shelves
-            continue
         for field, value in dims.items():
             setattr(row, field, value)
         row.config = options
@@ -162,31 +117,39 @@ def recalculate_group(estimate, group_key, *, width=None, height=None, depth=Non
             row.zone = zone
         if item_name is not None:
             row.item = item_name
-        if r is not None:
-            seen.add(row.basic_component_id)
-            if row.quantity_rule != 'fixed':
-                row.calculated_qty, row.calc_basis = r['qty'], r['basis'][:500]
-                if not row.qty_overridden:
-                    row.qty = r['qty']
-                    row.flag = r['needs_input']
+        if row.item_type == 'Spec Purpose' and row.components.exists():
+            row.components.all().delete()      # a per-piece breakdown → back to a count
+            row.rate = 0
+        bc = row.basic_component
+        if calc is not None and bc is not None and row.quantity_rule != 'fixed':
+            qty, basis, needs = calc.quantity(row.quantity_rule, None, bc.default_qty)
+            row.calculated_qty, row.calc_basis = qty, basis[:500]
+            if not row.qty_overridden:
+                row.qty = qty
+                row.flag = needs
             if row.item_type == 'Spec Purpose':
                 row.application = application_text(row.quantity_rule, row.qty, options)
         row.save()
-        if r is not None and row.item_type == 'Spec Purpose':
-            write_parts(row, r['parts'])
-        kept.append(row)
 
-    if calc is not None:
-        sno = max((r.sno for r in kept), default=0)
-        for bc_id, r in plan.items():
-            if bc_id in seen or r['quantity_rule'] not in calc.shares:
-                continue
-            kept.append(_new_row(estimate, group_key, furniture, r, dims, options,
-                                 area=kept[0].area if kept else first.area,
-                                 zone=kept[0].zone if kept else first.zone,
-                                 item_name=kept[0].item if kept else first.item,
-                                 design_requirement=first.design_requirement, sno=sno))
-    return kept, calc
+    if furniture is not None:
+        present = {r.basic_component_id for r in rows}
+        missing = [r for r in breakdown(furniture, width, height, depth, options)[0]
+                   if r['basic_component'].id not in present and r['quantity_rule'] in FOLDED_RULES]
+        sno = max(r.sno for r in rows)
+        for r in missing:
+            rows.append(EstimateItem.objects.create(
+                estimate=estimate, group_key=group_key, design_requirement=first.design_requirement,
+                sno=sno, furniture=furniture, basic_component=r['basic_component'],
+                raw_material=r['raw_material'], area=first.area, zone=first.zone, item=first.item, **dims,
+                item_type=r['item_type'], specification=r['specification'],
+                brand=r['brand'], model_name=r['model'], application=r['application'],
+                qty=r['qty'], calculated_qty=r['qty'], unit=r['unit'],
+                rate=r['rate'], price_unit=r['price_unit'],
+                margin_pct=first.margin_pct, gst_pct=r['gst_pct'],
+                quantity_rule=r['quantity_rule'], calc_basis=r['basis'][:500],
+                flag=r['needs_input'], config=options,
+            ))
+    return rows, calc
 
 
 def set_spec_count(estimate, row, count):

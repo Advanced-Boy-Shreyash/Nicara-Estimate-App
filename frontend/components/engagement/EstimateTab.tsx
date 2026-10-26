@@ -655,9 +655,6 @@ function ItemRow({
   BD: string;
 }) {
   const generated = !!item.group_key;
-  // Doors / Drawers / Shelves: priced per piece from their parts (the Detail breakdown).
-  const perPiece = generated && item.item_type === "Spec Purpose" && (item.components?.length ?? 0) > 0;
-  const pieceName = { doors: "door", drawers: "drawer", shelves: "shelf" }[item.quantity_rule] ?? "piece";
 
   return (
     <>
@@ -768,19 +765,11 @@ function ItemRow({
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], unit: v } }))}
             onCommit={() => commit(item)} />
         </td>
-        {/* Price (rate) — per door / drawer / shelf for those rows, built from their parts */}
+        {/* Price (rate) */}
         <td className={`px-2 py-1.5 w-[70px] text-right font-mono ${BD}`}>
-          {perPiece ? (
-            <button onClick={onToggle} title={`Cost of one ${pieceName} — open its parts`}
-              className="w-full text-right bg-transparent border-none p-0 px-2 py-1.5 cursor-pointer font-mono text-[11px] text-nicara-dark hover:text-nicara-gold">
-              {inr(item.rate)}
-              <div className="text-[9px] text-surface-400 font-sans">per {pieceName} · {item.components!.length} parts</div>
-            </button>
-          ) : (
-            <EditableCell locked={locked} value={val(item, "rate")} mono type="number"
-              onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], rate: v } }))}
-              onCommit={() => commit(item)} />
-          )}
+          <EditableCell locked={locked} value={val(item, "rate")} mono type="number"
+            onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], rate: v } }))}
+            onCommit={() => commit(item)} />
         </td>
         {/* Price Unit */}
         <td className={`px-2 py-1.5 w-[70px] ${BD}`}>
@@ -881,7 +870,6 @@ function ComponentBreakdown({
 }) {
   const toast = useToast();
   const components = item.components ?? [];
-  const perPiece = !!item.group_key && item.item_type === "Spec Purpose";
   const [editing, setEditing] = useState<EstimateItemComponent | "new" | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -899,12 +887,10 @@ function ComponentBreakdown({
     <div className="bg-amber-50 border-l-[3px] border-l-nicara-gold px-4 py-3">
       <div className="flex items-center justify-between mb-2">
         <div className="text-[10px] font-bold text-amber-800">
-          📋 {perPiece ? `${item.specification} — what ${parseFloat(item.qty)} ${item.specification.toLowerCase()} are made of` : `Material Breakdown — ${item.item || "line"}`}
+          📋 Material Breakdown — {item.item || "line"}
           {components.length > 0 && (
             <span className="ml-2 text-amber-600 font-normal">
-              {perPiece
-                ? `₹${parseFloat(item.rate).toLocaleString("en-IN")} each · taken out of the material rows, so nothing is counted twice`
-                : `amount rolls up from these ${components.length} component(s)`}
+              amount rolls up from these {components.length} component(s)
             </span>
           )}
         </div>
@@ -932,12 +918,7 @@ function ComponentBreakdown({
               <tr key={c.id} className="border-t border-amber-200">
                 <td className="px-2 py-1.5 font-semibold text-nicara-dark">{c.basic_component}</td>
                 <td className="px-2 py-1.5 text-surface-600">{c.detail || "—"}</td>
-                <td className="px-2 py-1.5 text-surface-600">
-                  {c.material_category && !locked ? (
-                    <PartMaterialPicker part={c} item={item} project={project} estimate={estimate}
-                      onChanged={onChanged} onError={onError} />
-                  ) : (c.brand || "—")}
-                </td>
+                <td className="px-2 py-1.5 text-surface-600">{c.brand || "—"}</td>
                 <td className="px-2 py-1.5 text-surface-600">{c.model || "—"}</td>
                 <td className="px-2 py-1.5 font-mono text-right">{parseFloat(c.qty)}</td>
                 <td className="px-2 py-1.5">{c.unit || "—"}</td>
@@ -1261,38 +1242,6 @@ function RawMaterialPicker({ item, project, estimate, onChanged, onError }: {
       {(choices ?? []).length === 0 && <option value={item.raw_material ?? ""}>{item.brand || "—"}</option>}
       {(choices ?? []).map(m => (
         <option key={m.id} value={m.id}>{label(m)} (₹{parseFloat(m.default_rate)})</option>
-      ))}
-    </select>
-  );
-}
-
-/** Brand / model of one part of a door, drawer or shelf — re-prices the piece. */
-function PartMaterialPicker({ part, item, project, estimate, onChanged, onError }: {
-  part: EstimateItemComponent; item: EstimateItem; project: Project; estimate: Estimate;
-  onChanged: () => Promise<void>; onError: (msg: string) => void;
-}) {
-  const [choices, setChoices] = useState<LibraryItem[] | null>(null);
-  const load = () => {
-    if (choices === null && part.material_category) {
-      categoryItems(part.material_category).then(setChoices).catch(() => setChoices([]));
-    }
-  };
-  const choose = async (id: string) => {
-    if (!id) return;
-    try {
-      await estimatesApi.updateComponent(project.id, estimate.id, item.id, part.id, { library_material_item: Number(id) });
-      await onChanged();
-    } catch (e) {
-      onError(e instanceof ApiError ? e.message : "Could not change the brand.");
-    }
-  };
-  return (
-    <select value={part.library_material_item ? String(part.library_material_item) : ""} onFocus={load} onMouseDown={load}
-      onChange={e => choose(e.target.value)} title="Brand / model — re-prices this part"
-      className="w-full max-w-[220px] px-1 py-0.5 border border-transparent rounded-md text-[10px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white cursor-pointer">
-      {(choices ?? []).length === 0 && <option value={part.library_material_item ?? ""}>{part.brand || "—"}</option>}
-      {(choices ?? []).map(m => (
-        <option key={m.id} value={m.id}>{[m.brand_name, m.model_name].filter(Boolean).join(" — ")} (₹{parseFloat(m.default_rate)})</option>
       ))}
     </select>
   );

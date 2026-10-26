@@ -130,9 +130,9 @@ SAMPLE_MATERIALS = {
 # name: (type, raw-material category or None, unit, price_unit, rule, default_qty, gst %)
 SP, PR, SV, PS = 'Spec Purpose', 'Procurement', 'Service', 'Procurement cum Service'
 BASIC_COMPONENTS = {
-    'Doors': (SP, None, 'nos', 'per door', 'doors', 0, 18),
-    'Drawers': (SP, None, 'nos', 'per drawer', 'drawers', 0, 18),
-    'Shelves': (SP, None, 'nos', 'per shelf', 'shelves', 0, 18),
+    'Doors': (SP, None, 'nos', 'per no', 'doors', 0, 0),
+    'Drawers': (SP, None, 'nos', 'per no', 'drawers', 0, 0),
+    'Shelves': (SP, None, 'nos', 'per no', 'shelves', 0, 0),
     'Core Material(18mm BWP Ply)': (PR, 'Core Material(18mm BWP Ply)', 'sft', 'per sft', 'carcass_ply', 0, 18),
     'Core Material(16mm BWP Ply)': (PR, 'Core Material(16mm BWP Ply)', 'sft', 'per sft', 'carcass_ply', 0, 18),
     'Core Material(16mm BWP B Board)': (PR, 'Core Material(16mm BWP B Board)', 'sft', 'per sft', 'back_panel_ply', 0, 18),

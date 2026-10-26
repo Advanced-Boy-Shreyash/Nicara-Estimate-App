@@ -492,9 +492,8 @@ converted to inches first (`8'0"`, `2'3"`, `30"`, mm/cm/m all accepted).
 
 - **Doors** — openable: whole number between W/24 and W/16; sliding: W/42–W/30;
   kitchen: (W − 36″ basket − 10″ bottle pull-out)/24–/16.
-- **Drawers** — wardrobe = doors (sliding × 2); pooja/study W/24–W/12.
-- **Shelves** = doors ÷ 2, each one section wide (width ÷ (verticals − 1));
-  **verticals** = ROUNDUP(doors/2 + 1).
+- **Drawers** — wardrobe = doors (sliding × 2); pooja/study W/24–W/12;
+  **shelves** = doors ÷ 2; **verticals** = ROUNDUP(doors/2 + 1).
 - **Hardware** — 2 hinges per door up to 24″ height, +1 per extra 24″; handles =
   doors; knobs = drawers; channels = drawers; locks = drawers ÷ 2 (wardrobes).
 - **Sheets** — ply areas rounded up to 32 sft sheets; laminate = door area ÷ 32
@@ -517,30 +516,24 @@ options). The Initial Estimate is built from them on the backend:
    follows size edits and keeps brand/price choices. Unlinked units are skipped
    and listed.
 2. **Smart Estimate Generator** — choose a **brand** per product group (plywood,
-   hardware, kitchen accessories, finishing). Every row and part in that group
-   switches to that brand's model in its own category (16mm, 12mm, B Board…) and
-   is re-priced. Rows whose category the brand doesn't make keep theirs.
+   hardware, kitchen accessories, finishing). Every row in that group switches to
+   that brand's model in its own category (16mm, 12mm, B Board…) and is
+   re-priced. Rows whose category the brand doesn't make keep theirs.
 3. Each row's **brand picker** swaps its raw material; the rate follows.
 
-**Doors, Drawers and Shelves are priced per piece.** Each of these rows carries
-what one piece is made of:
+Doors, Drawers and Shelves are counts (₹0); their material is priced in the
+rows below them (ply, hinges, laminate, channels …), as in the sheet. The
+catalogue's **Calculate** preview shows the same cost plus margin and GST, so
+its total equals the estimate's for the same size and options.
 
-- **Door:** shutter ply, laminate on the outer face, liner on the inner face,
-  edge band, hinges, handle.
-- **Drawer:** box ply, liner, channel set, knob.
-- **Shelf:** board, liner on both faces.
-
-The price column shows one piece (e.g. ₹5,938 per door) and **Detail** lists the
-parts, each with its own brand picker. Those quantities are taken out of the
-material rows, so the total is unchanged. The carcass ply and liner rows keep
-the rest; hinges, channels, handles, knobs and edge band have no row of their
-own any more. Sheet off-cuts are shared by area. The logic is
-`catalog/rules.py` (`shares`) and `catalog/pricing.py`.
+`python manage.py recalculate_groups` re-runs the rules for every furniture group
+on estimates that aren't approved. It also restores the separate rows of any
+group made during the short-lived per-piece pricing.
 
 Editing a group:
 
 - Typing a **Doors / Drawers / Shelves** count recalculates the whole group
-  (their parts, ply, liner, locks …) — stored as `config.overrides`.
+  (hinges, channels, ply, locks …) — stored as `config.overrides`.
 - Typing any other quantity marks it **overridden** (kept on recalculation,
   shown "calc N" with a reset).
 - Changing the group's size or options re-runs the rules.
@@ -554,7 +547,7 @@ Editing a group:
 | `POST/DELETE …/estimates/{id}/groups/{group_key}/` | Recalculate (size/options) or remove a group |
 | `POST …/estimates/{id}/apply-smart-materials/` | `{brands: [{group, brand_id}]}` (or `{materials: [{library_item_id}]}`) |
 | `POST …/items/{id}/reset-qty/` | Undo a typed-over quantity or count |
-| `GET/POST/PATCH …/items/{id}/components/` | A row's breakdown — the parts of a door / drawer / shelf |
+| `GET/POST …/items/{id}/components/` | Optional per-line breakdown (still supported) |
 
 Code: `projects/generation.py`, tests in `projects/test_generation.py`.
 

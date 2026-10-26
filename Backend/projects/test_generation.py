@@ -11,7 +11,6 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import User
-from catalog import rules
 from catalog.models import Furniture
 from library.models import MaterialBrand, MaterialItem
 from projects import generation
@@ -41,9 +40,6 @@ class GenerationTestCase(APITestCase):
     def by_spec(self, group_key):
         return {r.specification: r for r in generation.group_rows(self.estimate, group_key)}
 
-    def parts(self, row):
-        return {c.basic_component: c for c in row.components.all()}
-
     def url(self, name, *extra):
         return reverse(name, args=[self.project.pk, self.estimate.pk, *extra])
 
@@ -71,47 +67,12 @@ class CreateGroupTests(GenerationTestCase):
         self.assertEqual(ply.total_amount, Decimal('10421.76'))                 # + 18% GST
         self.assertEqual(ply.calc_basis[:4], 'back')
 
-    def test_doors_are_priced_per_piece(self):
+    def test_service_rows_carry_no_gst_and_spec_rows_cost_nothing(self):
         rows = self.by_spec(self.add_wardrobe()[0].group_key)
-        doors = rows['Doors']
-        parts = self.parts(doors)
-        self.assertEqual(set(parts), {'Core Material(16mm BWP Ply)', 'Box Hinges', 'Inner Liner(Fabric)',
-                                      'Edge Banding', 'Finishing - Laminate', 'Handles/Knobs'})
-        self.assertEqual(parts['Box Hinges'].qty, Decimal('24.00'))           # 6 per 9'6" door × 4
-        self.assertEqual(parts['Handles/Knobs'].qty, Decimal('4.00'))
-        self.assertEqual(parts['Finishing - Laminate'].qty, Decimal('96.00'))  # 3 sheets, no visible side
-        self.assertEqual(doors.qty, Decimal('4.00'))
-        self.assertEqual(doors.cost, sum(c.amount for c in parts.values()))
-        self.assertEqual(doors.rate, (doors.cost / 4).quantize(Decimal('0.01')))
-        self.assertEqual(doors.gst_pct, Decimal('18.00'))
-
-    def test_piece_materials_leave_the_material_rows(self):
-        rows = self.by_spec(self.add_wardrobe()[0].group_key)
-        for gone in ('Box Hinges', 'Handles/Knobs', 'Knobs', 'Edge Banding', 'Finishing - Laminate',
-                     'Draw Channels', 'Core Material(12mm BWP Ply)'):
-            self.assertNotIn(gone, rows)
-        # The carcass ply row keeps only what isn't in the shutters and shelves.
-        calc = rules.compute('wardrobe_openable', 84, 114, 24)
-        total = rules.d2(calc.results['carcass_ply'][0])
-        ply = 'Core Material(16mm BWP Ply)'
-        in_pieces = self.parts(rows['Doors'])[ply].qty + self.parts(rows['Shelves'])[ply].qty
-        self.assertEqual(rows[ply].qty + in_pieces, total)
-        liner = 'Inner Liner(Fabric)'
-        lined = sum(self.parts(rows[p])[liner].qty for p in ('Doors', 'Drawers', 'Shelves'))
-        self.assertEqual(rows[liner].qty + lined, rules.d2(calc.results['inner_liner'][0]))
-        drawers = self.parts(rows['Drawers'])
-        self.assertEqual(drawers['Draw Channels'].qty, Decimal('4.00'))
-        self.assertEqual(drawers['Knobs'].qty, Decimal('4.00'))
-        self.assertEqual(rows['Drawers'].application, '4 nos')
         self.assertEqual(rows['Carpentry'].gst_pct, Decimal('0.00'))
-
-    def test_a_visible_side_keeps_a_laminate_row(self):
-        rows = self.by_spec(self.add_wardrobe(options={'one_side_visible': True})[0].group_key)
-        self.assertIn('Finishing - Laminate', rows)
-        door_lam = self.parts(rows['Doors'])['Finishing - Laminate'].qty
-        # door 66.5 + side 19 sft → 3 sheets, shared by area
-        self.assertEqual(rows['Finishing - Laminate'].qty + door_lam, Decimal('96.00'))
-        self.assertGreater(rows['Finishing - Laminate'].qty, 0)
+        self.assertEqual(rows['Carpentry'].qty, Decimal('66.50'))
+        self.assertEqual(rows['Drawers'].cost, Decimal('0.00'))
+        self.assertEqual(rows['Drawers'].application, '4 nos')
 
     def test_add_furniture_endpoint(self):
         res = self.client.post(self.url('estimate-add-furniture'), {
@@ -133,30 +94,25 @@ class EditTests(GenerationTestCase):
 
     def test_typing_drawers_cascades_through_the_group(self):
         rows = self.by_spec(self.key)
-        per_drawer = rows['Drawers'].rate
         res = self.patch(rows['Drawers'], {'qty': 6})
         self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
         rows = self.by_spec(self.key)
         self.assertEqual(rows['Drawers'].qty, Decimal('6.00'))
-        drawers = self.parts(rows['Drawers'])
-        self.assertEqual(drawers['Draw Channels'].qty, Decimal('6.00'))
-        self.assertEqual(drawers['Knobs'].qty, Decimal('6.00'))
+        self.assertEqual(rows['Draw Channels'].qty, Decimal('6.00'))
+        self.assertEqual(rows['Knobs'].qty, Decimal('6.00'))
         self.assertEqual(rows['Draw Locks'].qty, Decimal('3.00'))
         self.assertEqual(rows['Drawers'].config['overrides'], {'drawers': 6})
-        # Still a price per drawer: 6 boxes need a second 12mm sheet, whose off-cut they share.
-        self.assertEqual(rows['Drawers'].rate, (rows['Drawers'].cost / 6).quantize(Decimal('0.01')))
-        self.assertGreater(rows['Drawers'].rate, per_drawer)
 
     def test_typed_quantity_survives_a_resize(self):
         rows = self.by_spec(self.key)
-        self.patch(rows['Adhesive(Bonding)'], {'qty': 20})
+        self.patch(rows['Box Hinges'], {'qty': 14})                 # the sheet's figure
         rows = self.by_spec(self.key)
-        self.assertTrue(rows['Adhesive(Bonding)'].qty_overridden)
+        self.assertTrue(rows['Box Hinges'].qty_overridden)
         self.client.post(self.url('estimate-group', self.key), {'width': "10'0\""}, format='json')
         rows = self.by_spec(self.key)
-        self.assertEqual(rows['Adhesive(Bonding)'].qty, Decimal('20.00'))   # kept
-        self.assertEqual(rows['Doors'].qty, Decimal('5.00'))                # 120" → between 5 and 7.5
-        self.assertNotEqual(rows['Adhesive(Bonding)'].calculated_qty, Decimal('20.00'))
+        self.assertEqual(rows['Box Hinges'].qty, Decimal('14.00'))   # kept
+        self.assertEqual(rows['Doors'].qty, Decimal('5.00'))         # 120" → between 5 and 7.5
+        self.assertNotEqual(rows['Box Hinges'].calculated_qty, Decimal('14.00'))
 
     def test_option_change_keeps_typed_counts(self):
         """Regression: toggling an option or resizing must not drop a typed drawer count."""
@@ -165,8 +121,8 @@ class EditTests(GenerationTestCase):
                          {'width_ft': 10, 'width_in': 0, 'options': {'handleless': True}}, format='json')
         rows = self.by_spec(self.key)
         self.assertEqual(rows['Drawers'].qty, Decimal('6.00'))
-        self.assertEqual(self.parts(rows['Drawers'])['Draw Channels'].qty, Decimal('6.00'))
-        self.assertNotIn('Handles/Knobs', self.parts(rows['Doors']))
+        self.assertEqual(rows['Draw Channels'].qty, Decimal('6.00'))
+        self.assertEqual(rows['Handles/Knobs'].qty, Decimal('0.00'))
         self.assertEqual(rows['Doors'].qty, Decimal('5.00'))
 
     def test_empty_overrides_clear_typed_counts(self):
@@ -175,20 +131,19 @@ class EditTests(GenerationTestCase):
         self.assertEqual(self.by_spec(self.key)['Drawers'].qty, Decimal('4.00'))
 
     def test_reset_returns_to_the_calculated_quantity(self):
-        glue = self.by_spec(self.key)['Adhesive(Bonding)']
-        self.patch(glue, {'qty': 20})
-        res = self.client.post(self.url('estimate-item-reset-qty', glue.pk))
+        hinges = self.by_spec(self.key)['Box Hinges']
+        self.patch(hinges, {'qty': 14})
+        res = self.client.post(self.url('estimate-item-reset-qty', hinges.pk))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        glue.refresh_from_db()
-        self.assertFalse(glue.qty_overridden)
-        self.assertEqual(glue.qty, glue.calculated_qty)
+        hinges.refresh_from_db()
+        self.assertFalse(hinges.qty_overridden)
+        self.assertEqual(hinges.qty, hinges.calculated_qty)
 
     def test_reset_a_drawer_count_removes_the_override(self):
         drawers = self.by_spec(self.key)['Drawers']
         self.patch(drawers, {'qty': 6})
         self.client.post(self.url('estimate-item-reset-qty', drawers.pk))
-        drawers = self.by_spec(self.key)['Drawers']
-        self.assertEqual(self.parts(drawers)['Draw Channels'].qty, Decimal('4.00'))
+        self.assertEqual(self.by_spec(self.key)['Draw Channels'].qty, Decimal('4.00'))
 
     def test_choosing_a_raw_material_reprices_the_row(self):
         ply = self.by_spec(self.key)['Core Material(16mm BWP Ply)']
@@ -199,39 +154,11 @@ class EditTests(GenerationTestCase):
         ply.refresh_from_db()
         self.assertEqual((ply.model_name, ply.rate), ('Premium', Decimal('95.00')))
 
-    def test_choosing_a_part_material_reprices_the_piece(self):
-        doors = self.by_spec(self.key)['Doors']
-        hinge = self.parts(doors)['Box Hinges']
-        better = MaterialItem.objects.get(category__name='Box Hinges', model_name='Onsys - 0 Crank Soft Close')
-        url = reverse('estimate-item-component-detail',
-                      args=[self.project.pk, self.estimate.pk, doors.pk, hinge.pk])
-        res = self.client.patch(url, {'library_material_item': better.pk}, format='json')
-        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
-        hinge.refresh_from_db()
-        self.assertEqual((hinge.brand, hinge.price), ('Hettich', Decimal('260.00')))
-        before = doors.cost
-        doors.refresh_from_db()
-        self.assertEqual(doors.cost - before, Decimal('24') * (Decimal('260') - Decimal('220')))
-        # …and the choice survives a recalculation.
-        self.client.post(self.url('estimate-group', self.key), {'width': "8'0\""}, format='json')
-        self.assertEqual(self.parts(self.by_spec(self.key)['Doors'])['Box Hinges'].brand, 'Hettich')
-
     def test_raw_material_must_match_the_component(self):
         ply = self.by_spec(self.key)['Core Material(16mm BWP Ply)']
         hinge = MaterialItem.objects.filter(category__name='Box Hinges').first()
         res = self.patch(ply, {'raw_material': hinge.pk})
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_recalculating_an_old_group_moves_its_hardware_into_the_pieces(self):
-        """Estimates made before per-piece pricing had a Box Hinges row of their own."""
-        bc = self.wardrobe.components.get(basic_component__name='Box Hinges').basic_component
-        EstimateItem.objects.create(estimate=self.estimate, group_key=self.key, furniture=self.wardrobe,
-                                    basic_component=bc, specification='Box Hinges', item_type='Procurement',
-                                    quantity_rule='hinges', qty=24, rate=220)
-        self.client.post(self.url('estimate-group', self.key), {}, format='json')
-        rows = self.by_spec(self.key)
-        self.assertNotIn('Box Hinges', rows)
-        self.assertIn('Box Hinges', self.parts(rows['Doors']))
 
     def test_delete_group(self):
         res = self.client.delete(self.url('estimate-group', self.key))
@@ -266,9 +193,8 @@ class DesignRequirementTests(GenerationTestCase):
 
     def test_regenerating_follows_size_edits_and_keeps_choices(self):
         self.generate()
-        doors = EstimateItem.objects.get(estimate=self.estimate, specification='Doors')
-        hinge = doors.components.get(basic_component='Box Hinges')
-        hinge.price = Decimal('300')                    # a chosen price
+        hinge = EstimateItem.objects.get(estimate=self.estimate, specification='Box Hinges')
+        hinge.rate = Decimal('300')                     # a chosen price
         hinge.save()
         self.dr.length = "10'0\""
         self.dr.save()
@@ -276,14 +202,15 @@ class DesignRequirementTests(GenerationTestCase):
         self.assertEqual((res.data['created'], res.data['updated']), (0, 1))
         doors = EstimateItem.objects.get(estimate=self.estimate, specification='Doors')
         self.assertEqual(doors.qty, Decimal('5.00'))
-        self.assertEqual(doors.components.get(basic_component='Box Hinges').price, Decimal('300.00'))
+        hinge.refresh_from_db()
+        self.assertEqual(hinge.rate, Decimal('300.00'))
 
     def test_requirement_options_reach_the_rules(self):
         self.dr.options = {'handleless': True}
         self.dr.save()
         self.generate()
-        doors = EstimateItem.objects.get(estimate=self.estimate, specification='Doors')
-        self.assertFalse(doors.components.filter(basic_component='Handles/Knobs').exists())
+        handles = EstimateItem.objects.get(estimate=self.estimate, specification='Handles/Knobs')
+        self.assertEqual(handles.qty, Decimal('0.00'))
 
     def test_bulk_save_keeps_requirement_ids(self):
         url = reverse('design-req-bulk', args=[self.project.pk])
@@ -299,71 +226,83 @@ class DesignRequirementTests(GenerationTestCase):
 
 
 class SmartMaterialRowTests(GenerationTestCase):
-    def setUp(self):
-        super().setUp()
-        self.key = self.add_wardrobe()[0].group_key
-        rows = self.by_spec(self.key)
-        self.century = MaterialBrand.objects.create(name='Century')
-        self.century16 = MaterialItem.objects.create(
-            category=rows['Core Material(16mm BWP Ply)'].basic_component.library_category,
-            brand=self.century, model_name='Club Prime', default_rate=Decimal('110'))
-        self.century12 = MaterialItem.objects.create(
-            category=self.wardrobe.components.get(basic_component__name='Core Material(12mm BWP Ply)')
-            .basic_component.library_category,
-            brand=self.century, model_name='Club Prime', default_rate=Decimal('100'))
-
-    def test_a_brand_applies_to_rows_and_piece_parts(self):
-        doors_before = self.by_spec(self.key)['Doors'].cost
+    def test_brand_choice_carries_to_every_ply_thickness(self):
+        key = self.add_wardrobe()[0].group_key
+        century = MaterialBrand.objects.create(name='Century')
+        ply16 = self.by_spec(key)['Core Material(16mm BWP Ply)'].basic_component.library_category
+        century16 = MaterialItem.objects.create(
+            category=ply16, brand=century, model_name='Club Prime', default_rate=Decimal('110'))
+        ply12 = self.by_spec(key)['Core Material(12mm BWP Ply)'].basic_component.library_category
+        century12 = MaterialItem.objects.create(
+            category=ply12, brand=century, model_name='Club Prime', default_rate=Decimal('100'))
         res = self.client.post(self.url('estimate-apply-materials'),
-                               {'brands': [{'group': 'plywood', 'brand_id': self.century.pk}]}, format='json')
+                               {'materials': [{'library_item_id': century16.pk}]}, format='json')
         self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
-        rows = self.by_spec(self.key)
-        ply = rows['Core Material(16mm BWP Ply)']
-        self.assertEqual((ply.brand, ply.rate), ('Century', Decimal('110.00')))
-        self.assertEqual(self.parts(rows['Doors'])['Core Material(16mm BWP Ply)'].library_material_item, self.century16)
-        self.assertEqual(self.parts(rows['Drawers'])['Core Material(12mm BWP Ply)'].library_material_item, self.century12)
-        self.assertGreater(rows['Doors'].cost, doors_before)
-        # No Century B Board → that row keeps its brand; hardware is another group.
+        rows = self.by_spec(key)
+        self.assertEqual((rows['Core Material(16mm BWP Ply)'].brand, rows['Core Material(16mm BWP Ply)'].rate),
+                         ('Century', Decimal('110.00')))
+        self.assertEqual(rows['Core Material(12mm BWP Ply)'].raw_material, century12)
+        # No Century B Board → that row keeps its brand.
         self.assertEqual(rows['Core Material(16mm BWP B Board)'].brand, 'Gurjan')
-        self.assertEqual(self.parts(rows['Doors'])['Box Hinges'].brand, 'Hafele')
-        self.assertGreaterEqual(res.data['brand_result']['unchanged'], 1)
+        self.assertEqual(rows['Box Hinges'].brand, 'Hafele')
 
-    def test_a_model_choice_still_carries_to_every_ply_thickness(self):
+
+    def test_a_brand_per_group_applies_to_matching_rows(self):
+        key = self.add_wardrobe()[0].group_key
+        century = MaterialBrand.objects.create(name='Century')
+        ply12 = self.by_spec(key)['Core Material(12mm BWP Ply)'].basic_component.library_category
+        MaterialItem.objects.create(category=ply12, brand=century, model_name='Club Prime',
+                                    default_rate=Decimal('100'))
         res = self.client.post(self.url('estimate-apply-materials'),
-                               {'materials': [{'library_item_id': self.century16.pk}]}, format='json')
+                               {'brands': [{'group': 'plywood', 'brand_id': century.pk}]}, format='json')
         self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
-        rows = self.by_spec(self.key)
-        self.assertEqual(rows['Core Material(16mm BWP Ply)'].raw_material, self.century16)
-        self.assertEqual(self.parts(rows['Drawers'])['Core Material(12mm BWP Ply)'].library_material_item, self.century12)
-
-    def test_unknown_brand_is_rejected(self):
-        res = self.client.post(self.url('estimate-apply-materials'),
-                               {'brands': [{'group': 'plywood', 'brand_id': 99999}]}, format='json')
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        rows = self.by_spec(key)
+        self.assertEqual((rows['Core Material(12mm BWP Ply)'].brand, rows['Core Material(12mm BWP Ply)'].rate),
+                         ('Century', Decimal('100.00')))
+        self.assertEqual(rows['Core Material(16mm BWP Ply)'].brand, 'Gurjan')   # no Century 16mm
+        self.assertEqual(res.data['brand_result'], {'changed': 1, 'unchanged': 2})
 
     def test_smart_options_list_brands_per_group(self):
         res = self.client.get(reverse('smart-estimate-options'))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         plywood = {b['name']: b for b in res.data['plywood']}
-        self.assertIn('Century', plywood)
-        self.assertIn('Austin', plywood)              # from the sample estimate
+        self.assertIn('Austin', plywood)                  # from the sample estimate
         self.assertIn('Core Material(16mm BWP Ply)', plywood['Gurjan']['categories'])
         self.assertIn('Hettich', {b['name'] for b in res.data['hardware']})
 
 
-class DuplicateTests(GenerationTestCase):
-    def test_duplicate_keeps_every_column_and_the_breakdowns(self):
+class PerPieceCleanupTests(GenerationTestCase):
+    def test_recalculating_restores_rows_folded_into_doors(self):
+        """Groups made while Doors were priced per piece go back to the sheet layout."""
         rows = self.add_wardrobe()
-        glue = next(r for r in rows if r.specification == 'Adhesive(Bonding)')
-        glue.qty, glue.qty_overridden, glue.referral_pct = Decimal('20'), True, Decimal('5')
-        glue.save()
+        key = rows[0].group_key
+        doors = self.by_spec(key)['Doors']
+        doors.components.create(basic_component='Box Hinges', qty=24, price=220)
+        doors.refresh_from_db()
+        doors.rate = Decimal('1320')
+        doors.save()
+        EstimateItem.objects.filter(group_key=key, specification__in=['Box Hinges', 'Edge Banding']).delete()
+        call_command('recalculate_groups', verbosity=0)
+        rows = self.by_spec(key)
+        self.assertEqual(rows['Box Hinges'].qty, Decimal('24.00'))
+        self.assertIn('Edge Banding', rows)
+        self.assertFalse(rows['Doors'].components.exists())
+        self.assertEqual((rows['Doors'].rate, rows['Doors'].cost), (Decimal('0.00'), Decimal('0.00')))
+        self.assertEqual(len(rows), len(self.wardrobe.components.all()))
+
+
+class DuplicateTests(GenerationTestCase):
+    def test_duplicate_keeps_every_column(self):
+        rows = self.add_wardrobe()
+        hinges = next(r for r in rows if r.specification == 'Box Hinges')
+        hinges.qty, hinges.qty_overridden, hinges.referral_pct = Decimal('14'), True, Decimal('5')
+        hinges.save()
         res = self.client.post(reverse('estimate-duplicate', args=[self.project.pk, self.estimate.pk]),
                                {'type': 'final'}, format='json')
         self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
         clone = Estimate.objects.get(pk=res.data['id'])
-        copy = clone.items.get(specification='Adhesive(Bonding)')
+        copy = clone.items.get(specification='Box Hinges')
         self.assertEqual((copy.qty, copy.qty_overridden, copy.referral_pct, copy.brand, copy.width_ft),
-                         (Decimal('20.00'), True, Decimal('5.00'), 'Fevicol', 7))
+                         (Decimal('14.00'), True, Decimal('5.00'), 'Hafele', 7))
         self.assertEqual(clone.items.count(), len(rows))
-        self.assertEqual(clone.items.get(specification='Doors').components.count(), 6)
         self.assertEqual(clone.grand_total, self.estimate.grand_total)

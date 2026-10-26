@@ -11,6 +11,8 @@ NICARA Catalogue — Views  (mounted at /api/catalog/, module 'catalog')
     meta/                           units, cabinet types, rules, item types, counts
     tree/                           rooms, zones and furniture in one call
 """
+from decimal import Decimal
+
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, status
@@ -140,17 +142,9 @@ def serialize_rows(rows):
         'brand': r['brand'], 'model': r['model'],
         'raw_material': r['raw_material'].id if r['raw_material'] else None,
         'qty': float(r['qty']), 'unit': r['unit'], 'rate': float(r['rate']),
-        'price_unit': r['price_unit'], 'amount': float(r['amount']),
+        'price_unit': r['price_unit'], 'amount': float(r['qty'] * r['rate']),
         'gst_pct': float(r['gst_pct']), 'quantity_rule': r['quantity_rule'],
         'basis': r['basis'], 'needs_input': r['needs_input'], 'application': r['application'],
-        # Doors / Drawers / Shelves: what one row of pieces is made of.
-        'parts': [{
-            'basic_component': p['basic_component'].name, 'detail': p['detail'],
-            'brand': p['brand'], 'model': p['model'],
-            'raw_material': p['raw_material'].id if p['raw_material'] else None,
-            'qty': float(p['qty']), 'unit': p['unit'], 'rate': float(p['rate']),
-            'amount': float(p['qty'] * p['rate']),
-        } for p in r['parts']],
     } for r in rows]
 
 
@@ -173,9 +167,19 @@ class FurnitureCalculateView(APIView):
         )
         rows, calc = breakdown(furniture, width, height, depth, data.get('options') or {})
         payload = serialize_rows(rows)
+        # Rounded per row exactly as an estimate row is (EstimateItem.compute_amounts),
+        # so this total equals the estimate's for the same size and options.
+        cost = margin = gst = Decimal('0')
+        for r in rows:
+            row_cost = rules.d2(r['qty'] * r['rate'])
+            row_margin = rules.d2(row_cost * furniture.margin_pct / 100)
+            cost, margin = cost + row_cost, margin + row_margin
+            gst += rules.d2((row_cost + row_margin) * r['gst_pct'] / 100)
         return Response({
             'furniture': furniture.id, 'calculation': calc.summary(), 'rows': payload,
-            'total_cost': round(sum(r['amount'] for r in payload), 2),
+            'total_cost': float(cost), 'margin_pct': float(furniture.margin_pct),
+            'margin_amount': float(margin), 'gst_amount': float(gst),
+            'total': float(cost + margin + gst),
         }, status=status.HTTP_200_OK)
 
 

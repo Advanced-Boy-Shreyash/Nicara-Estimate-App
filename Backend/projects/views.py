@@ -611,15 +611,16 @@ class EstimateApplySmartMaterialsView(EstimateActionView):
             return _brand_material(category, brand, current) if brand is not None else None
 
         with transaction.atomic():
-            changed, kept = self._switch(estimate, pick)
+            changed, kept = self._switch(estimate, pick,
+                                         covered=lambda category: category.product_group in by_group)
         response = self.responded(estimate)
         response.data['brand_result'] = {'changed': changed, 'unchanged': kept}
         return response
 
     @staticmethod
-    def _switch(estimate, pick):
+    def _switch(estimate, pick, covered=lambda category: True):
         """Re-price rows and breakdown parts with `pick(category, current)`.
-        Returns (switched, left as they were) — counting only what the picks cover."""
+        Returns (switched, left as they were) — counting only rows `covered` by the picks."""
         changed, kept = 0, 0
         rows = list(estimate.items.select_related(
             'basic_component__library_category', 'raw_material__category'))
@@ -631,7 +632,7 @@ class EstimateApplySmartMaterialsView(EstimateActionView):
                 continue
             target = pick(category, row.raw_material)
             if target is None:
-                kept += 1
+                kept += covered(category)
                 continue
             row.raw_material = target
             row.brand = target.brand.name if target.brand_id else ''
@@ -647,7 +648,7 @@ class EstimateApplySmartMaterialsView(EstimateActionView):
             target = pick(current.category if current is not None else None, current)
             if target is None:
                 if current is not None:
-                    kept += 1
+                    kept += covered(current.category)
                 continue
             comp.library_material_item = target
             comp.brand = target.brand.name if target.brand_id else ''

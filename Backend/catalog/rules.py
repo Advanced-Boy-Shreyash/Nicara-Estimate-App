@@ -25,10 +25,9 @@ IN_PER_M = 39.3701
 
 RULES = {
     # "whole number between a and b": 'inclusive_min' = smallest whole number
-    # ≥ the lower bound (Sheet1 says "min"; the 7-ft worked wardrobe → 4 doors).
-    # 'strict' = smallest whole number > the lower bound (the video's 48" pooja → 3).
-    # 'max' = largest whole number ≤ the upper bound (the sample estimate's
-    # 8-ft and 9-ft wardrobes → 6 doors).                                # FLAG
+    # ≥ the lower bound (matches the doors rule and the 8-ft wardrobe).
+    # 'strict' = smallest whole number > the lower bound (matches the video's
+    # 48" pooja example → 3).                                          # FLAG
     'between_mode': 'inclusive_min',
 
     # Doors — Sheet1 row 5 (each door between these widths, inches)
@@ -111,9 +110,6 @@ def whole_between(a, b, mode=None):
     """Sheet1's "whole number between a and b"."""
     mode = mode or RULES['between_mode']
     lo, hi = sorted((float(a), float(b)))
-    if mode == 'max':
-        n = math.floor(hi + 1e-9)
-        return n if n >= lo - 1e-9 else math.ceil(lo - 1e-9)
     if mode == 'strict':
         n = math.floor(lo) + 1
         return n if n <= hi + 1e-9 else math.ceil(lo - 1e-9)
@@ -182,11 +178,6 @@ class Calculation:
     counts: dict = field(default_factory=dict)
     geometry: dict = field(default_factory=dict)
     results: dict = field(default_factory=dict)   # rule → (qty, basis)
-    # rule → {'doors'|'drawers'|'shelves': weight, '_total': weight}: how much of
-    # a rule's quantity goes into the pieces (door shutters, shelf boards, drawer
-    # boxes, hinges …), so Doors / Drawers / Shelves can be priced per piece.
-    shares: dict = field(default_factory=dict)
-    part_notes: dict = field(default_factory=dict)  # (rule, piece) → short detail
     warnings: list = field(default_factory=list)
 
     def quantity(self, rule, fixed_qty=None, default_qty=1):
@@ -281,31 +272,26 @@ def compute(cabinet_type, width, height, depth, options=None):
     res['drawers'] = (drawers, basis)
 
     # ── Shelves (Sheet1 row 6) ─────────────────────────────────
-    # Width: Sheet1 writes cabinet width ÷ (doors × 2), which gives a 10½" shelf
-    # on a 7-ft wardrobe. A shelf spans one section between verticals, so it is
-    # taken as width ÷ sections (sections = verticals − 1).           # FLAG
-    verticals = math.ceil(doors / 2 + 1) if doors else 2      # Sheet3: ROUNDUP(doors/2+1)
-    sections = max(1, verticals - 1)
     shelf_d = D
     if cabinet_type in ('loft_frame', 'loft_box', 'panel'):
         shelves, shelf_w, basis = 0, 0.0, 'no shelves for this cabinet type'
     elif cabinet_type == 'crockery_wall':
         shelves = doors
-        shelf_w = W / sections if doors else 0.0
-        basis = f"crockery wall: = no. of doors; width {W:g}/{sections} sections = {shelf_w:.1f}\""
+        shelf_w = W / (doors * 2) if doors else 0.0
+        basis = f"crockery wall: = no. of doors; width {W:g}/({doors}×2)"
     elif cabinet_type == 'wardrobe_sliding':
         shelves = math.ceil(doors / 2)                                    # FLAG: qty not given
         shelf_w = W / doors if doors else 0.0
         basis = f"sliding: width {W:g}/{doors}; qty doors/2"
     else:
         shelves = math.ceil(doors / 2)
-        shelf_w = W / sections if doors else 0.0
-        basis = (f"no. of doors/2; width {W:g}/{sections} sections = {shelf_w:.1f}\", "
-                 f"depth {shelf_d:g}\"")
+        shelf_w = W / (doors * 2) if doors else 0.0                       # FLAG: written rule
+        basis = f"no. of doors/2; width {W:g}/({doors}×2) = {shelf_w:.1f}\", depth {shelf_d:g}\""
     if 'shelves' in overrides:
         shelves, basis = overrides['shelves'], f'set to {overrides["shelves"]} (calculated {shelves})'
     res['shelves'] = (shelves, basis)
 
+    verticals = math.ceil(doors / 2 + 1) if doors else 2      # Sheet3: ROUNDUP(doors/2+1)
     door_w = usable_w / doors if doors else 0.0
     door_h = H
     drawer_w = door_w
@@ -385,41 +371,6 @@ def compute(cabinet_type, width, height, depth, options=None):
     edge_in = doors * 2 * (door_w + door_h)
     res['edge_banding'] = (round(edge_in / IN_PER_M, 2),
                            f"{doors} doors × 2 × ({door_w:.1f}\" + {door_h:g}\") = {edge_in:.0f}\"")
-
-    # ── What each piece takes (per-piece pricing) ──────────────
-    # Area-based rules are split by area, so the off-cut of the rounded sheets
-    # is shared too; the counts (hinges, channels …) go wholly to their piece.
-    shelf_ply = 0 if glass else shelf_area
-    calc.shares = {
-        'carcass_ply': {'doors': door_area, 'shelves': shelf_ply, '_total': carcass_sqin},
-        'finish_sheets': {'doors': door_area, '_total': door_area + side},
-        # Liner by lined faces: doors one (inner), shelves and drawer boxes
-        # both, carcass panels both, back one.
-        'inner_liner': {'doors': door_area, 'shelves': 2 * shelf_ply, 'drawers': 2 * box_sqin,
-                        '_total': 2 * (carcass_sqin - door_area) + door_area + back_sqin + 2 * box_sqin},
-        'drawer_box_ply': {'drawers': box_sqin, '_total': box_sqin},
-        'glass_shelves': {'shelves': 1, '_total': 1} if glass else {},
-        'edge_banding': {'doors': 1, '_total': 1},
-        'hinges': {'doors': 1, '_total': 1},
-        'handles': {'doors': 1, '_total': 1},
-        'knobs': {'drawers': 1, '_total': 1},
-        'drawer_channels': {'drawers': 1, '_total': 1},
-    }
-    calc.part_notes = {
-        ('carcass_ply', 'doors'): f"shutters {door_w:.1f}\" × {door_h:g}\"",
-        ('carcass_ply', 'shelves'): f"shelf boards {shelf_w:.1f}\" × {shelf_d:g}\"",
-        ('finish_sheets', 'doors'): 'outer face',
-        ('inner_liner', 'doors'): 'inner face',
-        ('inner_liner', 'shelves'): 'both faces',
-        ('inner_liner', 'drawers'): 'box lining',
-        ('drawer_box_ply', 'drawers'): f"boxes {drawer_w:.1f}\" × {drawer_d:g}\" × {drawer_h}\"",
-        ('glass_shelves', 'shelves'): f"glass {shelf_w:.1f}\" × {shelf_d:g}\"",
-        ('edge_banding', 'doors'): 'door edges',
-        ('hinges', 'doors'): f"{res['hinges'][0] // doors if doors else 0} per door",
-        ('handles', 'doors'): '1 per door',
-        ('knobs', 'drawers'): '1 per drawer',
-        ('drawer_channels', 'drawers'): '1 set per drawer',
-    }
 
     # ── Service & kitchen (Sheet1 rows 23, 30, 31, 34) ─────────
     res['carpentry'] = (round(W * H / SQIN_PER_SFT, 2), f"width × height {W:g}\" × {H:g}\"")

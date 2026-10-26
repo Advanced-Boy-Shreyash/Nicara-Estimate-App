@@ -654,20 +654,6 @@ export interface CalcRow {
   basis: string;
   needs_input: boolean;
   application: string;
-  /** Doors / Drawers / Shelves: the materials the pieces are made of. */
-  parts: CalcPart[];
-}
-
-export interface CalcPart {
-  basic_component: string;
-  detail: string;
-  brand: string;
-  model: string;
-  raw_material: number | null;
-  qty: number;
-  unit: string;
-  rate: number;
-  amount: number;
 }
 
 export interface FurnitureCalc {
@@ -680,6 +666,11 @@ export interface FurnitureCalc {
   };
   rows: CalcRow[];
   total_cost: number;
+  /** The furniture's margin and each row's GST — rounded per row like the estimate, so `total` matches it. */
+  margin_pct: number;
+  margin_amount: number;
+  gst_amount: number;
+  total: number;
 }
 
 /* ── Vendors ─────────────────────────────────────────────────── */
