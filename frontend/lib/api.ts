@@ -1,7 +1,6 @@
 // ── NICARA Project OS — Django REST Framework API Layer ──────
 //
-// Talks to the Django backend at NEXT_PUBLIC_API_URL (default
-// http://localhost:8000/api). Access tokens are short lived; when one expires
+// Talks to the Django backend at NEXT_PUBLIC_API_URL. Access tokens are short lived; when one expires
 // this layer transparently redeems the refresh token and replays the request.
 
 import type {
@@ -14,7 +13,8 @@ import type {
   ProjectMeta, Vendor, VendorMeta,
 } from "@/lib/apiTypes";
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL
+  || "https://anuragwebpythonbackend2225.pythonanywhere.com/api";
 
 const ACCESS_KEY = "nicara_token";
 const REFRESH_KEY = "nicara_refresh";
@@ -217,7 +217,7 @@ async function apiFetch<T>(endpoint: string, options: FetchOptions = {}): Promis
     response = await send(anonymous ? null : tokenStore.access());
   } catch {
     throw new ApiError(
-      "Cannot reach the server. Is the Django backend running on port 8000?",
+      `Cannot reach the server at ${BASE_URL}. Check the API URL and server availability.`,
       0,
     );
   }
