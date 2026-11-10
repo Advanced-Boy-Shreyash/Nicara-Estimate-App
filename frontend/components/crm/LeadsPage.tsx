@@ -197,7 +197,7 @@ function LeadModal({
   const [form, setForm] = useState<Partial<Lead>>(
     lead ? { ...lead } : {
       name: "", phone: "", email: "", project_name: "", developer: "", unit_no: "",
-      city: "", state: "", property_type: "", area: "", requirement: "",
+      address: "", city: "", state: "", property_type: "", area: "", requirement: "",
       estimated_budget: "", stage: "new", source: "other", priority: "medium",
     }
   );
@@ -253,6 +253,9 @@ function LeadModal({
         <Field label="Unit No" value={form.unit_no ?? ""} onChange={v => set("unit_no", v)} />
         <Field label="Property Type" value={form.property_type ?? ""} onChange={v => set("property_type", v)}
           placeholder="3BHK Apartment" />
+        <div className="col-span-2">
+          <TextArea label="Address" value={form.address ?? ""} onChange={v => set("address", v)} rows={2} />
+        </div>
         <Field label="City" value={form.city ?? ""} onChange={v => set("city", v)} />
         <Field label="Area" value={form.area ?? ""} onChange={v => set("area", v)} placeholder="1,850 sqft" />
         <Field label="Estimated Budget (₹)" type="number" value={form.estimated_budget ?? ""}

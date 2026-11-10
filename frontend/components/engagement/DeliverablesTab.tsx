@@ -6,16 +6,11 @@ import type { Deliverable, DeliverableType, Project } from "@/lib/apiTypes";
 import { useApiData } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
 import Modal from "@/components/ui/Modal";
-import { Btn, Field, Select, TextArea } from "@/components/ui/Form";
+import { Btn, Field, TextArea } from "@/components/ui/Form";
 import { ErrorState, Loading } from "@/components/ui/States";
 
-const STATUS_OPTIONS = [
-  { value: "pending", label: "Pending" },
-  { value: "approved", label: "Approved" },
-  { value: "revision", label: "Revision Required" },
-];
-
 const STATUS_STYLES: Record<string, { badge: string; label: string }> = {
+  draft: { badge: "bg-surface-100 border-surface-200 text-surface-600", label: "Draft" },
   pending: { badge: "bg-amber-50 border-amber-200 text-amber-700", label: "Pending" },
   approved: { badge: "bg-emerald-50 border-emerald-200 text-emerald-700", label: "Approved" },
   revision: { badge: "bg-red-50 border-red-200 text-red-700", label: "Revision Required" },
@@ -82,6 +77,9 @@ export default function DeliverablesTab({
         {types.map(({ type, title }) => (
           <VersionSection
             key={type}
+            projectId={project.id}
+            reload={reload}
+            toast={toast}
             deliverableType={type}
             title={title}
             versions={all.filter(d => d.type === type)}
@@ -89,11 +87,17 @@ export default function DeliverablesTab({
             onAdd={() => setAdding(type)}
             onStatusChange={async (id, status) => {
               try {
-                await deliverablesApi.update(project.id, id, { status: status as Deliverable["status"] });
+                if (status === "pending") {
+                  await deliverablesApi.submit(project.id, id);
+                } else if (status === "approved") {
+                  await deliverablesApi.approve(project.id, id, "Approved by the project reviewer.");
+                } else if (status === "revision") {
+                  await deliverablesApi.requestRevision(project.id, id, "Please revise and resubmit for review.");
+                }
                 toast.success("Updated", `Marked as ${status}`);
                 void reload();
-              } catch {
-                toast.error("Failed", "Could not update the status");
+              } catch (error) {
+                toast.error("Failed", error instanceof Error ? error.message : "Could not update the status");
               }
             }}
             onDelete={async (id, name) => {
@@ -101,8 +105,8 @@ export default function DeliverablesTab({
                 await deliverablesApi.delete(project.id, id);
                 toast.info("Removed", name);
                 void reload();
-              } catch {
-                toast.error("Failed", "Could not remove this version");
+              } catch (error) {
+                toast.error("Failed", error instanceof Error ? error.message : "Could not remove this version");
               }
             }}
             onViewFile={(url, name) => setViewingFile({ url, name })}
@@ -117,13 +121,11 @@ export default function DeliverablesTab({
           title={types.find(t => t.type === adding)?.title ?? "Deliverable"}
           acceptTypes={adding === "furniture_layout" ? FL_ACCEPT : MB_ACCEPT}
           onClose={() => setAdding(null)}
-          onSaved={(files) => {
+          onSaved={() => {
             setAdding(null);
             toast.success("Added", "New version recorded");
             void reload();
-            // If files were uploaded during creation, they'll be in the fileMap via onFilesCreated
           }}
-          onFilesCreated={() => {}}
         />
       )}
 
@@ -144,6 +146,8 @@ export default function DeliverablesTab({
             {isImage(viewingFile.name) ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={viewingFile.url} alt={viewingFile.name} className="max-w-full max-h-[70vh] rounded-xl" />
+            ) : extOf(viewingFile.name) === ".pdf" ? (
+              <iframe title={viewingFile.name} src={viewingFile.url} className="w-full h-[70vh] rounded-xl border-0" />
             ) : (
               <div className="text-center text-surface-400">
                 <div className="text-[13px] font-semibold text-nicara-dark mb-1">{viewingFile.name}</div>
@@ -160,27 +164,35 @@ export default function DeliverablesTab({
 /* ── Version Section ── */
 
 function VersionSection({
-  deliverableType, title, versions, acceptTypes, onAdd, onStatusChange, onDelete, onViewFile,
+  projectId, reload, toast, deliverableType, title, versions, acceptTypes, onAdd, onStatusChange, onDelete, onViewFile,
 }: {
+  projectId: number;
+  reload: () => Promise<void>;
+  toast: ReturnType<typeof useToast>;
   deliverableType: DeliverableType;
   title: string;
   versions: Deliverable[];
   acceptTypes: string;
   onAdd: () => void;
-  onStatusChange: (id: number, status: string) => void;
+  onStatusChange: (id: number, status: Deliverable["status"]) => void;
   onDelete: (id: number, name: string) => void;
   onViewFile: (url: string, name: string) => void;
 }) {
-  // Multi-file per version: Record<versionId, FileEntry[]>
-  const [fileMap, setFileMap] = useState<Record<number, FileEntry[]>>({});
-
-  const handleFileUpload = (id: number, files: FileList) => {
-    const entries: FileEntry[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      entries.push({ url: URL.createObjectURL(f), name: f.name, size: fileSize(f.size) });
+  const handleFileUpload = async (files: FileList) => {
+    if (files.length === 0) return;
+    try {
+      for (const file of Array.from(files)) {
+        const form = new FormData();
+        form.append("type", deliverableType);
+        form.append("file", file);
+        form.append("status", "draft");
+        await deliverablesApi.upload(projectId, form);
+      }
+      await reload();
+      toast.success("Uploaded", "The file was saved as a new version.");
+    } catch (error) {
+      toast.error("Upload failed", error instanceof Error ? error.message : "Could not upload the file.");
     }
-    setFileMap(prev => ({ ...prev, [id]: [...(prev[id] || []), ...entries] }));
   };
 
   return (
@@ -206,12 +218,16 @@ function VersionSection({
       {/* Version cards */}
       <div className="p-4 space-y-3">
         {versions.map(v => {
-          const uploadedFiles = fileMap[v.id] || [];
+          const uploadedFiles = v.file_url ? [{
+            url: v.file_url,
+            name: v.file_name || `Version ${v.version_no}`,
+            size: v.file_size_display,
+          }] : [];
           return (
             <VersionCard key={v.id} v={v} uploadedFiles={uploadedFiles}
               acceptTypes={acceptTypes}
               onStatusChange={onStatusChange} onDelete={onDelete} onViewFile={onViewFile}
-              onFileUpload={(files) => handleFileUpload(v.id, files)}
+              onFileUpload={handleFileUpload}
               title={title} />
           );
         })}
@@ -236,7 +252,7 @@ function VersionCard({ v, uploadedFiles, acceptTypes, onStatusChange, onDelete, 
   v: Deliverable;
   uploadedFiles: FileEntry[];
   acceptTypes: string;
-  onStatusChange: (id: number, status: string) => void;
+  onStatusChange: (id: number, status: Deliverable["status"]) => void;
   onDelete: (id: number, name: string) => void;
   onViewFile: (url: string, name: string) => void;
   onFileUpload: (files: FileList) => void;
@@ -341,7 +357,14 @@ function VersionCard({ v, uploadedFiles, acceptTypes, onStatusChange, onDelete, 
           <div className="flex-1" />
 
           {/* Approve / Reject — hidden when locked */}
-          {!isLocked && (
+          {!isLocked && v.status === "draft" && (
+            <button onClick={() => onStatusChange(v.id, "pending")}
+              className="px-2.5 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-[10px] font-bold text-amber-700 cursor-pointer hover:bg-amber-100">
+              Submit for Review
+            </button>
+          )}
+
+          {!isLocked && v.status === "pending" && (
             <>
               <button onClick={() => onStatusChange(v.id, "approved")}
                 className="px-2.5 py-1.5 bg-emerald-50 border border-emerald-200 rounded-lg text-[10px] font-bold text-emerald-700 cursor-pointer hover:bg-emerald-100">
@@ -376,19 +399,17 @@ function VersionCard({ v, uploadedFiles, acceptTypes, onStatusChange, onDelete, 
 /* ── Add Version Modal ── */
 
 function AddVersionModal({
-  projectId, type, title, acceptTypes, onClose, onSaved, onFilesCreated,
+  projectId, type, title, acceptTypes, onClose, onSaved,
 }: {
   projectId: number;
   type: DeliverableType;
   title: string;
   acceptTypes: string;
   onClose: () => void;
-  onSaved: (files: FileEntry[]) => void;
-  onFilesCreated: (files: FileEntry[]) => void;
+  onSaved: () => void;
 }) {
   const [version, setVersion] = useState("Ver 1");
   const [fileName, setFileName] = useState("");
-  const [status, setStatus] = useState("pending");
   const [remarks, setRemarks] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [banner, setBanner] = useState("");
@@ -400,21 +421,24 @@ function AddVersionModal({
     setSaving(true);
     setBanner("");
     try {
-      await deliverablesApi.create(projectId, {
-        type, version,
-        file_name: fileName || selectedFiles.map(f => f.name).join(", ") || "",
-        status: status as Deliverable["status"], remarks, date,
-      });
+      if (selectedFiles.length) {
+        for (const [index, file] of selectedFiles.entries()) {
+          const form = new FormData();
+          form.append("type", type);
+          form.append("version", selectedFiles.length === 1 ? version : `${version} (${index + 1})`);
+          form.append("status", "draft");
+          form.append("remarks", remarks);
+          form.append("date", date);
+          form.append("file", file);
+          await deliverablesApi.upload(projectId, form);
+        }
+      } else {
+        await deliverablesApi.create(projectId, {
+          type, version, file_name: fileName, status: "draft", remarks, date,
+        });
+      }
 
-      // Create FileEntry array for uploaded files
-      const entries: FileEntry[] = selectedFiles.map(f => ({
-        url: URL.createObjectURL(f),
-        name: f.name,
-        size: fileSize(f.size),
-      }));
-
-      onFilesCreated(entries);
-      onSaved(entries);
+      onSaved();
     } catch (e) {
       setBanner(e instanceof ApiError ? e.message : "Could not save.");
       setSaving(false);
@@ -476,7 +500,6 @@ function AddVersionModal({
           )}
         </div>
 
-        <Select label="Status" value={status} onChange={setStatus} options={STATUS_OPTIONS} />
         <TextArea label="Remarks" value={remarks} onChange={setRemarks} rows={2}
           placeholder="Notes about this version" />
       </div>

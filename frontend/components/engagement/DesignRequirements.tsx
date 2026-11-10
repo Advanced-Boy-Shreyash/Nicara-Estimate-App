@@ -1,7 +1,23 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { ApiError, catalogApi, designRequirementsApi } from "@/lib/api";
+import { ApiError, catalogApi, designRequirementsApi, floorPlansApi } from "@/lib/api";
+function splitDimension(value: string): [number, number] {
+  const match = /^\s*(\d+)\s*['′]\s*(\d+)?\s*(?:"|″)?\s*$/.exec(value);
+  if (match) return [Number(match[1]), Number(match[2] || 0)];
+  const totalInches = Number.parseFloat(value);
+  return Number.isFinite(totalInches)
+    ? [Math.floor(totalInches / 12), Math.round(totalInches % 12)]
+    : [0, 0];
+}
+
+function updateDimensionPart(value: string, part: "feet" | "inches", input: string): string {
+  const [feet, inches] = splitDimension(value);
+  const nextFeet = part === "feet" ? Math.max(0, Number.parseInt(input, 10) || 0) : feet;
+  const nextInches = part === "inches" ? Math.max(0, Number.parseInt(input, 10) || 0) : inches;
+  const totalInches = nextFeet * 12 + nextInches;
+  return `${Math.floor(totalInches / 12)}'${totalInches % 12}"`;
+}
 import type { CalcOptions, CatalogZone, DesignRequirement, Furniture, Project } from "@/lib/apiTypes";
 import { useApiData } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
@@ -157,8 +173,37 @@ export default function DesignRequirements({ project }: { project: Project }) {
   const [fRoom, setFRoom] = useState("All");
   const [fFinishing, setFFinishing] = useState("All");
   const [viewingImage, setViewingImage] = useState<string | null>(null);
-  const [floorPlan, setFloorPlan] = useState<{ url: string; name: string; size: string } | null>(null);
   const floorPlanRef = useRef<HTMLInputElement>(null);
+  const floorPlanQuery = useApiData(() => floorPlansApi.list(project.id), [project.id]);
+  const [floorPlanBusy, setFloorPlanBusy] = useState(false);
+  const [floorPlanError, setFloorPlanError] = useState("");
+
+  const uploadFloorPlans = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setFloorPlanBusy(true);
+    setFloorPlanError("");
+    const form = new FormData();
+    Array.from(files).forEach(file => form.append("files", file));
+    try {
+      await floorPlansApi.upload(project.id, form);
+      await floorPlanQuery.reload();
+    } catch (error) {
+      setFloorPlanError(error instanceof Error ? error.message : "Could not upload the floor plan.");
+    } finally {
+      setFloorPlanBusy(false);
+      if (floorPlanRef.current) floorPlanRef.current.value = "";
+    }
+  };
+
+  const deleteFloorPlan = async (id: number) => {
+    setFloorPlanError("");
+    try {
+      await floorPlansApi.delete(project.id, id);
+      await floorPlanQuery.reload();
+    } catch (error) {
+      setFloorPlanError(error instanceof Error ? error.message : "Could not delete the floor plan.");
+    }
+  };
 
   const serverRows = data?.results ?? [];
   const working: Row[] = rows ?? serverRows;
@@ -306,35 +351,33 @@ export default function DesignRequirements({ project }: { project: Project }) {
             <div className="text-[10px] font-bold text-nicara-gold uppercase tracking-wider">Floor Plan</div>
             <div className="text-[10px] text-surface-400">Upload a floor plan reference (PDF, Images)</div>
           </div>
-          <input type="file" ref={floorPlanRef} accept=".pdf,.png,.jpg,.jpeg,.gif,.dxf,.dwg" className="hidden"
-            onChange={e => {
-              const f = e.target.files?.[0];
-              if (f) {
-                const sz = f.size < 1024 ? `${f.size} B` : f.size < 1048576 ? `${(f.size / 1024).toFixed(1)} KB` : `${(f.size / 1048576).toFixed(1)} MB`;
-                setFloorPlan({ url: URL.createObjectURL(f), name: f.name, size: sz });
-              }
-            }} />
-          <button onClick={() => floorPlanRef.current?.click()}
+          <input type="file" ref={floorPlanRef} accept=".pdf,.png,.jpg,.jpeg,.gif,.dxf,.dwg" className="hidden" multiple
+            onChange={e => { void uploadFloorPlans(e.target.files); }} />
+          <button onClick={() => floorPlanRef.current?.click()} disabled={floorPlanBusy}
             className="px-3 py-1.5 bg-surface-50 border border-dashed border-surface-300 rounded-lg text-[11px] font-semibold text-surface-500 cursor-pointer hover:border-nicara-gold hover:text-nicara-gold">
-            Upload Floor Plan
+            {floorPlanBusy ? "Uploading…" : "Upload Floor Plan"}
           </button>
         </div>
-        {floorPlan && (
-          <div className="flex items-center gap-2 px-3 py-2 bg-surface-50 border border-surface-100 rounded-lg">
-            <span className="text-[11px] font-semibold text-nicara-dark flex-1 truncate">{floorPlan.name}</span>
-            <span className="text-[9px] text-surface-400">{floorPlan.size}</span>
-            {floorPlan.name.match(/\.(png|jpg|jpeg|gif)$/i) ? (
-              <button onClick={() => setViewingImage(floorPlan.url)}
-                className="px-2 py-1 bg-blue-50 border border-blue-200 rounded text-[10px] font-semibold text-blue-600 cursor-pointer hover:bg-blue-100">
-                View
-              </button>
-            ) : null}
-            <a href={floorPlan.url} download={floorPlan.name}
+        {floorPlanError && <InlineError message={floorPlanError} />}
+        {floorPlanQuery.error && <InlineError message={floorPlanQuery.error} />}
+        {floorPlanQuery.data?.results.map(plan => (
+          <div key={plan.id} className="flex items-center gap-2 px-3 py-2 bg-surface-50 border border-surface-100 rounded-lg">
+            <span className="text-[11px] font-semibold text-nicara-dark flex-1 truncate">{plan.file_name}</span>
+            <span className="text-[9px] text-surface-400">{(plan.file_size / 1048576).toFixed(1)} MB</span>
+            <a href={plan.file_url} target="_blank" rel="noopener noreferrer"
+              className="px-2 py-1 bg-blue-50 border border-blue-200 rounded text-[10px] font-semibold text-blue-600 no-underline hover:bg-blue-100">
+              View
+            </a>
+            <a href={plan.file_url} download={plan.file_name}
               className="px-2 py-1 bg-surface-50 border border-surface-200 rounded text-[10px] font-semibold text-surface-600 no-underline hover:bg-surface-100">
               Download
             </a>
+            <button type="button" onClick={() => { void deleteFloorPlan(plan.id); }}
+              className="px-2 py-1 border border-red-200 rounded text-[10px] font-semibold text-red-600 cursor-pointer hover:bg-red-50">
+              Delete
+            </button>
           </div>
-        )}
+        ))}
       </div>
 
       {/* ── Filter Bar ── */}
@@ -360,10 +403,10 @@ export default function DesignRequirements({ project }: { project: Project }) {
 
       {/* ── Table (grouped by Room like Initial Estimate) ── */}
       <div className="overflow-x-auto border border-surface-200 rounded-xl">
-        <table className="w-full text-[11px] min-w-[1200px]">
+        <table className="w-full text-[11px] min-w-[1100px]">
           <thead>
             <tr className="bg-nicara-dark">
-              {["Furniture / Unit", "Zone", "W", "H", "D", "Options", "Finishing", "Remarks", "Design Ref.", "Del"].map(h => (
+              {["Furniture / Unit", "Zone", "W", "H", "D", "Finishing", "Remarks", "Design Ref.", "Del"].map(h => (
                 <th key={h} className={TH}>{h}</th>
               ))}
             </tr>
@@ -385,7 +428,7 @@ export default function DesignRequirements({ project }: { project: Project }) {
               />
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={10} className="px-3 py-8 text-center text-surface-400">
+              <tr><td colSpan={9} className="px-3 py-8 text-center text-surface-400">
                 {working.length === 0 ? "No requirements yet — select a room above or add a blank row." : "No rows match the current filter."}
               </td></tr>
             )}
@@ -449,7 +492,7 @@ function RoomGroup({ group, onAddRow, ...props }: RowProps & {
     <>
       {/* Room heading */}
       <tr className="bg-nicara-gold/10">
-        <td colSpan={10} className="px-3 py-2">
+        <td colSpan={9} className="px-3 py-2">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.room}</span>
             <span className="text-[10px] text-surface-400">{group.items.length} item(s)</span>
@@ -495,6 +538,29 @@ function DesignRow({ row, ri, furniture, furnitureLoading, zones, patchByRef, wi
           {linked ? <span className="text-emerald-700">⇄ {linked.name}</span>
             : row.unit ? <span className="text-amber-600">not in catalogue</span> : null}
         </div>
+        {row.furniture && (
+          <details className="mt-1 px-2 text-[10px]">
+            <summary className="w-fit cursor-pointer font-semibold text-surface-500 hover:text-nicara-gold">
+              Calculation options
+            </summary>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-surface-600">
+              <select value={options.shelf_type ?? "ply"} title="Shelves"
+                onChange={e => setOption({ shelf_type: e.target.value as "ply" | "glass" })}
+                className="px-1 py-0.5 border border-surface-200 rounded text-[10px] bg-white cursor-pointer">
+                <option value="ply">Ply shelves</option>
+                <option value="glass">Glass shelves</option>
+              </select>
+              <label className="flex items-center gap-1 cursor-pointer" title="Handleless design — no handles or knobs">
+                <input type="checkbox" checked={!!options.handleless} onChange={e => setOption({ handleless: e.target.checked })}
+                  className="accent-nicara-gold" />Handleless
+              </label>
+              <label className="flex items-center gap-1 cursor-pointer" title="One side visible — finish the side panel too">
+                <input type="checkbox" checked={!!options.one_side_visible}
+                  onChange={e => setOption({ one_side_visible: e.target.checked })} className="accent-nicara-gold" />Side
+              </label>
+            </div>
+          </details>
+        )}
       </td>
       {/* Zone */}
       <td className={`px-2 py-1.5 min-w-[110px] ${BD}`}>
@@ -505,32 +571,35 @@ function DesignRow({ row, ri, furniture, furnitureLoading, zones, patchByRef, wi
         </select>
       </td>
       {/* W H D (width = length, depth = breadth) */}
-      <td className={`px-2 py-1.5 w-[64px] ${BD}`}><input className={`${CELL} font-mono`} value={row.length}
-        onChange={e => patchByRef(row, { length: e.target.value })} placeholder={`7'0"`} /></td>
-      <td className={`px-2 py-1.5 w-[64px] ${BD}`}><input className={`${CELL} font-mono`} value={row.height}
-        onChange={e => patchByRef(row, { height: e.target.value })} placeholder={`9'6"`} /></td>
-      <td className={`px-2 py-1.5 w-[64px] ${BD}`}><input className={`${CELL} font-mono`} value={row.breadth}
-        onChange={e => patchByRef(row, { breadth: e.target.value })} placeholder={`2'0"`} /></td>
-      {/* Options for the quantity rules */}
-      <td className={`px-2 py-1.5 whitespace-nowrap ${BD}`}>
-        {row.furniture ? (
-          <div className="flex items-center gap-2 text-[10px] text-surface-600">
-            <select value={options.shelf_type ?? "ply"} title="Shelves"
-              onChange={e => setOption({ shelf_type: e.target.value as "ply" | "glass" })}
-              className="px-1 py-0.5 border border-surface-200 rounded text-[10px] bg-white cursor-pointer">
-              <option value="ply">Ply shelves</option>
-              <option value="glass">Glass shelves</option>
-            </select>
-            <label className="flex items-center gap-1 cursor-pointer" title="Handleless design — no handles or knobs">
-              <input type="checkbox" checked={!!options.handleless} onChange={e => setOption({ handleless: e.target.checked })}
-                className="accent-nicara-gold" />Handleless
-            </label>
-            <label className="flex items-center gap-1 cursor-pointer" title="One side visible — finish the side panel too">
-              <input type="checkbox" checked={!!options.one_side_visible}
-                onChange={e => setOption({ one_side_visible: e.target.checked })} className="accent-nicara-gold" />Side
-            </label>
-          </div>
-        ) : <span className="text-surface-300">—</span>}
+      <td className={`px-2 py-1.5 min-w-[145px] ${BD}`}>
+        <div className="flex items-center gap-1">
+          <input aria-label="Width feet" type="number" min="0" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.length)[0]} onChange={e => patchByRef(row, { length: updateDimensionPart(row.length, "feet", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">ft</span>
+          <input aria-label="Width inches" type="number" min="0" max="11" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.length)[1]} onChange={e => patchByRef(row, { length: updateDimensionPart(row.length, "inches", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">in</span>
+        </div>
+      </td>
+      <td className={`px-2 py-1.5 min-w-[145px] ${BD}`}>
+        <div className="flex items-center gap-1">
+          <input aria-label="Height feet" type="number" min="0" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.height)[0]} onChange={e => patchByRef(row, { height: updateDimensionPart(row.height, "feet", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">ft</span>
+          <input aria-label="Height inches" type="number" min="0" max="11" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.height)[1]} onChange={e => patchByRef(row, { height: updateDimensionPart(row.height, "inches", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">in</span>
+        </div>
+      </td>
+      <td className={`px-2 py-1.5 min-w-[145px] ${BD}`}>
+        <div className="flex items-center gap-1">
+          <input aria-label="Depth feet" type="number" min="0" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.breadth)[0]} onChange={e => patchByRef(row, { breadth: updateDimensionPart(row.breadth, "feet", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">ft</span>
+          <input aria-label="Depth inches" type="number" min="0" max="11" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.breadth)[1]} onChange={e => patchByRef(row, { breadth: updateDimensionPart(row.breadth, "inches", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">in</span>
+        </div>
       </td>
       {/* Finishing */}
       <td className={`px-2 py-1.5 min-w-[100px] ${BD}`}>

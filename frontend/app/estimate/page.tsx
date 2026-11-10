@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import AppShell from "@/components/auth/AppShell";
 import { useToast } from "@/components/ui/Toast";
@@ -509,12 +510,12 @@ const EXE_SUBS = [
 ];
 
 function ProjectDetail({ projectId, meta, onBack, onProject }: {
-  projectId: number; meta: ProjectMeta | null; onBack: () => void; onProject: (p: Project | null) => void;
+  projectId: number | string; meta: ProjectMeta | null; onBack: () => void; onProject: (p: Project | null) => void;
 }) {
   const [phase, setPhase] = useState<Phase>("engagement");
   const [subTab, setSubTab] = useState("client-basic");
   const { data: project, loading, error, reload, setData } = useApiData(
-    () => projectsApi.get(projectId),
+    () => typeof projectId === "number" ? projectsApi.get(projectId) : projectsApi.getByPublicId(projectId),
     [projectId]
   );
 
@@ -840,9 +841,11 @@ const LIVE_VIEWS = [
   "library-raw",
 ];
 
-function EstimateAppInner() {
-  const [view, setView] = useState("projects");
-  const [openProjectId, setOpenProjectId] = useState<number | null>(null);
+function EstimateAppInner({ initialProjectId }: { initialProjectId: string | null }) {
+  const router = useRouter();
+  const toast = useToast();
+  const [view, setView] = useState(initialProjectId ? "detail" : "projects");
+  const [openProjectId, setOpenProjectId] = useState<number | string | null>(initialProjectId);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [showAddLead, setShowAddLead] = useState(false);
   const [listKey, setListKey] = useState(0);
@@ -862,12 +865,30 @@ function EstimateAppInner() {
     return !!level && level !== "none";
   };
 
-  const openProject = (id: number) => { setOpenProjectId(id); setView("detail"); };
-  const closeProject = () => { setOpenProjectId(null); setActiveProject(null); setView("projects"); setListKey(k => k + 1); };
+  const openProject = async (id: number) => {
+    try {
+      const project = await projectsApi.get(id);
+      router.push(`/projects/${project.public_id}`);
+    } catch (error) {
+      toast.error("Could not open project", error instanceof Error ? error.message : "Please try again.");
+    }
+  };
+  const closeProject = () => {
+    setOpenProjectId(null);
+    setActiveProject(null);
+    setView("projects");
+    setListKey(k => k + 1);
+    router.push("/estimate");
+  };
 
   return (
     <div className="flex min-h-screen bg-[#f0eeeb]">
-      <Sidebar view={view} setView={v => { setView(v); setOpenProjectId(null); }}
+      <Sidebar view={view} setView={v => {
+        setView(v);
+        setOpenProjectId(null);
+        setActiveProject(null);
+        if (initialProjectId) router.push("/estimate");
+      }}
         selectedProject={activeProject}
         allowed={allowed}
         setSelectedProject={p => { if (!p) { setOpenProjectId(null); setActiveProject(null); } }} />
@@ -916,6 +937,15 @@ function EstimateAppInner() {
 }
 
 export default function EstimateApp() {
+  const params = useParams<{ publicId?: string }>();
+  const initialProjectId = params?.publicId ?? null;
   // AppShell supplies AuthProvider + ToastProvider and gates on a live session.
-  return (<AppShell><EstimateAppInner /></AppShell>);
+  return (
+    <AppShell>
+      <EstimateAppInner
+        key={initialProjectId ?? "projects"}
+        initialProjectId={initialProjectId}
+      />
+    </AppShell>
+  );
 }

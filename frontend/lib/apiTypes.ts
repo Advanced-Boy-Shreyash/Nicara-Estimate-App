@@ -25,6 +25,7 @@ export type BookingStatus = "draft" | "sent" | "signed" | "cancelled";
 
 export interface ProjectListItem {
   id: number;
+  public_id: string;
   name: string;
   client_name: string;
   client_phone: string;
@@ -485,6 +486,7 @@ export interface Lead {
   project_name: string;
   developer: string;
   unit_no?: string;
+  address?: string;
   city: string;
   state?: string;
   property_type: string;

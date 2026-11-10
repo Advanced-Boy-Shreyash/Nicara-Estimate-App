@@ -24,6 +24,37 @@ import {
 const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
 const TH = "px-2 py-2 text-stone-200 font-semibold text-[10px] text-left whitespace-nowrap border-r border-stone-700";
 
+type EstimateDisplayEntry =
+  | { kind: "furniture"; key: string; rows: EstimateItem[] }
+  | { kind: "line"; item: EstimateItem };
+
+function estimateDisplayEntries(items: EstimateItem[], groupFurniture: boolean): EstimateDisplayEntry[] {
+  const entries: EstimateDisplayEntry[] = [];
+  const furnitureIndexes = new Map<string, number>();
+
+  for (const item of items) {
+    if (!groupFurniture || !item.group_key) {
+      entries.push({ kind: "line", item });
+      continue;
+    }
+
+    const index = furnitureIndexes.get(item.group_key);
+    if (index === undefined) {
+      furnitureIndexes.set(item.group_key, entries.length);
+      entries.push({ kind: "furniture", key: item.group_key, rows: [item] });
+    } else {
+      const entry = entries[index];
+      if (entry?.kind === "furniture") entry.rows.push(item);
+    }
+  }
+
+  return entries;
+}
+
+function totalOf(rows: EstimateItem[], field: keyof EstimateItem) {
+  return rows.reduce((total, row) => total + (parseFloat(String(row[field] ?? "0")) || 0), 0);
+}
+
 /**
  * Initial / Intermediate / Final Estimate tab.
  * Line totals and the grand total are always whatever the server just returned.
@@ -40,7 +71,7 @@ export default function EstimateTab({
   const [banner, setBanner] = useState("");
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [showGenerator, setShowGenerator] = useState(false);
+  const [showGenerator, setShowGenerator] = useState(type === "initial");
   const [populating, setPopulating] = useState(false);
   const [addingFurniture, setAddingFurniture] = useState(false);
   const [downloading, setDownloading] = useState<"pdf" | "excel" | null>(null);
@@ -176,7 +207,9 @@ export default function EstimateTab({
             </Btn>
             <Btn variant="ghost" disabled={busy || locked}
               onClick={() => setShowGenerator(!showGenerator)}>
-              {showGenerator ? <><X size={13} /> Close Generator</> : <><Brain size={13} /> Smart Generator</>}
+              {showGenerator
+                ? <><X size={13} /> {type === "initial" ? "Hide Generator" : "Close Generator"}</>
+                : <><Brain size={13} /> Smart Generator</>}
             </Btn>
 
             {/* Downloads — rendered server-side so every copy is identical. */}
@@ -264,7 +297,7 @@ export default function EstimateTab({
               disabled={busy || !!locked}
               onGenerated={async () => {
                 await refresh();
-                setShowGenerator(false);
+                setShowGenerator(type === "initial");
                 toast.success("Applied", "Chosen brands applied to the estimate rows");
               }}
               onError={setBanner}
@@ -278,6 +311,7 @@ export default function EstimateTab({
             busy={busy}
             onChanged={refresh}
             onError={setBanner}
+            initialEstimate={type === "initial"}
           />
 
           <Totals estimate={estimate} />
@@ -402,7 +436,7 @@ function ImportModal({ onClose, onImported, projectId, estimateId }: {
    ══════════════════════════════════════════════════════════════════ */
 
 function LineItems({
-  project, estimate, locked, busy, onChanged, onError,
+  project, estimate, locked, busy, onChanged, onError, initialEstimate,
 }: {
   project: Project;
   estimate: Estimate;
@@ -410,6 +444,7 @@ function LineItems({
   busy: boolean;
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
+  initialEstimate: boolean;
 }) {
   const [draft, setDraft] = useState<Record<number, Record<string, unknown>>>({});
   const [fArea, setFArea] = useState("All");
@@ -459,9 +494,11 @@ function LineItems({
     return Array.from(map.entries()).map(([area, items]) => ({
       area,
       items,
+      entries: estimateDisplayEntries(items, initialEstimate),
       subtotal: items.reduce((s, i) => s + parseFloat(i.total_amount || "0"), 0),
     }));
-  }, [filtered]);
+  }, [filtered, initialEstimate]);
+  const visibleItemCount = grouped.reduce((sum, group) => sum + group.entries.length, 0);
 
   if (estimate.items.length === 0) {
     return (
@@ -484,22 +521,25 @@ function LineItems({
           <button onClick={() => setFArea("All")}
             className="px-2.5 py-1 bg-transparent border border-surface-200 rounded-md text-[11px] text-surface-400 cursor-pointer hover:bg-surface-50">Clear</button>
         )}
-        <span className="ml-auto text-[11px] text-surface-400">{filtered.length}/{estimate.items.length} items</span>
+        <span className="ml-auto text-[11px] text-surface-400">{visibleItemCount}/{estimateDisplayEntries(estimate.items, initialEstimate).length} items</span>
       </div>
 
       {/* ── Table (spreadsheet-style) ── */}
       <div className="overflow-x-auto border border-surface-200 rounded-xl">
-        <table className="w-full text-[11px] min-w-[2400px]">
+        <table className="w-full text-[11px] min-w-[2480px]">
           <thead>
             <tr className="bg-nicara-dark">
               {[
                 "Area", "Item",
                 "W(ft)", "W(in)", "H(ft)", "H(in)", "D(ft)", "D(in)",
-                "Type", "Specification", "Brand", "Model", "Application", "Specifications",
-                "Spec", "Qty", "Unit", "Price", "Price Unit", "Cost",
+                "Type", "Specification", "Brand", "Model", ...(!initialEstimate ? ["Application"] : []),
+                ...(!initialEstimate ? ["Specifications"] : []),
+                ...(!initialEstimate ? ["Spec"] : []),
+                "Qty", "Unit", "Price", "Price Unit", "Cost",
                 "Margin %", "Margin Amt", "Ref %", "Ref Amt",
-                "GST %", "GST Amt", "Total", "Flag",
-                "Detail", "Del",
+                "GST %", "GST Amt", "Total",
+                ...(!initialEstimate ? ["Flag"] : []),
+                initialEstimate ? "Materials" : "Detail", "Del",
               ].map(h => (
                 <th key={h} className={TH}>{h}</th>
               ))}
@@ -522,6 +562,7 @@ function LineItems({
                 setExpanded={setExpanded}
                 onChanged={onChanged}
                 onError={onError}
+                initialEstimate={initialEstimate}
                 onAddRow={async () => {
                   try {
                     await estimatesApi.addItem(project.id, estimate.id, {
@@ -536,13 +577,13 @@ function LineItems({
             ))}
             {/* Grand total footer */}
             <tr className="bg-nicara-dark">
-              <td colSpan={25} className="p-2.5 text-stone-200 font-bold text-right text-xs">
-                GRAND TOTAL ({filtered.length} items)
+              <td colSpan={initialEstimate ? 23 : 26} className="p-2.5 text-stone-200 font-bold text-right text-xs">
+              GRAND TOTAL ({visibleItemCount} items)
               </td>
               <td className="p-2.5 text-nicara-gold font-extrabold text-right font-mono text-[14px]">
                 {inr(String(grouped.reduce((s, g) => s + g.subtotal, 0)))}
               </td>
-              <td className="bg-nicara-dark" colSpan={4} />
+              <td className="bg-nicara-dark" colSpan={initialEstimate ? 2 : 3} />
             </tr>
           </tbody>
         </table>
@@ -555,9 +596,9 @@ function LineItems({
 
 function GroupBlock({
   group, project, estimate, locked, busy, val, setDraft, commit, remove,
-  expanded, setExpanded, onChanged, onError, onAddRow,
+  expanded, setExpanded, onChanged, onError, onAddRow, initialEstimate,
 }: {
-  group: { area: string; items: EstimateItem[]; subtotal: number };
+  group: { area: string; items: EstimateItem[]; entries: EstimateDisplayEntry[]; subtotal: number };
   project: Project;
   estimate: Estimate;
   locked: boolean;
@@ -571,16 +612,17 @@ function GroupBlock({
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
   onAddRow: () => void;
+  initialEstimate: boolean;
 }) {
   const BD = "border-r border-surface-200";
   return (
     <>
       {/* Area header */}
       <tr className="bg-nicara-gold/10">
-        <td colSpan={30} className="px-3 py-2">
+        <td colSpan={initialEstimate ? 26 : 30} className="px-3 py-2">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.area}</span>
-            <span className="text-[10px] text-surface-400">{group.items.length} item(s)</span>
+            <span className="text-[10px] text-surface-400">{group.entries.length} item(s)</span>
             <span className="text-[10px] font-semibold text-nicara-gold ml-auto mr-3">{inr(String(group.subtotal))}</span>
             {!locked && (
               <button onClick={onAddRow}
@@ -591,40 +633,80 @@ function GroupBlock({
           </div>
         </td>
       </tr>
-      {/* Item rows — each furniture piece gets a header with its size and options */}
-      {group.items.map((item, ri) => {
-        const isOpen = expanded[item.id];
-        const startsGroup = !!item.group_key && (ri === 0 || group.items[ri - 1].group_key !== item.group_key);
+      {/* Initial Estimate furniture is one room item; its generated rows live in the breakdown. */}
+      {group.entries.map((entry, ri) => {
+        if (entry.kind === "furniture") {
+          const first = entry.rows[0];
+          if (!first) return null;
+          const isOpen = expanded[first.id] ?? false;
+          const optionKey = [
+            first.config?.shelf_type ?? "ply",
+            !!first.config?.handleless,
+            !!first.config?.one_side_visible,
+          ].join(".");
+          return (
+            <InitialEstimateFurnitureGroup
+              key={`${entry.key}:${[first.width_ft, first.width_in, first.height_ft, first.height_in,
+                first.depth_ft, first.depth_in].join(".")}:${optionKey}`}
+              rows={entry.rows}
+              project={project}
+              estimate={estimate}
+              locked={locked}
+              busy={busy}
+              expanded={isOpen}
+              stripe={ri % 2 !== 0}
+              val={val}
+              setDraft={setDraft}
+              commit={commit}
+              remove={remove}
+              onToggle={() => setExpanded(previous => ({ ...previous, [first.id]: !previous[first.id] }))}
+              onChanged={onChanged}
+              onError={onError}
+            />
+          );
+        }
+
+        const item = entry.item;
+        const isOpen = expanded[item.id] ?? false;
+        const previous = group.items[ri - 1];
+        const startsGroup = !initialEstimate && !!item.group_key
+          && (ri === 0 || previous?.group_key !== item.group_key);
+        const furnitureRows = startsGroup
+          ? group.items.filter(row => row.group_key === item.group_key)
+          : [];
         return (
-          <Fragment key={item.id}>
-          {startsGroup && (
-            <FurnitureGroupHeader
-              // Re-mount when the stored size/options change, so the header never
-              // edits (or sends back) a stale copy of them.
-              key={`${item.group_key}:${[item.width_ft, item.width_in, item.height_ft, item.height_in,
-                item.depth_ft, item.depth_in].join(".")}:${JSON.stringify(item.config ?? {})}`}
-              rows={group.items.filter(r => r.group_key === item.group_key)}
-              project={project} estimate={estimate} locked={locked}
-              onChanged={onChanged} onError={onError} />
-          )}
-          <ItemRow
-            key={item.id}
-            item={item}
-            ri={ri}
-            isOpen={isOpen}
-            project={project}
-            estimate={estimate}
-            locked={locked}
-            busy={busy}
-            val={val}
-            setDraft={setDraft}
-            commit={commit}
-            remove={remove}
-            onChanged={onChanged}
-            onError={onError}
-            onToggle={() => setExpanded(p => ({ ...p, [item.id]: !p[item.id] }))}
-            BD={BD}
-          />
+          <Fragment key={`line-${item.id}`}>
+            {startsGroup && (
+              <FurnitureGroupHeader
+                key={`${item.group_key}:${[item.width_ft, item.width_in, item.height_ft, item.height_in,
+                  item.depth_ft, item.depth_in].join(".")}:${JSON.stringify(item.config ?? {})}`}
+                rows={furnitureRows}
+                project={project}
+                estimate={estimate}
+                locked={locked}
+                onChanged={onChanged}
+                onError={onError}
+                initialEstimate={initialEstimate}
+              />
+            )}
+            <ItemRow
+              item={item}
+              ri={ri}
+              isOpen={isOpen}
+              project={project}
+              estimate={estimate}
+              locked={locked}
+              busy={busy}
+              val={val}
+              setDraft={setDraft}
+              commit={commit}
+              remove={remove}
+              onChanged={onChanged}
+              onError={onError}
+              onToggle={() => setExpanded(previous => ({ ...previous, [item.id]: !previous[item.id] }))}
+              BD={BD}
+              initialEstimate={initialEstimate}
+            />
           </Fragment>
         );
       })}
@@ -632,11 +714,420 @@ function GroupBlock({
   );
 }
 
+type FurnitureDimensions = Pick<EstimateItem, "width_ft" | "width_in" | "height_ft" | "height_in" | "depth_ft" | "depth_in">;
+
+function InitialEstimateFurnitureGroup({
+  rows, project, estimate, locked, busy, expanded, stripe, val, setDraft, commit, remove,
+  onToggle, onChanged, onError,
+}: {
+  rows: EstimateItem[];
+  project: Project;
+  estimate: Estimate;
+  locked: boolean;
+  busy: boolean;
+  expanded: boolean;
+  stripe: boolean;
+  val: (item: EstimateItem, key: string) => string;
+  setDraft: React.Dispatch<React.SetStateAction<Record<number, Record<string, unknown>>>>;
+  commit: (item: EstimateItem) => Promise<void>;
+  remove: (item: EstimateItem) => Promise<void>;
+  onToggle: () => void;
+  onChanged: () => Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const first = rows[0];
+  const initialSize: FurnitureDimensions = {
+    width_ft: first.width_ft,
+    width_in: first.width_in,
+    height_ft: first.height_ft,
+    height_in: first.height_in,
+    depth_ft: first.depth_ft,
+    depth_in: first.depth_in,
+  };
+  const [size, setSize] = useState(initialSize);
+  const [options, setOptions] = useState<CalcOptions>(first.config ?? {});
+  const [saving, setSaving] = useState(false);
+  const savedOptions = first.config ?? {};
+  const dirty = JSON.stringify(size) !== JSON.stringify(initialSize)
+    || (options.shelf_type ?? "ply") !== (savedOptions.shelf_type ?? "ply")
+    || !!options.handleless !== !!savedOptions.handleless
+    || !!options.one_side_visible !== !!savedOptions.one_side_visible;
+
+  const recalculate = async () => {
+    setSaving(true);
+    try {
+      const currentOptions: CalcOptions = { ...options };
+      if (first.config?.overrides) currentOptions.overrides = first.config.overrides;
+      else delete currentOptions.overrides;
+      await estimatesApi.recalculateGroup(project.id, estimate.id, first.group_key, { ...size, options: currentOptions });
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Could not recalculate the furniture.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteGroup = async () => {
+    setSaving(true);
+    try {
+      await estimatesApi.deleteGroup(project.id, estimate.id, first.group_key);
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Could not remove the furniture.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <FurnitureItemSummary
+        item={first}
+        rows={rows}
+        size={size}
+        setSize={setSize}
+        expanded={expanded}
+        stripe={stripe}
+        dirty={dirty}
+        busy={busy || saving}
+        locked={locked}
+        onRecalculate={recalculate}
+        onToggle={onToggle}
+      />
+      {expanded && (
+        <tr>
+          <td colSpan={26} className="p-0">
+            <FurnitureMaterialBreakdown
+              rows={rows}
+              project={project}
+              estimate={estimate}
+              locked={locked}
+              busy={busy || saving}
+              options={options}
+              onOptionsChange={setOptions}
+              onDeleteGroup={deleteGroup}
+              val={val}
+              setDraft={setDraft}
+              commit={commit}
+              remove={remove}
+              onChanged={onChanged}
+              onError={onError}
+            />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function FurnitureItemSummary({ item, rows, size, setSize, expanded, stripe, dirty, busy, locked, onRecalculate, onToggle }: {
+  item: EstimateItem;
+  rows: EstimateItem[];
+  size: FurnitureDimensions;
+  setSize: React.Dispatch<React.SetStateAction<FurnitureDimensions>>;
+  expanded: boolean;
+  stripe: boolean;
+  dirty: boolean;
+  busy: boolean;
+  locked: boolean;
+  onRecalculate: () => void;
+  onToggle: () => void;
+}) {
+  const cost = totalOf(rows, "cost");
+  const marginAmount = totalOf(rows, "margin_amount");
+  const referralAmount = totalOf(rows, "referral_amount");
+  const gstAmount = totalOf(rows, "gst_amount");
+  const taxable = totalOf(rows, "amount") + marginAmount + referralAmount;
+  const percent = (amount: number, base: number) => base > 0 ? `${(amount / base * 100).toFixed(2)}%` : "—";
+  const BD = "border-r border-surface-200";
+  const dimension = (key: keyof FurnitureDimensions, label: string) => (
+    <input
+      type="number"
+      min={0}
+      step={1}
+      aria-label={`${label} ${key.endsWith("_ft") ? "feet" : "inches"}`}
+      value={size[key]}
+      disabled={locked || busy}
+      onChange={event => setSize(previous => ({ ...previous, [key]: parseInt(event.target.value, 10) || 0 }))}
+      className="w-[54px] px-1.5 py-1 border border-transparent rounded text-[11px] font-mono text-center outline-none bg-transparent focus:border-nicara-gold focus:bg-white disabled:text-surface-400"
+    />
+  );
+
+  return (
+    <tr className={`border-b border-surface-100 ${expanded ? "bg-nicara-gold/5 border-l-[3px] border-l-nicara-gold" : stripe ? "bg-surface-50/50" : "bg-white"}`}>
+      <td className={`px-2 py-1.5 font-semibold text-nicara-dark ${BD}`}>{item.area || "—"}</td>
+      <td className={`px-2 py-1.5 font-semibold text-nicara-dark min-w-[160px] ${BD}`}>
+        {item.item || item.furniture_name || "Furniture"}
+        {item.zone && <div className="text-[9px] font-normal text-surface-400">{item.zone}</div>}
+      </td>
+      <td className={`px-1 py-1 w-[68px] ${BD}`}>{dimension("width_ft", "Width")}</td>
+      <td className={`px-1 py-1 w-[68px] ${BD}`}>{dimension("width_in", "Width")}</td>
+      <td className={`px-1 py-1 w-[68px] ${BD}`}>{dimension("height_ft", "Height")}</td>
+      <td className={`px-1 py-1 w-[68px] ${BD}`}>{dimension("height_in", "Height")}</td>
+      <td className={`px-1 py-1 w-[68px] ${BD}`}>{dimension("depth_ft", "Depth")}</td>
+      <td className={`px-1 py-1 w-[68px] ${BD}`}>{dimension("depth_in", "Depth")}</td>
+      <td className={`px-2 py-1.5 text-surface-500 ${BD}`}>Furniture</td>
+      <td className={`px-2 py-1.5 text-surface-500 ${BD}`}>{rows.length} breakdown rows</td>
+      <td className={`px-2 py-1.5 text-surface-400 ${BD}`}>—</td>
+      <td className={`px-2 py-1.5 text-surface-400 ${BD}`}>—</td>
+      <td className={`px-2 py-1.5 text-right font-mono ${BD}`}>1</td>
+      <td className={`px-2 py-1.5 ${BD}`}>nos</td>
+      <td className={`px-2 py-1.5 text-right font-mono ${BD}`}>—</td>
+      <td className={`px-2 py-1.5 ${BD}`}>—</td>
+      <td className={`px-2 py-1.5 text-right font-mono font-semibold text-nicara-dark whitespace-nowrap ${BD}`}>{inr(String(cost))}</td>
+      <td className={`px-2 py-1.5 text-right font-mono ${BD}`}>{percent(marginAmount, cost)}</td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{inr(String(marginAmount))}</td>
+      <td className={`px-2 py-1.5 text-right font-mono ${BD}`}>{percent(referralAmount, cost)}</td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{inr(String(referralAmount))}</td>
+      <td className={`px-2 py-1.5 text-center text-surface-500 ${BD}`}>{percent(gstAmount, taxable)}</td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-500 whitespace-nowrap ${BD}`}>{inr(String(gstAmount))}</td>
+      <td className={`px-2 py-1.5 text-right font-bold text-nicara-gold font-mono whitespace-nowrap ${BD}`}>{inr(String(totalOf(rows, "total_amount")))}</td>
+      <td className={`px-2 py-1.5 text-center whitespace-nowrap ${BD}`}>
+        <button onClick={onToggle} aria-expanded={expanded}
+          aria-label={`${expanded ? "Hide" : "Show"} material breakdown for ${item.item || "furniture"}`}
+          title={expanded ? "Hide material breakdown" : "Show material breakdown"}
+          className={`px-2 py-1 rounded-md cursor-pointer border ${expanded ? "bg-nicara-gold/10 border-nicara-gold text-nicara-gold" : "bg-surface-50 border-surface-200 text-surface-500"}`}>
+          {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        </button>
+        {!locked && (
+          <button onClick={onRecalculate} disabled={!dirty || busy}
+            title={dirty ? "Recalculate this furniture with the edited dimensions/options" : "No pending changes to recalculate"}
+            className={`ml-1 inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[10px] font-semibold ${dirty && !busy
+              ? "border-nicara-gold bg-nicara-gold text-white cursor-pointer"
+              : "border-surface-200 bg-surface-50 text-surface-400 cursor-not-allowed"}`}>
+            <RefreshCw size={10} /> Recalculate
+          </button>
+        )}
+      </td>
+      <td className="px-2 py-1.5 text-center" />
+    </tr>
+  );
+}
+
+function FurnitureMaterialBreakdown({
+  rows, project, estimate, locked, busy, options, onOptionsChange, onDeleteGroup,
+  val, setDraft, commit, remove, onChanged, onError,
+}: {
+  rows: EstimateItem[];
+  project: Project;
+  estimate: Estimate;
+  locked: boolean;
+  busy: boolean;
+  options: CalcOptions;
+  onOptionsChange: (options: CalcOptions) => void;
+  onDeleteGroup: () => void;
+  val: (item: EstimateItem, key: string) => string;
+  setDraft: React.Dispatch<React.SetStateAction<Record<number, Record<string, unknown>>>>;
+  commit: (item: EstimateItem) => Promise<void>;
+  remove: (item: EstimateItem) => Promise<void>;
+  onChanged: () => Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const total = (field: keyof EstimateItem) => inr(String(totalOf(rows, field)));
+  const headers = [
+    "Type", "Component", "Brand", "Model", "Application", "Qty", "Unit", "Price", "Price Unit",
+    "Cost", "Margin %", "Margin Amt", "Ref %", "Ref Amt", "GST %", "GST Amt", "Total", "",
+  ];
+
+  return (
+    <div className="bg-amber-50 border-l-[3px] border-l-nicara-gold px-4 py-3">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div className="text-[10px] font-bold text-amber-800">
+          Material Breakdown — {rows[0]?.item || rows[0]?.furniture_name || "Furniture"}
+          <span className="ml-2 text-amber-600 font-normal">{rows.length} component row(s)</span>
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {!locked && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-white px-2.5 py-1.5">
+              <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-700">Furniture options</span>
+              <OptionsControls compact options={options} onChange={onOptionsChange} />
+            </div>
+          )}
+          {!locked && (
+            <button onClick={onDeleteGroup} disabled={busy}
+              title="Remove all rows for this furniture item"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-[10px] font-semibold text-red-500 cursor-pointer hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">
+              <Trash2 size={11} /> Remove furniture
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[10px] min-w-[1750px] border border-amber-200 rounded-lg overflow-hidden bg-white">
+          <thead>
+            <tr className="bg-amber-100">
+              {headers.map(header => (
+                <th key={header || "actions"} className="px-2 py-1.5 text-amber-800 font-semibold text-left text-[9px] uppercase whitespace-nowrap">
+                  {header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((item, index) => (
+              <Fragment key={item.id}>
+                <GeneratedMaterialRow
+                  item={item}
+                  stripe={index % 2 !== 0}
+                  project={project}
+                  estimate={estimate}
+                  locked={locked}
+                  busy={busy}
+                  val={val}
+                  setDraft={setDraft}
+                  commit={commit}
+                  remove={remove}
+                  onChanged={onChanged}
+                  onError={onError}
+                />
+                {(item.components?.length ?? 0) > 0 && (
+                  <tr>
+                    <td colSpan={headers.length} className="p-0">
+                      <ComponentBreakdown
+                        item={item}
+                        project={project}
+                        estimate={estimate}
+                        locked={locked}
+                        onChanged={onChanged}
+                        onError={onError}
+                      />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="bg-amber-100 border-t-2 border-amber-300">
+              <td colSpan={9} className="px-2 py-1.5 text-right text-[10px] font-bold text-amber-800">Furniture Total</td>
+              <td className="px-2 py-1.5 text-right font-semibold font-mono">{total("cost")}</td>
+              <td />
+              <td className="px-2 py-1.5 text-right font-mono">{total("margin_amount")}</td>
+              <td />
+              <td className="px-2 py-1.5 text-right font-mono">{total("referral_amount")}</td>
+              <td />
+              <td className="px-2 py-1.5 text-right font-mono">{total("gst_amount")}</td>
+              <td className="px-2 py-1.5 text-right font-extrabold text-nicara-gold font-mono">{total("total_amount")}</td>
+              <td />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function GeneratedMaterialRow({
+  item, stripe, project, estimate, locked, busy, val, setDraft, commit, remove, onChanged, onError,
+}: {
+  item: EstimateItem;
+  stripe: boolean;
+  project: Project;
+  estimate: Estimate;
+  locked: boolean;
+  busy: boolean;
+  val: (item: EstimateItem, key: string) => string;
+  setDraft: React.Dispatch<React.SetStateAction<Record<number, Record<string, unknown>>>>;
+  commit: (item: EstimateItem) => Promise<void>;
+  remove: (item: EstimateItem) => Promise<void>;
+  onChanged: () => Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const BD = "border-r border-amber-100";
+  const change = (field: string, value: unknown) =>
+    setDraft(draft => ({ ...draft, [item.id]: { ...draft[item.id], [field]: value } }));
+
+  return (
+    <tr className={`border-t border-amber-200 ${stripe ? "bg-amber-50/40" : "bg-white"}`}>
+      <td className={`px-2 py-1.5 min-w-[110px] ${BD}`}>
+        {locked ? (
+          <span className="text-surface-600">{item.item_type || "—"}</span>
+        ) : (
+          <select value={val(item, "item_type")}
+            onChange={event => {
+              change("item_type", event.target.value);
+              setTimeout(() => commit(item), 0);
+            }}
+            className="w-full px-1 py-1 border border-transparent rounded-lg text-[10px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white cursor-pointer">
+            <option value="">—</option>
+            <option value="Procurement">Procurement</option>
+            <option value="Service">Service</option>
+            <option value="Spec Purpose">Spec Purpose</option>
+            <option value="Procurement cum Service">Procurement cum Service</option>
+          </select>
+        )}
+      </td>
+      <td className={`px-2 py-1.5 min-w-[170px] font-semibold text-nicara-dark ${BD}`}>
+        <EditableCell locked={locked} value={val(item, "specification")}
+          onChange={value => change("specification", value)} onCommit={() => commit(item)} placeholder="Component" />
+        {item.flag && <div className="px-2 text-[9px] text-amber-700">Quantity needs review</div>}
+      </td>
+      <td className={`px-2 py-1.5 min-w-[150px] ${BD}`}>
+        {item.raw_material_category && !locked ? (
+          <RawMaterialPicker item={item} project={project} estimate={estimate} onChanged={onChanged} onError={onError} />
+        ) : (
+          <EditableCell locked={locked} value={val(item, "brand")}
+            onChange={value => change("brand", value)} onCommit={() => commit(item)} placeholder="Brand" />
+        )}
+      </td>
+      <td className={`px-2 py-1.5 min-w-[150px] ${BD}`}>
+        <EditableCell locked={locked} value={val(item, "model_name")}
+          onChange={value => change("model_name", value)} onCommit={() => commit(item)} placeholder="Model" />
+      </td>
+      <td className={`px-2 py-1.5 min-w-[130px] ${BD}`}>
+        <EditableCell locked={locked} value={val(item, "application")}
+          onChange={value => change("application", value)} onCommit={() => commit(item)} placeholder="Application" />
+      </td>
+      <td className={`px-2 py-1.5 w-[85px] text-right font-mono ${BD} ${item.qty_overridden ? "bg-blue-50" : ""}`}
+        title={item.calc_basis || undefined}>
+        <EditableCell locked={locked} value={val(item, "qty")} mono type="number"
+          onChange={value => change("qty", value)} onCommit={() => commit(item)} />
+        <QtyNote item={item} locked={locked} project={project} estimate={estimate} onChanged={onChanged} onError={onError} />
+      </td>
+      <td className={`px-2 py-1.5 min-w-[55px] ${BD}`}>
+        <EditableCell locked={locked} value={val(item, "unit")}
+          onChange={value => change("unit", value)} onCommit={() => commit(item)} />
+      </td>
+      <td className={`px-2 py-1.5 w-[90px] text-right font-mono ${BD}`}>
+        <EditableCell locked={locked} value={val(item, "rate")} mono type="number"
+          onChange={value => change("rate", value)} onCommit={() => commit(item)} />
+      </td>
+      <td className={`px-2 py-1.5 min-w-[80px] ${BD}`}>
+        <EditableCell locked={locked} value={val(item, "price_unit")}
+          onChange={value => change("price_unit", value)} onCommit={() => commit(item)} placeholder="Unit" />
+      </td>
+      <td className={`px-2 py-1.5 text-right font-mono font-semibold text-nicara-dark whitespace-nowrap ${BD}`}>{inr(item.cost)}</td>
+      <td className={`px-2 py-1.5 w-[75px] text-right font-mono ${BD}`}>
+        <EditableCell locked={locked} value={val(item, "margin_pct")} mono type="number"
+          onChange={value => change("margin_pct", value)} onCommit={() => commit(item)} />
+      </td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{inr(item.margin_amount)}</td>
+      <td className={`px-2 py-1.5 w-[75px] text-right font-mono ${BD}`}>
+        <EditableCell locked={locked} value={val(item, "referral_pct")} mono type="number"
+          onChange={value => change("referral_pct", value)} onCommit={() => commit(item)} />
+      </td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{inr(item.referral_amount)}</td>
+      <td className={`px-2 py-1.5 text-center text-surface-500 ${BD}`}>{parseFloat(item.gst_pct)}%</td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-500 whitespace-nowrap ${BD}`}>{inr(item.gst_amount)}</td>
+      <td className={`px-2 py-1.5 text-right font-bold text-nicara-gold font-mono whitespace-nowrap ${BD}`}>{inr(item.total_amount)}</td>
+      <td className="px-2 py-1.5 text-center">
+        {!locked && (
+          <button onClick={() => remove(item)} disabled={busy} title="Remove this breakdown row"
+            className="bg-transparent border-none text-red-300 cursor-pointer p-0 hover:text-red-500 transition-colors">
+            <Trash2 size={12} />
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
 /* ── Single item row + collapsible detail sub-table ── */
 
 function ItemRow({
   item, ri, isOpen, project, estimate, locked, busy, val, setDraft, commit, remove,
-  onChanged, onError, onToggle, BD,
+  onChanged, onError, onToggle, BD, initialEstimate,
 }: {
   item: EstimateItem;
   ri: number;
@@ -653,6 +1144,7 @@ function ItemRow({
   onError: (msg: string) => void;
   onToggle: () => void;
   BD: string;
+  initialEstimate: boolean;
 }) {
   const generated = !!item.group_key;
 
@@ -728,17 +1220,19 @@ function ItemRow({
             onCommit={() => commit(item)} placeholder="Model" />
         </td>
         {/* Application */}
-        <td className={`px-2 py-1.5 min-w-[100px] ${BD}`}>
+        {!initialEstimate && <td className={`px-2 py-1.5 min-w-[100px] ${BD}`}>
           <EditableCell locked={locked} value={val(item, "application")}
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], application: v } }))}
             onCommit={() => commit(item)} placeholder="Application" />
-        </td>
+        </td>}
         {/* Specifications (auto-generated, read-only) */}
-        <td className={`px-2 py-1.5 text-[10px] text-surface-500 min-w-[180px] ${BD}`}>
-          {item.specifications_text || "—"}
-        </td>
+        {!initialEstimate && (
+          <td className={`px-2 py-1.5 text-[10px] text-surface-500 min-w-[180px] ${BD}`}>
+            {item.specifications_text || "—"}
+          </td>
+        )}
         {/* Estimate Spec Flag */}
-        <td className={`px-2 py-1.5 text-center w-[40px] ${BD}`}>
+        {!initialEstimate && <td className={`px-2 py-1.5 text-center w-[40px] ${BD}`}>
           {locked ? (
             <span>{item.estimate_spec_flag ? "1" : "0"}</span>
           ) : (
@@ -749,7 +1243,7 @@ function ItemRow({
               }}
               className="w-3.5 h-3.5 accent-nicara-gold cursor-pointer" />
           )}
-        </td>
+        </td>}
         {/* Qty — generated rows explain their quantity; a typed value is an override */}
         <td className={`px-2 py-1.5 w-[70px] text-right font-mono ${BD} ${item.qty_overridden ? "bg-blue-50" : ""}`}
           title={item.calc_basis || undefined}>
@@ -814,7 +1308,7 @@ function ItemRow({
           {inr(item.total_amount)}
         </td>
         {/* Flag */}
-        <td className={`px-2 py-1.5 text-center w-[40px] ${BD}`}>
+        {!initialEstimate && <td className={`px-2 py-1.5 text-center w-[40px] ${BD}`}>
           {locked ? (
             <span>{item.flag ? "🚩" : ""}</span>
           ) : (
@@ -825,10 +1319,11 @@ function ItemRow({
               }}
               className="w-3.5 h-3.5 accent-red-500 cursor-pointer" />
           )}
-        </td>
+        </td>}
         {/* Expand toggle */}
         <td className={`px-2 py-1.5 text-center ${BD}`}>
-          <button onClick={onToggle}
+          <button onClick={onToggle} aria-expanded={isOpen}
+            aria-label={`${isOpen ? "Hide" : "Show"} material breakdown for ${item.item || "line item"}`}
             className={`px-2 py-0.5 rounded-md text-[10px] cursor-pointer border ${isOpen ? "bg-nicara-gold/10 border-nicara-gold text-nicara-gold" : "bg-surface-50 border-surface-200 text-surface-500"
               }`}>
             {isOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
@@ -845,7 +1340,7 @@ function ItemRow({
       {/* Collapsible detail row — live material breakdown */}
       {isOpen && (
         <tr>
-          <td colSpan={30} className="p-0">
+          <td colSpan={initialEstimate ? 26 : 30} className="p-0">
             <ComponentBreakdown
               item={item} project={project} estimate={estimate}
               locked={locked} onChanged={onChanged} onError={onError} />
@@ -870,6 +1365,23 @@ function ComponentBreakdown({
 }) {
   const toast = useToast();
   const components = item.components ?? [];
+  const generatedMaterial = components.length === 0 && !!item.group_key && item.raw_material_category !== null;
+  const breakdownRows = components.length > 0
+    ? components.map(component => ({ ...component, stored: component }))
+    : generatedMaterial
+      ? [{
+          id: item.id,
+          basic_component: item.specification || item.item || "Material",
+          detail: item.application,
+          brand: item.brand,
+          model: item.model_name,
+          qty: item.qty,
+          unit: item.unit,
+          price: item.rate,
+          amount: item.cost,
+          stored: null,
+        }]
+      : [];
   const [editing, setEditing] = useState<EstimateItemComponent | "new" | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -885,14 +1397,16 @@ function ComponentBreakdown({
 
   return (
     <div className="bg-amber-50 border-l-[3px] border-l-nicara-gold px-4 py-3">
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div className="text-[10px] font-bold text-amber-800">
           📋 Material Breakdown — {item.item || "line"}
-          {components.length > 0 && (
+          {generatedMaterial ? (
+            <span className="ml-2 text-amber-600 font-normal">priced from this catalogue material</span>
+          ) : components.length > 0 ? (
             <span className="ml-2 text-amber-600 font-normal">
               amount rolls up from these {components.length} component(s)
             </span>
-          )}
+          ) : null}
         </div>
         {!locked && (
           <div className="flex items-center gap-2">
@@ -914,7 +1428,7 @@ function ComponentBreakdown({
             </tr>
           </thead>
           <tbody>
-            {components.map(c => (
+            {breakdownRows.map(c => (
               <tr key={c.id} className="border-t border-amber-200">
                 <td className="px-2 py-1.5 font-semibold text-nicara-dark">{c.basic_component}</td>
                 <td className="px-2 py-1.5 text-surface-600">{c.detail || "—"}</td>
@@ -925,30 +1439,32 @@ function ComponentBreakdown({
                 <td className="px-2 py-1.5 font-mono text-right">{inr(c.price)}</td>
                 <td className="px-2 py-1.5 font-mono text-right font-semibold text-nicara-dark">{inr(c.amount)}</td>
                 <td className="px-2 py-1.5 text-right whitespace-nowrap">
-                  {!locked && (
+                  {!locked && c.stored && (
                     <>
-                      <button onClick={() => setEditing(c)}
+                      <button onClick={() => setEditing(c.stored)}
                         className="text-amber-700 hover:text-nicara-gold bg-transparent border-none cursor-pointer text-[10px] mr-2">edit</button>
-                      <button onClick={() => removeComponent(c.id)} disabled={busy}
+                      <button onClick={() => removeComponent(c.stored.id)} disabled={busy}
                         className="text-red-300 hover:text-red-500 bg-transparent border-none cursor-pointer text-[11px]">✕</button>
                     </>
                   )}
                 </td>
               </tr>
             ))}
-            {components.length === 0 && (
+            {breakdownRows.length === 0 && (
               <tr className="border-t border-amber-200">
-                <td colSpan={9} className="px-2 py-3 text-center text-surface-400 text-[10px] italic">
+                <td colSpan={9} className="px-3 py-3 text-center text-surface-400 text-[10px] italic">
                   No breakdown yet. Add a basic component to cost this line from its parts.
                   {" "}Until then the line uses qty × rate.
                 </td>
               </tr>
             )}
           </tbody>
-          {components.length > 0 && (
+          {breakdownRows.length > 0 && (
             <tfoot>
               <tr className="bg-amber-100 border-t-2 border-amber-300">
-                <td colSpan={7} className="px-2 py-1.5 text-right font-bold text-amber-800 text-[10px]">Line Total</td>
+                <td colSpan={7} className="px-2 py-1.5 text-right text-[10px] font-bold text-amber-800">
+                  Line Total
+                </td>
                 <td className="px-2 py-1.5 text-right font-extrabold text-nicara-gold font-mono">{inr(item.amount)}</td>
                 <td />
               </tr>
@@ -1105,13 +1621,14 @@ function Totals({ estimate }: { estimate: Estimate }) {
 const SIZE_IN = "w-[38px] px-1 py-0.5 border border-surface-200 rounded text-[10px] font-mono text-center outline-none focus:border-nicara-gold bg-white";
 
 /** Header above one furniture piece's rows: its size (ft/in) and options; changes recalculate the group. */
-function FurnitureGroupHeader({ rows, project, estimate, locked, onChanged, onError }: {
+function FurnitureGroupHeader({ rows, project, estimate, locked, onChanged, onError, initialEstimate }: {
   rows: EstimateItem[];
   project: Project;
   estimate: Estimate;
   locked: boolean;
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
+  initialEstimate: boolean;
 }) {
   const first = rows[0];
   const initial = {
@@ -1141,15 +1658,15 @@ function FurnitureGroupHeader({ rows, project, estimate, locked, onChanged, onEr
 
   return (
     <tr className="bg-surface-50 border-t-2 border-nicara-gold/30">
-      <td colSpan={30} className="px-3 py-1.5">
+      <td colSpan={initialEstimate ? 26 : 30} className="px-3 py-1.5">
         <div className="flex items-center gap-3 flex-wrap text-[10px]">
-          <span className="text-[11px] font-bold text-nicara-dark flex items-center gap-1.5">
+          {!initialEstimate && <span className="text-[11px] font-bold text-nicara-dark flex items-center gap-1.5">
             <Armchair size={12} className="text-nicara-gold" /> {first.item}
-          </span>
-          {first.furniture_name && first.furniture_name !== first.item && (
+          </span>}
+          {!initialEstimate && first.furniture_name && first.furniture_name !== first.item && (
             <span className="text-surface-400">{first.furniture_name}</span>
           )}
-          {first.zone && <span className="text-surface-500">· {first.zone}</span>}
+          {!initialEstimate && first.zone && <span className="text-surface-500">· {first.zone}</span>}
           <span className="flex items-center gap-1 text-surface-500">
             W {dim("width_ft")}′{dim("width_in")}″ · H {dim("height_ft")}′{dim("height_in")}″ · D {dim("depth_ft")}′{dim("depth_in")}″
           </span>
@@ -1160,7 +1677,7 @@ function FurnitureGroupHeader({ rows, project, estimate, locked, onChanged, onEr
             </span>
           )}
           {needsInput > 0 && <span className="text-amber-600">⚑ {needsInput} row(s) need a quantity</span>}
-          <span className="ml-auto font-semibold text-nicara-gold">{inr(String(subtotal))}</span>
+          {!initialEstimate && <span className="ml-auto font-semibold text-nicara-gold">{inr(String(subtotal))}</span>}
           {!locked && (
             <>
               <button disabled={!dirty || busy}

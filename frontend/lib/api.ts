@@ -377,6 +377,8 @@ export const projectsApi = {
     return apiFetch<Paginated<ProjectListItem>>(`/projects/${qs ? `?${qs}` : ""}`);
   },
   get: (id: number) => apiFetch<Project>(`/projects/${id}/`),
+  getByPublicId: (publicId: string) =>
+    apiFetch<Project>(`/projects/by-public-id/${encodeURIComponent(publicId)}/`),
   create: (data: Partial<Project>) =>
     apiFetch<Project>("/projects/", {
       method: "POST",
@@ -953,4 +955,20 @@ export const libraryApi = {
 
   deleteBrand: (id: number) =>
     apiFetch<void>(`/library/brands/${id}/`, { method: "DELETE" }),
+};
+export type FloorPlanFile = {
+  id: number;
+  file_name: string;
+  file_size: number;
+  file_url: string;
+  created_at: string;
+};
+
+export const floorPlansApi = {
+  list: (projectId: number) =>
+    apiFetch<{ count: number; results: FloorPlanFile[] }>(`/projects/${projectId}/floor-plans/`),
+  upload: (projectId: number, form: FormData) =>
+    apiUpload<{ results: FloorPlanFile[] }>(`/projects/${projectId}/floor-plans/`, form),
+  delete: (projectId: number, id: number) =>
+    apiFetch<void>(`/projects/${projectId}/floor-plans/${id}/`, { method: "DELETE" }),
 };
