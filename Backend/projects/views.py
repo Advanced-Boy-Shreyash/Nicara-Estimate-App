@@ -78,6 +78,13 @@ class ProjectDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ProjectDetailSerializer
 
 
+class ProjectPublicIdDetailView(generics.RetrieveAPIView):
+    """Resolve a project using its stable public URL identifier."""
+    queryset = Project.objects.all()
+    serializer_class = ProjectDetailSerializer
+    lookup_field = 'public_id'
+
+
 class ProjectMetaView(APIView):
     """GET /api/projects/meta/ — choice lists for the project forms."""
     permission_classes = [permissions.IsAuthenticated]

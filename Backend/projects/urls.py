@@ -12,6 +12,7 @@ urlpatterns = [
     path('', views.ProjectListCreateView.as_view(), name='project-list'),
     path('dashboard/', views.ProjectDashboardView.as_view(), name='project-dashboard'),
     path('meta/', views.ProjectMetaView.as_view(), name='project-meta'),
+    path('by-public-id/<str:public_id>/', views.ProjectPublicIdDetailView.as_view(), name='project-public-detail'),
     path('<int:pk>/', views.ProjectDetailView.as_view(), name='project-detail'),
 
     # ══ INITIAL ENGAGEMENT ══════════════════════════════════

@@ -61,6 +61,18 @@ class ClientDetailsTests(EngagementTestCase):
         res = self.client.get(reverse('project-list'))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data['results'][0]['name'], 'Sharma Residence')
+        self.assertEqual(res.data['results'][0]['public_id'], self.project.public_id)
+
+    def test_project_public_id_is_unique_and_alphanumeric(self):
+        self.assertRegex(self.project.public_id, r'^[A-Z0-9]{8}$')
+        other = Project.objects.create(name='Second Residence', client_name='Another Client')
+        self.assertNotEqual(self.project.public_id, other.public_id)
+
+    def test_project_can_be_retrieved_by_public_id(self):
+        res = self.client.get(reverse('project-public-detail', args=[self.project.public_id]))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['id'], self.project.id)
+        self.assertEqual(res.data['public_id'], self.project.public_id)
 
     def test_patch_updates_client_details(self):
         res = self.client.patch(

@@ -6,13 +6,19 @@ Includes design requirements, versioned deliverables, measurements,
 material selections, execution tracking, payments, and quality checks.
 """
 from decimal import Decimal, ROUND_HALF_UP
+import string
 
 from django.db import models
 from django.conf import settings
 from django.core.validators import FileExtensionValidator
 from django.utils import timezone
+from django.utils.crypto import get_random_string
 
 MONEY = Decimal('0.01')
+
+
+def generate_project_public_id():
+    return get_random_string(8, allowed_chars=string.ascii_uppercase + string.digits)
 
 
 def money(value):
@@ -26,6 +32,10 @@ def money(value):
 
 class Project(models.Model):
     """A client interior design project."""
+
+    public_id = models.CharField(
+        max_length=8, unique=True, default=generate_project_public_id, editable=False,
+    )
 
     class Stage(models.TextChoices):
         LEAD = 'lead', 'Lead'

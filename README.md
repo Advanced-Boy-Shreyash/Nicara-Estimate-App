@@ -56,6 +56,7 @@ copy .env.example .env
 .venv\Scripts\python.exe manage.py seed_vendors
 .venv\Scripts\python.exe manage.py seed_crm
 .venv\Scripts\python.exe manage.py seed_catalog
+.venv\Scripts\python.exe manage.py seed_initial_estimate_demo
 ```
 
 ```bash
@@ -78,6 +79,7 @@ copy .env.example .env.local
 | Create another admin | `.venv\Scripts\python.exe manage.py bootstrap_admin --email x@y.com --password '...'` |
 | Reload the item catalogue | `.venv\Scripts\python.exe manage.py seed_items --reset` |
 | Reload vendors | `.venv\Scripts\python.exe manage.py seed_vendors --reset` |
+| Reload Initial Estimate workbook demo | `.venv\Scripts\python.exe manage.py seed_initial_estimate_demo` |
 | Full demo project data | `.venv\Scripts\python.exe manage.py shell < seed_data.py` |
 | Frontend type check | `npx tsc --noEmit` |
 | Frontend lint | `npm run lint` |

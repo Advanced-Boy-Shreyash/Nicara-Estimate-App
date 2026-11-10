@@ -372,7 +372,7 @@ class ProjectListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = [
-            'id', 'name', 'client_name', 'client_phone', 'developer', 'unit_no',
+            'id', 'public_id', 'name', 'client_name', 'client_phone', 'developer', 'unit_no',
             'city', 'state', 'area', 'property_type', 'project_type', 'purpose',
             'interior_style', 'stage', 'progress', 'budget',
             'start_date', 'target_date',
@@ -403,7 +403,7 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = '__all__'
-        read_only_fields = ['created_by', 'created_at', 'updated_at']
+        read_only_fields = ['public_id', 'created_by', 'created_at', 'updated_at']
 
     def get_estimates_summary(self, obj):
         return [
