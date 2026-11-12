@@ -6,7 +6,7 @@ import {
   type ComponentInput,
 } from "@/lib/api";
 import type {
-  CalcOptions, Estimate, EstimateItem, EstimateItemComponent, EstimateType, LibraryItem, Project,
+  CalcOptions, Estimate, EstimateItem, EstimateItemComponent, EstimateType, Furniture, LibraryItem, Project,
 } from "@/lib/apiTypes";
 import { useApiData, inr, inrExact } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
@@ -19,6 +19,7 @@ import {
   Download, Upload, FileText, FileSpreadsheet, Send,
   RotateCcw, CheckCircle, Copy, Brain, Plus, Trash2, ChevronDown, ChevronUp,
   ClipboardList, X, Armchair, RefreshCw,
+  Pencil,
 } from "lucide-react";
 
 const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
@@ -27,6 +28,10 @@ const TH = "px-2 py-2 text-stone-200 font-semibold text-[10px] text-left whitesp
 type EstimateDisplayEntry =
   | { kind: "furniture"; key: string; rows: EstimateItem[] }
   | { kind: "line"; item: EstimateItem };
+
+type EstimateCatalogOption =
+  | { kind: "furniture"; id: number; label: string; detail: string; furniture: Furniture }
+  | { kind: "material"; id: number; label: string; detail: string; material: LibraryItem };
 
 function estimateDisplayEntries(items: EstimateItem[], groupFurniture: boolean): EstimateDisplayEntry[] {
   const entries: EstimateDisplayEntry[] = [];
@@ -75,6 +80,8 @@ export default function EstimateTab({
   const [populating, setPopulating] = useState(false);
   const [addingFurniture, setAddingFurniture] = useState(false);
   const [downloading, setDownloading] = useState<"pdf" | "excel" | null>(null);
+  const [appliedPricingEstimateId, setAppliedPricingEstimateId] = useState<number | null>(null);
+  const [pendingRecalcGroups, setPendingRecalcGroups] = useState<Set<string>>(() => new Set());
 
   const listQuery = useApiData(() => estimatesApi.list(project.id, type), [project.id, type]);
   const versions = useMemo(() => listQuery.data?.results ?? [], [listQuery.data]);
@@ -85,6 +92,57 @@ export default function EstimateTab({
     [project.id, activeId]
   );
   const estimate = detailQuery.data;
+  const furnitureGroups = useMemo(() => {
+    if (!estimate) return [];
+    const groups = new Map<string, EstimateItem>();
+    for (const item of estimate.items) {
+      if (item.group_key && !groups.has(item.group_key)) groups.set(item.group_key, item);
+    }
+    return [...groups.entries()];
+  }, [estimate]);
+  const sizesSelected = furnitureGroups.every(([, item]) =>
+    item.width_ft + item.width_in / 12 > 0
+    && item.height_ft + item.height_in / 12 > 0
+    && item.depth_ft + item.depth_in / 12 > 0
+  );
+  const missingSizeGroups = furnitureGroups
+    .filter(([, item]) =>
+      item.width_ft + item.width_in / 12 <= 0
+      || item.height_ft + item.height_in / 12 <= 0
+      || item.depth_ft + item.depth_in / 12 <= 0
+    )
+    .map(([, item]) => item.item || item.furniture_name || "Furniture");
+  const pendingGroups = furnitureGroups
+    .filter(([groupKey]) => pendingRecalcGroups.has(groupKey))
+    .map(([, item]) => item.item || item.furniture_name || "Furniture");
+  const priceReadinessReasons = [
+    appliedPricingEstimateId !== estimate?.id
+      ? "Apply the current Smart Estimate brand selections."
+      : "",
+    missingSizeGroups.length
+      ? `Enter width, height, and depth for: ${missingSizeGroups.join(", ")}.`
+      : "",
+    pendingGroups.length
+      ? `Click Recalculate for: ${pendingGroups.join(", ")}.`
+      : "",
+  ].filter(Boolean);
+  const pricesReady = type !== "initial" || (
+    !!estimate
+    && appliedPricingEstimateId === estimate.id
+    && sizesSelected
+    && pendingGroups.length === 0
+  );
+  const pricesHiddenMessage = priceReadinessReasons.length
+    ? `Prices are hidden. ${priceReadinessReasons.join(" ")}`
+    : "Prices are hidden until the estimate finishes recalculating.";
+  const setGroupPricingPending = (groupKey: string, pending: boolean) => {
+    setPendingRecalcGroups(previous => {
+      const next = new Set(previous);
+      if (pending) next.add(groupKey);
+      else next.delete(groupKey);
+      return next;
+    });
+  };
 
   const refresh = async () => {
     await Promise.all([listQuery.reload(), detailQuery.reload()]);
@@ -183,8 +241,14 @@ export default function EstimateTab({
           <div className="bg-nicara-dark rounded-xl p-3 px-5 mb-4 flex justify-between items-center flex-wrap gap-2.5">
             <div>
               <div className="text-[10px] text-surface-500 uppercase tracking-wider mb-0.5">{title}</div>
-              <div className="text-2xl font-extrabold text-nicara-gold">{inrExact(estimate.grand_total)}</div>
-              <div className="text-[11px] text-surface-500">{estimate.item_count} items · inc GST</div>
+              <div className="text-2xl font-extrabold text-nicara-gold">
+                {pricesReady ? inrExact(estimate.grand_total) : "Prices hidden"}
+              </div>
+              <div className="text-[11px] text-surface-500">
+                {pricesReady
+                  ? `${estimate.item_count} items · inc GST`
+                  : pricesHiddenMessage}
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <button onClick={() => setImporting(true)} disabled={busy || !!locked}
@@ -197,12 +261,15 @@ export default function EstimateTab({
           {/* Actions */}
           <div className="flex items-center gap-2 mb-4 flex-wrap">
             <Btn variant="ghost" disabled={busy || locked}
-              onClick={() => guard(
+              onClick={() => {
+                setAppliedPricingEstimateId(null);
+                return guard(
                 () => estimatesApi.addItem(project.id, estimate.id, {
                   area: "", item: "New line", qty: 1, rate: 0, unit: "unit", gst_pct: 18,
                 }),
                 "Blank line added"
-              )}>
+                );
+              }}>
               <Plus size={13} /> Blank Line
             </Btn>
             <Btn variant="ghost" disabled={busy || locked}
@@ -224,6 +291,7 @@ export default function EstimateTab({
             <Btn disabled={busy || locked || populating}
               onClick={async () => {
                 setPopulating(true);
+                setAppliedPricingEstimateId(null);
                 setBanner("");
                 try {
                   const res = await estimatesApi.generateFromDesign(project.id, estimate.id);
@@ -295,6 +363,11 @@ export default function EstimateTab({
               projectId={project.id}
               estimateId={estimate.id}
               disabled={busy || !!locked}
+              onApplied={() => {
+                setAppliedPricingEstimateId(estimate.id);
+                setPendingRecalcGroups(new Set());
+              }}
+              onSelectionsChanged={() => setAppliedPricingEstimateId(null)}
               onGenerated={async () => {
                 await refresh();
                 setShowGenerator(type === "initial");
@@ -312,9 +385,16 @@ export default function EstimateTab({
             onChanged={refresh}
             onError={setBanner}
             initialEstimate={type === "initial"}
+            pricesVisible={pricesReady}
+            onInvalidatePricing={() => setAppliedPricingEstimateId(null)}
+            onGroupPricingPending={setGroupPricingPending}
           />
 
-          <Totals estimate={estimate} />
+          {pricesReady
+            ? <Totals estimate={estimate} />
+            : <div className="mt-4 text-right text-[11px] text-surface-500" aria-live="polite">
+              {pricesHiddenMessage}
+            </div>}
         </>
       )}
 
@@ -323,6 +403,7 @@ export default function EstimateTab({
           onClose={() => setAddingFurniture(false)}
           onAdd={async body => {
             setAddingFurniture(false);
+            setAppliedPricingEstimateId(null);
             await guard(() => estimatesApi.addFurniture(project.id, estimate.id, body), "Furniture added");
           }}
         />
@@ -333,6 +414,7 @@ export default function EstimateTab({
           onClose={() => setImporting(false)}
           onImported={async () => {
             setImporting(false);
+            setAppliedPricingEstimateId(null);
             await refresh();
             toast.success("Imported", "Items added from file");
           }}
@@ -437,6 +519,7 @@ function ImportModal({ onClose, onImported, projectId, estimateId }: {
 
 function LineItems({
   project, estimate, locked, busy, onChanged, onError, initialEstimate,
+  pricesVisible, onInvalidatePricing, onGroupPricingPending,
 }: {
   project: Project;
   estimate: Estimate;
@@ -445,10 +528,37 @@ function LineItems({
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
   initialEstimate: boolean;
+  pricesVisible: boolean;
+  onInvalidatePricing: () => void;
+  onGroupPricingPending: (groupKey: string, pending: boolean) => void;
 }) {
   const [draft, setDraft] = useState<Record<number, Record<string, unknown>>>({});
   const [fArea, setFArea] = useState("All");
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const [changingItemIds, setChangingItemIds] = useState<Set<number>>(() => new Set());
+  const catalogOptions = useApiData(async (): Promise<EstimateCatalogOption[]> => {
+    if (!initialEstimate) return [];
+    const [furniture, materials] = await Promise.all([
+      catalogApi.furniture(),
+      libraryApi.items({ is_active: true, page_size: 500 }),
+    ]);
+    return [
+      ...furniture.results.filter(item => item.is_active).map(item => ({
+        kind: "furniture" as const,
+        id: item.id,
+        label: item.name,
+        detail: `Furniture Catalogue · ${item.cabinet_type_display}`,
+        furniture: item,
+      })),
+      ...materials.results.map(item => ({
+        kind: "material" as const,
+        id: item.id,
+        label: item.full_display || [item.category_name, item.model_name].filter(Boolean).join(" — "),
+        detail: `Raw Material · ${item.category_name} · ${item.default_unit}`,
+        material: item,
+      })),
+    ];
+  }, [initialEstimate]);
 
   const commit = async (item: EstimateItem) => {
     const changes = draft[item.id];
@@ -468,6 +578,93 @@ function LineItems({
       await onChanged();
     } catch (e) {
       onError(e instanceof ApiError ? e.message : "Could not delete the line.");
+    }
+  };
+
+  const addFurnitureForLine = async (item: EstimateItem, furniture: Furniture, replaceGroup = false) => {
+    const dimension = (feet: number, inches: number) =>
+      feet || inches ? `${feet}'${inches}"` : undefined;
+    if (changingItemIds.has(item.id)) return;
+    onInvalidatePricing();
+    setChangingItemIds(previous => new Set(previous).add(item.id));
+    try {
+      try {
+        await estimatesApi.addFurniture(project.id, estimate.id, {
+          furniture_id: furniture.id,
+          area: item.area,
+          zone: item.zone || undefined,
+          item: item.furniture && item.item && item.item !== item.furniture_name
+            ? item.item
+            : undefined,
+          width: dimension(item.width_ft, item.width_in),
+          height: dimension(item.height_ft, item.height_in),
+          depth: dimension(item.depth_ft, item.depth_in),
+          options: item.config ?? {},
+        });
+      } catch (e) {
+        onError(e instanceof ApiError ? e.message : "Could not add the selected furniture.");
+        return;
+      }
+
+      try {
+        if (replaceGroup && item.group_key) {
+          await estimatesApi.deleteGroup(project.id, estimate.id, item.group_key);
+        } else {
+          await estimatesApi.deleteItem(project.id, estimate.id, item.id);
+        }
+      } catch (e) {
+        await onChanged();
+        const message = e instanceof ApiError ? e.message : "Could not remove the previous item.";
+        onError(`Furniture was added, but the previous item could not be removed: ${message}`);
+        return;
+      }
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Furniture was added, but the estimate could not be refreshed.");
+    } finally {
+      setChangingItemIds(previous => {
+        const next = new Set(previous);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
+
+  const selectCatalogOption = async (item: EstimateItem, option: EstimateCatalogOption) => {
+    if (option.kind === "furniture") {
+      if (item.furniture === option.furniture.id) return;
+      await addFurnitureForLine(item, option.furniture);
+      return;
+    }
+
+    if (changingItemIds.has(item.id)) return;
+    onInvalidatePricing();
+    setChangingItemIds(previous => new Set(previous).add(item.id));
+    try {
+      await estimatesApi.updateItem(project.id, estimate.id, item.id, {
+        item: option.material.full_display || option.label,
+        description: option.material.description,
+        category: option.material.category_name,
+        specification: option.material.description || option.material.category_name,
+        brand: option.material.brand_name,
+        model_name: option.material.model_name,
+        item_type: "Procurement",
+        unit: option.material.default_unit,
+        price_unit: option.material.default_unit,
+        rate: option.material.default_rate,
+        margin_pct: option.material.margin_pct,
+        gst_pct: option.material.gst_pct,
+        raw_material: option.material.id,
+      });
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Could not apply the raw material.");
+    } finally {
+      setChangingItemIds(previous => {
+        const next = new Set(previous);
+        next.delete(item.id);
+        return next;
+      });
     }
   };
 
@@ -523,6 +720,9 @@ function LineItems({
         )}
         <span className="ml-auto text-[11px] text-surface-400">{visibleItemCount}/{estimateDisplayEntries(estimate.items, initialEstimate).length} items</span>
       </div>
+      {initialEstimate && catalogOptions.error && (
+        <InlineError message={`Could not load Furniture Catalogue / Raw Materials: ${catalogOptions.error}`} />
+      )}
 
       {/* ── Table (spreadsheet-style) ── */}
       <div className="overflow-x-auto border border-surface-200 rounded-xl">
@@ -563,8 +763,17 @@ function LineItems({
                 onChanged={onChanged}
                 onError={onError}
                 initialEstimate={initialEstimate}
+                pricesVisible={pricesVisible}
+                onInvalidatePricing={onInvalidatePricing}
+                onGroupPricingPending={onGroupPricingPending}
+                catalogOptions={catalogOptions.data ?? []}
+                catalogLoading={catalogOptions.loading}
+                changingItemIds={changingItemIds}
+                onSelectCatalogOption={selectCatalogOption}
+                onChangeFurniture={(item, furniture) => addFurnitureForLine(item, furniture, true)}
                 onAddRow={async () => {
                   try {
+                    onInvalidatePricing();
                     await estimatesApi.addItem(project.id, estimate.id, {
                       area: group.area, item: "New line", qty: 1, rate: 0, unit: "unit", gst_pct: 18,
                     });
@@ -581,7 +790,7 @@ function LineItems({
               GRAND TOTAL ({visibleItemCount} items)
               </td>
               <td className="p-2.5 text-nicara-gold font-extrabold text-right font-mono text-[14px]">
-                {inr(String(grouped.reduce((s, g) => s + g.subtotal, 0)))}
+                {pricesVisible ? inr(String(grouped.reduce((s, g) => s + g.subtotal, 0))) : "—"}
               </td>
               <td className="bg-nicara-dark" colSpan={initialEstimate ? 2 : 3} />
             </tr>
@@ -597,6 +806,8 @@ function LineItems({
 function GroupBlock({
   group, project, estimate, locked, busy, val, setDraft, commit, remove,
   expanded, setExpanded, onChanged, onError, onAddRow, initialEstimate,
+  catalogOptions, catalogLoading, changingItemIds, onSelectCatalogOption, onChangeFurniture,
+  pricesVisible, onInvalidatePricing, onGroupPricingPending,
 }: {
   group: { area: string; items: EstimateItem[]; entries: EstimateDisplayEntry[]; subtotal: number };
   project: Project;
@@ -613,6 +824,14 @@ function GroupBlock({
   onError: (msg: string) => void;
   onAddRow: () => void;
   initialEstimate: boolean;
+  catalogOptions: EstimateCatalogOption[];
+  catalogLoading: boolean;
+  changingItemIds: Set<number>;
+  onSelectCatalogOption: (item: EstimateItem, option: EstimateCatalogOption) => void;
+  onChangeFurniture: (item: EstimateItem, furniture: Furniture) => void;
+  pricesVisible: boolean;
+  onInvalidatePricing: () => void;
+  onGroupPricingPending: (groupKey: string, pending: boolean) => void;
 }) {
   const BD = "border-r border-surface-200";
   return (
@@ -623,7 +842,9 @@ function GroupBlock({
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.area}</span>
             <span className="text-[10px] text-surface-400">{group.entries.length} item(s)</span>
-            <span className="text-[10px] font-semibold text-nicara-gold ml-auto mr-3">{inr(String(group.subtotal))}</span>
+            <span className="text-[10px] font-semibold text-nicara-gold ml-auto mr-3">
+              {pricesVisible ? inr(String(group.subtotal)) : "—"}
+            </span>
             {!locked && (
               <button onClick={onAddRow}
                 className="px-2.5 py-1 bg-white border border-surface-200 rounded-lg text-[10px] font-semibold text-nicara-gold cursor-pointer hover:bg-nicara-gold/5 hover:border-nicara-gold/30">
@@ -662,6 +883,16 @@ function GroupBlock({
               onToggle={() => setExpanded(previous => ({ ...previous, [first.id]: !previous[first.id] }))}
               onChanged={onChanged}
               onError={onError}
+              pricesVisible={pricesVisible}
+              onGroupPricingPending={onGroupPricingPending}
+              furnitureOptions={catalogOptions
+                .filter((option): option is Extract<EstimateCatalogOption, { kind: "furniture" }> => option.kind === "furniture")
+                .map(option => option.furniture)}
+              catalogLoading={catalogLoading || changingItemIds.has(first.id)}
+              onChangeFurniture={furniture => {
+                onInvalidatePricing();
+                onChangeFurniture(first, furniture);
+              }}
             />
           );
         }
@@ -706,6 +937,10 @@ function GroupBlock({
               onToggle={() => setExpanded(previous => ({ ...previous, [item.id]: !previous[item.id] }))}
               BD={BD}
               initialEstimate={initialEstimate}
+              pricesVisible={pricesVisible}
+              catalogOptions={catalogOptions}
+              catalogLoading={catalogLoading || changingItemIds.has(item.id)}
+              onSelectCatalogOption={onSelectCatalogOption}
             />
           </Fragment>
         );
@@ -718,7 +953,8 @@ type FurnitureDimensions = Pick<EstimateItem, "width_ft" | "width_in" | "height_
 
 function InitialEstimateFurnitureGroup({
   rows, project, estimate, locked, busy, expanded, stripe, val, setDraft, commit, remove,
-  onToggle, onChanged, onError,
+  onToggle, onChanged, onError, furnitureOptions, catalogLoading, onChangeFurniture,
+  pricesVisible, onGroupPricingPending,
 }: {
   rows: EstimateItem[];
   project: Project;
@@ -734,6 +970,11 @@ function InitialEstimateFurnitureGroup({
   onToggle: () => void;
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
+  furnitureOptions: Furniture[];
+  catalogLoading: boolean;
+  onChangeFurniture: (furniture: Furniture) => void;
+  pricesVisible: boolean;
+  onGroupPricingPending: (groupKey: string, pending: boolean) => void;
 }) {
   const first = rows[0];
   const initialSize: FurnitureDimensions = {
@@ -752,6 +993,20 @@ function InitialEstimateFurnitureGroup({
     || (options.shelf_type ?? "ply") !== (savedOptions.shelf_type ?? "ply")
     || !!options.handleless !== !!savedOptions.handleless
     || !!options.one_side_visible !== !!savedOptions.one_side_visible;
+  const sizeIsDirty = JSON.stringify(size) !== JSON.stringify(initialSize);
+  const optionsAreDirty = (next: CalcOptions) =>
+    (next.shelf_type ?? "ply") !== (savedOptions.shelf_type ?? "ply")
+    || !!next.handleless !== !!savedOptions.handleless
+    || !!next.one_side_visible !== !!savedOptions.one_side_visible;
+  const changeSize = (key: keyof FurnitureDimensions, value: number) => {
+    const next = { ...size, [key]: value };
+    setSize(next);
+    onGroupPricingPending(first.group_key, JSON.stringify(next) !== JSON.stringify(initialSize) || optionsAreDirty(options));
+  };
+  const changeOptions = (next: CalcOptions) => {
+    setOptions(next);
+    onGroupPricingPending(first.group_key, sizeIsDirty || optionsAreDirty(next));
+  };
 
   const recalculate = async () => {
     setSaving(true);
@@ -761,6 +1016,7 @@ function InitialEstimateFurnitureGroup({
       else delete currentOptions.overrides;
       await estimatesApi.recalculateGroup(project.id, estimate.id, first.group_key, { ...size, options: currentOptions });
       await onChanged();
+      onGroupPricingPending(first.group_key, false);
     } catch (e) {
       onError(e instanceof ApiError ? e.message : "Could not recalculate the furniture.");
     } finally {
@@ -786,7 +1042,7 @@ function InitialEstimateFurnitureGroup({
         item={first}
         rows={rows}
         size={size}
-        setSize={setSize}
+        onDimensionChange={changeSize}
         expanded={expanded}
         stripe={stripe}
         dirty={dirty}
@@ -794,6 +1050,10 @@ function InitialEstimateFurnitureGroup({
         locked={locked}
         onRecalculate={recalculate}
         onToggle={onToggle}
+        furnitureOptions={furnitureOptions}
+        catalogLoading={catalogLoading}
+        onChangeFurniture={onChangeFurniture}
+        pricesVisible={pricesVisible && !dirty}
       />
       {expanded && (
         <tr>
@@ -805,7 +1065,7 @@ function InitialEstimateFurnitureGroup({
               locked={locked}
               busy={busy || saving}
               options={options}
-              onOptionsChange={setOptions}
+              onOptionsChange={changeOptions}
               onDeleteGroup={deleteGroup}
               val={val}
               setDraft={setDraft}
@@ -813,6 +1073,7 @@ function InitialEstimateFurnitureGroup({
               remove={remove}
               onChanged={onChanged}
               onError={onError}
+              pricesVisible={pricesVisible && !dirty}
             />
           </td>
         </tr>
@@ -821,11 +1082,14 @@ function InitialEstimateFurnitureGroup({
   );
 }
 
-function FurnitureItemSummary({ item, rows, size, setSize, expanded, stripe, dirty, busy, locked, onRecalculate, onToggle }: {
+function FurnitureItemSummary({
+  item, rows, size, onDimensionChange, expanded, stripe, dirty, busy, locked, onRecalculate, onToggle,
+  furnitureOptions, catalogLoading, onChangeFurniture, pricesVisible,
+}: {
   item: EstimateItem;
   rows: EstimateItem[];
   size: FurnitureDimensions;
-  setSize: React.Dispatch<React.SetStateAction<FurnitureDimensions>>;
+  onDimensionChange: (key: keyof FurnitureDimensions, value: number) => void;
   expanded: boolean;
   stripe: boolean;
   dirty: boolean;
@@ -833,6 +1097,10 @@ function FurnitureItemSummary({ item, rows, size, setSize, expanded, stripe, dir
   locked: boolean;
   onRecalculate: () => void;
   onToggle: () => void;
+  furnitureOptions: Furniture[];
+  catalogLoading: boolean;
+  onChangeFurniture: (furniture: Furniture) => void;
+  pricesVisible: boolean;
 }) {
   const cost = totalOf(rows, "cost");
   const marginAmount = totalOf(rows, "margin_amount");
@@ -849,7 +1117,7 @@ function FurnitureItemSummary({ item, rows, size, setSize, expanded, stripe, dir
       aria-label={`${label} ${key.endsWith("_ft") ? "feet" : "inches"}`}
       value={size[key]}
       disabled={locked || busy}
-      onChange={event => setSize(previous => ({ ...previous, [key]: parseInt(event.target.value, 10) || 0 }))}
+      onChange={event => onDimensionChange(key, parseInt(event.target.value, 10) || 0)}
       className="w-[54px] px-1.5 py-1 border border-transparent rounded text-[11px] font-mono text-center outline-none bg-transparent focus:border-nicara-gold focus:bg-white disabled:text-surface-400"
     />
   );
@@ -858,7 +1126,21 @@ function FurnitureItemSummary({ item, rows, size, setSize, expanded, stripe, dir
     <tr className={`border-b border-surface-100 ${expanded ? "bg-nicara-gold/5 border-l-[3px] border-l-nicara-gold" : stripe ? "bg-surface-50/50" : "bg-white"}`}>
       <td className={`px-2 py-1.5 font-semibold text-nicara-dark ${BD}`}>{item.area || "—"}</td>
       <td className={`px-2 py-1.5 font-semibold text-nicara-dark min-w-[160px] ${BD}`}>
-        {item.item || item.furniture_name || "Furniture"}
+        {locked ? (
+          item.item || item.furniture_name || "Furniture"
+        ) : (
+          <SearchSelect
+            value={item.item || item.furniture_name || "Furniture"}
+            options={furnitureOptions.filter(option => option.is_active)}
+            getLabel={option => option.name}
+            getSublabel={option => option.cabinet_type_display}
+            onPick={onChangeFurniture}
+            loading={catalogLoading}
+            disabled={busy || catalogLoading}
+            placeholder="Choose furniture…"
+            className="w-full min-w-[140px] px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white cursor-pointer"
+          />
+        )}
         {item.zone && <div className="text-[9px] font-normal text-surface-400">{item.zone}</div>}
       </td>
       <td className={`px-1 py-1 w-[68px] ${BD}`}>{dimension("width_ft", "Width")}</td>
@@ -875,14 +1157,14 @@ function FurnitureItemSummary({ item, rows, size, setSize, expanded, stripe, dir
       <td className={`px-2 py-1.5 ${BD}`}>nos</td>
       <td className={`px-2 py-1.5 text-right font-mono ${BD}`}>—</td>
       <td className={`px-2 py-1.5 ${BD}`}>—</td>
-      <td className={`px-2 py-1.5 text-right font-mono font-semibold text-nicara-dark whitespace-nowrap ${BD}`}>{inr(String(cost))}</td>
-      <td className={`px-2 py-1.5 text-right font-mono ${BD}`}>{percent(marginAmount, cost)}</td>
-      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{inr(String(marginAmount))}</td>
-      <td className={`px-2 py-1.5 text-right font-mono ${BD}`}>{percent(referralAmount, cost)}</td>
-      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{inr(String(referralAmount))}</td>
-      <td className={`px-2 py-1.5 text-center text-surface-500 ${BD}`}>{percent(gstAmount, taxable)}</td>
-      <td className={`px-2 py-1.5 text-right font-mono text-surface-500 whitespace-nowrap ${BD}`}>{inr(String(gstAmount))}</td>
-      <td className={`px-2 py-1.5 text-right font-bold text-nicara-gold font-mono whitespace-nowrap ${BD}`}>{inr(String(totalOf(rows, "total_amount")))}</td>
+      <td className={`px-2 py-1.5 text-right font-mono font-semibold text-nicara-dark whitespace-nowrap ${BD}`}>{pricesVisible ? inr(String(cost)) : "—"}</td>
+      <td className={`px-2 py-1.5 text-right font-mono ${BD}`}>{pricesVisible ? percent(marginAmount, cost) : "—"}</td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{pricesVisible ? inr(String(marginAmount)) : "—"}</td>
+      <td className={`px-2 py-1.5 text-right font-mono ${BD}`}>{pricesVisible ? percent(referralAmount, cost) : "—"}</td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{pricesVisible ? inr(String(referralAmount)) : "—"}</td>
+      <td className={`px-2 py-1.5 text-center text-surface-500 ${BD}`}>{pricesVisible ? percent(gstAmount, taxable) : "—"}</td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-500 whitespace-nowrap ${BD}`}>{pricesVisible ? inr(String(gstAmount)) : "—"}</td>
+      <td className={`px-2 py-1.5 text-right font-bold text-nicara-gold font-mono whitespace-nowrap ${BD}`}>{pricesVisible ? inr(String(totalOf(rows, "total_amount"))) : "—"}</td>
       <td className={`px-2 py-1.5 text-center whitespace-nowrap ${BD}`}>
         <button onClick={onToggle} aria-expanded={expanded}
           aria-label={`${expanded ? "Hide" : "Show"} material breakdown for ${item.item || "furniture"}`}
@@ -907,7 +1189,7 @@ function FurnitureItemSummary({ item, rows, size, setSize, expanded, stripe, dir
 
 function FurnitureMaterialBreakdown({
   rows, project, estimate, locked, busy, options, onOptionsChange, onDeleteGroup,
-  val, setDraft, commit, remove, onChanged, onError,
+  val, setDraft, commit, remove, onChanged, onError, pricesVisible,
 }: {
   rows: EstimateItem[];
   project: Project;
@@ -923,6 +1205,7 @@ function FurnitureMaterialBreakdown({
   remove: (item: EstimateItem) => Promise<void>;
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
+  pricesVisible: boolean;
 }) {
   const total = (field: keyof EstimateItem) => inr(String(totalOf(rows, field)));
   const headers = [
@@ -980,6 +1263,7 @@ function FurnitureMaterialBreakdown({
                   remove={remove}
                   onChanged={onChanged}
                   onError={onError}
+                  pricesVisible={pricesVisible}
                 />
                 {(item.components?.length ?? 0) > 0 && (
                   <tr>
@@ -991,6 +1275,7 @@ function FurnitureMaterialBreakdown({
                         locked={locked}
                         onChanged={onChanged}
                         onError={onError}
+                        pricesVisible={pricesVisible}
                       />
                     </td>
                   </tr>
@@ -1001,14 +1286,14 @@ function FurnitureMaterialBreakdown({
           <tfoot>
             <tr className="bg-amber-100 border-t-2 border-amber-300">
               <td colSpan={9} className="px-2 py-1.5 text-right text-[10px] font-bold text-amber-800">Furniture Total</td>
-              <td className="px-2 py-1.5 text-right font-semibold font-mono">{total("cost")}</td>
+              <td className="px-2 py-1.5 text-right font-semibold font-mono">{pricesVisible ? total("cost") : "—"}</td>
               <td />
-              <td className="px-2 py-1.5 text-right font-mono">{total("margin_amount")}</td>
+              <td className="px-2 py-1.5 text-right font-mono">{pricesVisible ? total("margin_amount") : "—"}</td>
               <td />
-              <td className="px-2 py-1.5 text-right font-mono">{total("referral_amount")}</td>
+              <td className="px-2 py-1.5 text-right font-mono">{pricesVisible ? total("referral_amount") : "—"}</td>
               <td />
-              <td className="px-2 py-1.5 text-right font-mono">{total("gst_amount")}</td>
-              <td className="px-2 py-1.5 text-right font-extrabold text-nicara-gold font-mono">{total("total_amount")}</td>
+              <td className="px-2 py-1.5 text-right font-mono">{pricesVisible ? total("gst_amount") : "—"}</td>
+              <td className="px-2 py-1.5 text-right font-extrabold text-nicara-gold font-mono">{pricesVisible ? total("total_amount") : "—"}</td>
               <td />
             </tr>
           </tfoot>
@@ -1020,6 +1305,7 @@ function FurnitureMaterialBreakdown({
 
 function GeneratedMaterialRow({
   item, stripe, project, estimate, locked, busy, val, setDraft, commit, remove, onChanged, onError,
+  pricesVisible,
 }: {
   item: EstimateItem;
   stripe: boolean;
@@ -1033,12 +1319,15 @@ function GeneratedMaterialRow({
   remove: (item: EstimateItem) => Promise<void>;
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
+  pricesVisible: boolean;
 }) {
   const BD = "border-r border-amber-100";
   const change = (field: string, value: unknown) =>
     setDraft(draft => ({ ...draft, [item.id]: { ...draft[item.id], [field]: value } }));
+  const [editing, setEditing] = useState(false);
 
   return (
+    <>
     <tr className={`border-t border-amber-200 ${stripe ? "bg-amber-50/40" : "bg-white"}`}>
       <td className={`px-2 py-1.5 min-w-[110px] ${BD}`}>
         {locked ? (
@@ -1065,7 +1354,8 @@ function GeneratedMaterialRow({
       </td>
       <td className={`px-2 py-1.5 min-w-[150px] ${BD}`}>
         {item.raw_material_category && !locked ? (
-          <RawMaterialPicker item={item} project={project} estimate={estimate} onChanged={onChanged} onError={onError} />
+          <RawMaterialPicker item={item} project={project} estimate={estimate} pricesVisible={pricesVisible}
+            onChanged={onChanged} onError={onError} />
         ) : (
           <EditableCell locked={locked} value={val(item, "brand")}
             onChange={value => change("brand", value)} onCommit={() => commit(item)} placeholder="Brand" />
@@ -1090,36 +1380,148 @@ function GeneratedMaterialRow({
           onChange={value => change("unit", value)} onCommit={() => commit(item)} />
       </td>
       <td className={`px-2 py-1.5 w-[90px] text-right font-mono ${BD}`}>
-        <EditableCell locked={locked} value={val(item, "rate")} mono type="number"
+        <EditableCell locked={locked || !pricesVisible} value={pricesVisible ? val(item, "rate") : "—"} mono type="number"
           onChange={value => change("rate", value)} onCommit={() => commit(item)} />
       </td>
       <td className={`px-2 py-1.5 min-w-[80px] ${BD}`}>
         <EditableCell locked={locked} value={val(item, "price_unit")}
           onChange={value => change("price_unit", value)} onCommit={() => commit(item)} placeholder="Unit" />
       </td>
-      <td className={`px-2 py-1.5 text-right font-mono font-semibold text-nicara-dark whitespace-nowrap ${BD}`}>{inr(item.cost)}</td>
+      <td className={`px-2 py-1.5 text-right font-mono font-semibold text-nicara-dark whitespace-nowrap ${BD}`}>{pricesVisible ? inr(item.cost) : "—"}</td>
       <td className={`px-2 py-1.5 w-[75px] text-right font-mono ${BD}`}>
-        <EditableCell locked={locked} value={val(item, "margin_pct")} mono type="number"
+        <EditableCell locked={locked || !pricesVisible} value={pricesVisible ? val(item, "margin_pct") : "—"} mono type="number"
           onChange={value => change("margin_pct", value)} onCommit={() => commit(item)} />
       </td>
-      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{inr(item.margin_amount)}</td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{pricesVisible ? inr(item.margin_amount) : "—"}</td>
       <td className={`px-2 py-1.5 w-[75px] text-right font-mono ${BD}`}>
-        <EditableCell locked={locked} value={val(item, "referral_pct")} mono type="number"
+        <EditableCell locked={locked || !pricesVisible} value={pricesVisible ? val(item, "referral_pct") : "—"} mono type="number"
           onChange={value => change("referral_pct", value)} onCommit={() => commit(item)} />
       </td>
-      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{inr(item.referral_amount)}</td>
-      <td className={`px-2 py-1.5 text-center text-surface-500 ${BD}`}>{parseFloat(item.gst_pct)}%</td>
-      <td className={`px-2 py-1.5 text-right font-mono text-surface-500 whitespace-nowrap ${BD}`}>{inr(item.gst_amount)}</td>
-      <td className={`px-2 py-1.5 text-right font-bold text-nicara-gold font-mono whitespace-nowrap ${BD}`}>{inr(item.total_amount)}</td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>{pricesVisible ? inr(item.referral_amount) : "—"}</td>
+      <td className={`px-2 py-1.5 text-center text-surface-500 ${BD}`}>{pricesVisible ? `${parseFloat(item.gst_pct)}%` : "—"}</td>
+      <td className={`px-2 py-1.5 text-right font-mono text-surface-500 whitespace-nowrap ${BD}`}>{pricesVisible ? inr(item.gst_amount) : "—"}</td>
+      <td className={`px-2 py-1.5 text-right font-bold text-nicara-gold font-mono whitespace-nowrap ${BD}`}>{pricesVisible ? inr(item.total_amount) : "—"}</td>
       <td className="px-2 py-1.5 text-center">
         {!locked && (
-          <button onClick={() => remove(item)} disabled={busy} title="Remove this breakdown row"
-            className="bg-transparent border-none text-red-300 cursor-pointer p-0 hover:text-red-500 transition-colors">
-            <Trash2 size={12} />
-          </button>
+          <div className="inline-flex items-center gap-2">
+            <button onClick={() => setEditing(true)} disabled={busy} title="Edit material breakdown row"
+              className="bg-transparent border-none text-amber-700 cursor-pointer p-0 hover:text-nicara-gold transition-colors">
+              <Pencil size={12} />
+            </button>
+            <button onClick={() => remove(item)} disabled={busy} title="Remove this breakdown row"
+              className="bg-transparent border-none text-red-300 cursor-pointer p-0 hover:text-red-500 transition-colors">
+              <Trash2 size={12} />
+            </button>
+          </div>
         )}
       </td>
     </tr>
+    {editing && (
+      <GeneratedMaterialEditModal
+        item={item}
+        project={project}
+        estimate={estimate}
+        pricesVisible={pricesVisible}
+        onClose={() => setEditing(false)}
+        onError={onError}
+        onSaved={async () => {
+          setEditing(false);
+          await onChanged();
+        }}
+      />
+    )}
+    </>
+  );
+}
+
+function GeneratedMaterialEditModal({ item, project, estimate, pricesVisible, onClose, onError, onSaved }: {
+  item: EstimateItem;
+  project: Project;
+  estimate: Estimate;
+  pricesVisible: boolean;
+  onClose: () => void;
+  onError: (message: string) => void;
+  onSaved: () => Promise<void>;
+}) {
+  const materials = useApiData(
+    () => item.raw_material_category
+      ? libraryApi.categoryItems(item.raw_material_category)
+      : libraryApi.items({ is_active: true, page_size: 500 }),
+    [item.raw_material_category],
+  );
+  const [materialId, setMaterialId] = useState(item.raw_material ? String(item.raw_material) : "");
+  const [form, setForm] = useState({
+    specification: item.specification,
+    application: item.application,
+    qty: item.qty,
+    unit: item.unit,
+    rate: item.rate,
+  });
+  const [saving, setSaving] = useState(false);
+  const selectedMaterial = materials.data?.results.find(material => String(material.id) === materialId);
+  const options = materials.data?.results ?? [];
+  const set = (key: keyof typeof form, value: string) => setForm(previous => ({ ...previous, [key]: value }));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await estimatesApi.updateItem(project.id, estimate.id, item.id, {
+        ...form,
+        gst_pct: item.gst_pct,
+        ...(selectedMaterial ? {
+          raw_material: selectedMaterial.id,
+          brand: selectedMaterial.brand_name,
+          model_name: selectedMaterial.model_name,
+        } : {}),
+      });
+      await onSaved();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "Could not save the material row.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose} size="md" title="Edit Material Breakdown"
+      subtitle="Choose a raw material to apply its stored price and details."
+      footer={<>
+        <Btn variant="ghost" onClick={onClose} disabled={saving}>Cancel</Btn>
+        <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Btn>
+      </>}>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2">
+          <div className="text-[10px] font-bold text-surface-500 uppercase tracking-wider mb-1.5">Raw Material</div>
+          <SearchSelect
+            value={selectedMaterial?.full_display ?? [item.brand, item.model_name].filter(Boolean).join(" — ")}
+            options={options}
+            getLabel={material => `${material.category_name} — ${material.full_display || [material.brand_name, material.model_name].filter(Boolean).join(" — ")}`}
+            getSublabel={material => pricesVisible
+              ? `${material.category_name} · ${inr(material.default_rate)} / ${material.default_unit}`
+              : `${material.category_name} · ${material.default_unit}`}
+            onPick={material => {
+              setMaterialId(String(material.id));
+              setForm(previous => ({
+                ...previous,
+                specification: material.description || material.category_name,
+                unit: material.default_unit,
+                rate: material.default_rate,
+              }));
+            }}
+            loading={materials.loading}
+            disabled={materials.loading}
+            placeholder="Search raw materials…"
+          />
+          {materials.error && <InlineError message={materials.error} />}
+        </div>
+        <Field label="Component" value={form.specification} onChange={value => set("specification", value)} />
+        <Field label="Application" value={form.application} onChange={value => set("application", value)} />
+        <Field label="Quantity" type="number" value={form.qty} onChange={value => set("qty", value)} />
+        <Field label="Unit" value={form.unit} onChange={value => set("unit", value)} />
+        <Field label="Price (₹)" type="number" value={pricesVisible ? form.rate : "—"}
+          onChange={value => set("rate", value)} disabled={!pricesVisible} />
+      </div>
+    </Modal>
   );
 }
 
@@ -1127,7 +1529,8 @@ function GeneratedMaterialRow({
 
 function ItemRow({
   item, ri, isOpen, project, estimate, locked, busy, val, setDraft, commit, remove,
-  onChanged, onError, onToggle, BD, initialEstimate,
+  onChanged, onError, onToggle, BD, initialEstimate, catalogOptions, catalogLoading,
+  onSelectCatalogOption, pricesVisible,
 }: {
   item: EstimateItem;
   ri: number;
@@ -1145,6 +1548,10 @@ function ItemRow({
   onToggle: () => void;
   BD: string;
   initialEstimate: boolean;
+  catalogOptions: EstimateCatalogOption[];
+  catalogLoading: boolean;
+  onSelectCatalogOption: (item: EstimateItem, option: EstimateCatalogOption) => void;
+  pricesVisible: boolean;
 }) {
   const generated = !!item.group_key;
 
@@ -1159,7 +1566,19 @@ function ItemRow({
         </td>
         {/* Item — calculated rows carry their furniture's name; hand-added lines are free text */}
         <td className={`px-2 py-1.5 font-semibold text-nicara-dark min-w-[160px] ${BD}`}>
-          {locked || generated ? (
+          {initialEstimate && !locked && !generated ? (
+            <SearchSelect
+              value={val(item, "item")}
+              options={catalogOptions}
+              getLabel={option => option.label}
+              getSublabel={option => option.detail}
+              onPick={option => onSelectCatalogOption(item, option)}
+              loading={catalogLoading}
+              disabled={busy || catalogLoading}
+              placeholder="Choose furniture or raw material…"
+              className="w-full min-w-[150px] px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white cursor-pointer"
+            />
+          ) : locked || generated ? (
             <div className="px-2 py-1.5 font-semibold text-nicara-dark">{val(item, "item") || "—"}</div>
           ) : (
             <EditableCell locked={locked} value={val(item, "item")}
@@ -1205,7 +1624,7 @@ function ItemRow({
         {/* Brand — generated rows pick a model from the component's raw-material category */}
         <td className={`px-2 py-1.5 min-w-[80px] ${BD}`}>
           {generated && item.raw_material_category && !locked ? (
-            <RawMaterialPicker item={item} project={project} estimate={estimate}
+            <RawMaterialPicker item={item} project={project} estimate={estimate} pricesVisible={pricesVisible}
               onChanged={onChanged} onError={onError} />
           ) : (
           <EditableCell locked={locked} value={val(item, "brand")}
@@ -1261,7 +1680,8 @@ function ItemRow({
         </td>
         {/* Price (rate) */}
         <td className={`px-2 py-1.5 w-[70px] text-right font-mono ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "rate")} mono type="number"
+          <EditableCell locked={locked || (initialEstimate && !pricesVisible)}
+            value={initialEstimate && !pricesVisible ? "—" : val(item, "rate")} mono type="number"
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], rate: v } }))}
             onCommit={() => commit(item)} />
         </td>
@@ -1273,39 +1693,41 @@ function ItemRow({
         </td>
         {/* Cost (read-only: qty × rate) */}
         <td className={`px-2 py-1.5 text-right font-mono font-semibold text-nicara-dark whitespace-nowrap ${BD}`}>
-          {inr(item.cost)}
+          {initialEstimate && !pricesVisible ? "—" : inr(item.cost)}
         </td>
         {/* Margin % */}
         <td className={`px-2 py-1.5 w-[50px] text-right font-mono ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "margin_pct")} mono type="number"
+          <EditableCell locked={locked || (initialEstimate && !pricesVisible)}
+            value={initialEstimate && !pricesVisible ? "—" : val(item, "margin_pct")} mono type="number"
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], margin_pct: v } }))}
             onCommit={() => commit(item)} />
         </td>
         {/* Margin Amount (read-only) */}
         <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>
-          {inr(item.margin_amount)}
+          {initialEstimate && !pricesVisible ? "—" : inr(item.margin_amount)}
         </td>
         {/* Referral % */}
         <td className={`px-2 py-1.5 w-[50px] text-right font-mono ${BD}`}>
-          <EditableCell locked={locked} value={val(item, "referral_pct")} mono type="number"
+          <EditableCell locked={locked || (initialEstimate && !pricesVisible)}
+            value={initialEstimate && !pricesVisible ? "—" : val(item, "referral_pct")} mono type="number"
             onChange={v => setDraft(d => ({ ...d, [item.id]: { ...d[item.id], referral_pct: v } }))}
             onCommit={() => commit(item)} />
         </td>
         {/* Referral Amount (read-only) */}
         <td className={`px-2 py-1.5 text-right font-mono text-surface-600 whitespace-nowrap ${BD}`}>
-          {inr(item.referral_amount)}
+          {initialEstimate && !pricesVisible ? "—" : inr(item.referral_amount)}
         </td>
         {/* GST % */}
         <td className={`px-2 py-1.5 text-center text-surface-500 w-[45px] ${BD}`}>
-          {parseFloat(item.gst_pct)}%
+          {initialEstimate && !pricesVisible ? "—" : `${parseFloat(item.gst_pct)}%`}
         </td>
         {/* GST Amount (read-only) */}
         <td className={`px-2 py-1.5 text-right font-mono text-surface-500 whitespace-nowrap ${BD}`}>
-          {inr(item.gst_amount)}
+          {initialEstimate && !pricesVisible ? "—" : inr(item.gst_amount)}
         </td>
         {/* Total Amount (read-only) */}
         <td className={`px-2 py-1.5 text-right font-bold text-nicara-gold font-mono whitespace-nowrap ${BD}`}>
-          {inr(item.total_amount)}
+          {initialEstimate && !pricesVisible ? "—" : inr(item.total_amount)}
         </td>
         {/* Flag */}
         {!initialEstimate && <td className={`px-2 py-1.5 text-center w-[40px] ${BD}`}>
@@ -1343,7 +1765,8 @@ function ItemRow({
           <td colSpan={initialEstimate ? 26 : 30} className="p-0">
             <ComponentBreakdown
               item={item} project={project} estimate={estimate}
-              locked={locked} onChanged={onChanged} onError={onError} />
+              locked={locked} onChanged={onChanged} onError={onError}
+              pricesVisible={!initialEstimate || pricesVisible} />
           </td>
         </tr>
       )}
@@ -1354,7 +1777,7 @@ function ItemRow({
 /* ── Live material breakdown (bill of materials) ──────────────── */
 
 function ComponentBreakdown({
-  item, project, estimate, locked, onChanged, onError,
+  item, project, estimate, locked, onChanged, onError, pricesVisible,
 }: {
   item: EstimateItem;
   project: Project;
@@ -1362,6 +1785,7 @@ function ComponentBreakdown({
   locked: boolean;
   onChanged: () => Promise<void>;
   onError: (msg: string) => void;
+  pricesVisible: boolean;
 }) {
   const toast = useToast();
   const components = item.components ?? [];
@@ -1436,8 +1860,8 @@ function ComponentBreakdown({
                 <td className="px-2 py-1.5 text-surface-600">{c.model || "—"}</td>
                 <td className="px-2 py-1.5 font-mono text-right">{parseFloat(c.qty)}</td>
                 <td className="px-2 py-1.5">{c.unit || "—"}</td>
-                <td className="px-2 py-1.5 font-mono text-right">{inr(c.price)}</td>
-                <td className="px-2 py-1.5 font-mono text-right font-semibold text-nicara-dark">{inr(c.amount)}</td>
+                <td className="px-2 py-1.5 font-mono text-right">{pricesVisible ? inr(c.price) : "—"}</td>
+                <td className="px-2 py-1.5 font-mono text-right font-semibold text-nicara-dark">{pricesVisible ? inr(c.amount) : "—"}</td>
                 <td className="px-2 py-1.5 text-right whitespace-nowrap">
                   {!locked && c.stored && (
                     <>
@@ -1477,6 +1901,7 @@ function ComponentBreakdown({
         <ComponentModal
           component={editing === "new" ? null : editing}
           project={project} estimate={estimate} itemId={item.id}
+          pricesVisible={pricesVisible}
           onClose={() => setEditing(null)}
           onSaved={async () => { setEditing(null); toast.success("Saved", "Breakdown updated"); await onChanged(); }} />
       )}
@@ -1485,12 +1910,13 @@ function ComponentBreakdown({
 }
 
 function ComponentModal({
-  component, project, estimate, itemId, onClose, onSaved,
+  component, project, estimate, itemId, pricesVisible, onClose, onSaved,
 }: {
   component: EstimateItemComponent | null;
   project: Project;
   estimate: Estimate;
   itemId: number;
+  pricesVisible: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1499,6 +1925,13 @@ function ComponentModal({
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [banner, setBanner] = useState("");
   const [saving, setSaving] = useState(false);
+  const materials = useApiData(
+    () => libraryApi.items({ is_active: true, page_size: 500 }),
+    [],
+  );
+  const selectedMaterial = materials.data?.results.find(
+    material => material.id === form.library_material_item,
+  );
 
   const set = (k: keyof ComponentInput, v: string) => setForm(f => ({ ...f, [k]: v }));
   const previewAmount = (parseFloat(String(form.qty)) || 0) * (parseFloat(String(form.price)) || 0);
@@ -1527,19 +1960,43 @@ function ComponentModal({
       {banner && <InlineError message={banner} />}
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2">
-          <Field label="Basic Component" value={String(form.basic_component ?? "")}
-            onChange={v => set("basic_component", v)} required error={errors.basic_component?.[0]}
-            placeholder="Plywood, Laminate, Hinges…" />
+          <div className="text-[10px] font-bold text-surface-500 uppercase tracking-wider mb-1.5">Raw Material Component</div>
+          <SearchSelect
+            value={selectedMaterial?.full_display ?? String(form.basic_component ?? "")}
+            options={materials.data?.results ?? []}
+            getLabel={material => `${material.category_name} — ${material.full_display || material.model_name}`}
+            getSublabel={material => pricesVisible
+              ? `${material.category_name} · ${material.default_unit} · ${inr(material.default_rate)}`
+              : `${material.category_name} · ${material.default_unit}`}
+            onPick={material => setForm(previous => ({
+              ...previous,
+              basic_component: material.category_name || material.model_name,
+              detail: material.description,
+              brand: material.brand_name,
+              model: material.model_name,
+              unit: material.default_unit,
+              price: material.default_rate,
+              library_material_item: material.id,
+            }))}
+            loading={materials.loading}
+            disabled={materials.loading}
+            placeholder="Search raw materials…"
+          />
+          {materials.error && <InlineError message={materials.error} />}
+          {errors.basic_component?.[0] && <div className="text-[10px] text-red-500 mt-1">{errors.basic_component[0]}</div>}
         </div>
         <Field label="Detail" value={String(form.detail ?? "")} onChange={v => set("detail", v)} placeholder="18mm" />
         <Field label="Brand" value={String(form.brand ?? "")} onChange={v => set("brand", v)} placeholder="Austin" />
         <Field label="Model" value={String(form.model ?? "")} onChange={v => set("model", v)} placeholder="Lincoln" />
         <Field label="Unit" value={String(form.unit ?? "")} onChange={v => set("unit", v)} placeholder="sft" />
         <Field label="Qty" type="number" value={String(form.qty ?? "0")} onChange={v => set("qty", v)} error={errors.qty?.[0]} />
-        <Field label="Price (₹)" type="number" value={String(form.price ?? "0")} onChange={v => set("price", v)} error={errors.price?.[0]} />
+        <Field label="Price (₹)" type="number"
+          value={pricesVisible ? String(form.price ?? "0") : "—"}
+          onChange={v => set("price", v)} disabled={!pricesVisible}
+          error={errors.price?.[0]} />
       </div>
       <div className="mt-3 text-right text-[12px] text-surface-500">
-        Amount: <span className="font-bold text-nicara-dark">{inr(String(previewAmount))}</span>
+        Amount: <span className="font-bold text-nicara-dark">{pricesVisible ? inr(String(previewAmount)) : "—"}</span>
       </div>
     </Modal>
   );
@@ -1732,8 +2189,9 @@ function categoryItems(id: number) {
 }
 
 /** Brand / model for a generated row — any model in its component's raw-material category. */
-function RawMaterialPicker({ item, project, estimate, onChanged, onError }: {
+function RawMaterialPicker({ item, project, estimate, pricesVisible, onChanged, onError }: {
   item: EstimateItem; project: Project; estimate: Estimate;
+  pricesVisible: boolean;
   onChanged: () => Promise<void>; onError: (msg: string) => void;
 }) {
   const [choices, setChoices] = useState<LibraryItem[] | null>(null);
@@ -1758,7 +2216,9 @@ function RawMaterialPicker({ item, project, estimate, onChanged, onError }: {
       className="w-full px-1 py-1 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white cursor-pointer">
       {(choices ?? []).length === 0 && <option value={item.raw_material ?? ""}>{item.brand || "—"}</option>}
       {(choices ?? []).map(m => (
-        <option key={m.id} value={m.id}>{label(m)} (₹{parseFloat(m.default_rate)})</option>
+        <option key={m.id} value={m.id}>
+          {pricesVisible ? `${label(m)} (${inr(m.default_rate)})` : label(m)}
+        </option>
       ))}
     </select>
   );
@@ -1830,11 +2290,13 @@ const SMART_GROUPS: { key: string; label: string; hint: string }[] = [
 ];
 
 function SmartEstimateGenerator({
-  projectId, estimateId, disabled, onGenerated, onError,
+  projectId, estimateId, disabled, onApplied, onSelectionsChanged, onGenerated, onError,
 }: {
   projectId: number;
   estimateId: number;
   disabled: boolean;
+  onApplied: () => void;
+  onSelectionsChanged: () => void;
   onGenerated: () => Promise<void>;
   onError: (msg: string) => void;
 }) {
@@ -1842,11 +2304,14 @@ function SmartEstimateGenerator({
   const options = useApiData(() => libraryApi.smartOptions(), []);
   const [chosen, setChosen] = useState<Record<string, string>>({});
   const [applying, setApplying] = useState(false);
+  const requiredGroups = SMART_GROUPS.filter(group => (options.data?.[group.key] ?? []).length > 0);
   const picked = Object.entries(chosen).filter(([, id]) => id)
     .map(([group, id]) => ({ group, brand_id: Number(id) }));
+  const allRequiredSelected = requiredGroups.length > 0
+    && requiredGroups.every(group => !!chosen[group.key]);
 
   const apply = async () => {
-    if (picked.length === 0) return;
+    if (!allRequiredSelected || options.loading) return;
     setApplying(true);
     try {
       const res = await estimatesApi.applySmartBrands(projectId, estimateId, picked);
@@ -1854,6 +2319,7 @@ function SmartEstimateGenerator({
         toast.info("Some rows kept their brand",
           `${res.brand_result.changed} switched; ${res.brand_result.unchanged} kept — the brand has no model in their category`);
       }
+      onApplied();
       await onGenerated();
     } catch (e) {
       onError(e instanceof ApiError ? e.message : "Could not apply the brands.");
@@ -1881,7 +2347,10 @@ function SmartEstimateGenerator({
           return (
             <label key={g.key} className="block">
               <span className="text-[10px] font-bold text-stone-300 uppercase tracking-wider block mb-1">{g.label}</span>
-              <select value={chosen[g.key] ?? ""} onChange={e => setChosen(c => ({ ...c, [g.key]: e.target.value }))}
+              <select value={chosen[g.key] ?? ""} onChange={e => {
+                setChosen(c => ({ ...c, [g.key]: e.target.value }));
+                onSelectionsChanged();
+              }}
                 disabled={brands.length === 0}
                 className="w-full px-2 py-2 bg-stone-800 border border-stone-600 rounded-lg text-[11px] text-white outline-none focus:border-nicara-gold cursor-pointer disabled:opacity-50">
                 <option value="">Keep current</option>
@@ -1899,13 +2368,20 @@ function SmartEstimateGenerator({
 
       <div className="px-5 py-3 border-t border-stone-700 flex items-center justify-between">
         <span className="text-[11px] text-stone-300">
-          {picked.length ? `${picked.length} brand(s) chosen` : "Pick at least one brand"}
+          {options.loading
+            ? "Loading available brands…"
+            : `${requiredGroups.filter(group => !!chosen[group.key]).length}/${requiredGroups.length} brand groups selected`}
         </span>
-        <button onClick={apply} disabled={disabled || applying || picked.length === 0}
+        <button onClick={apply} disabled={disabled || applying || options.loading || !allRequiredSelected}
           className="px-6 py-2.5 bg-nicara-gold border-none rounded-xl text-white text-[12px] font-bold cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-50">
           {applying ? "Applying…" : "Apply to Estimate"}
         </button>
       </div>
+      {!options.loading && requiredGroups.length === 0 && (
+        <div className="px-5 pb-3 text-[10px] text-amber-300">
+          No Smart Estimate brand options are available. Add raw-material brands before applying prices.
+        </div>
+      )}
     </div>
   );
 }

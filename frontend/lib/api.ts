@@ -916,12 +916,13 @@ export const libraryApi = {
   meta: () => apiFetch<LibraryMeta>("/library/meta/"),
 
   /** Paginated list of MaterialItems with optional filters/search. */
-  items: (params?: { search?: string; category?: number; brand?: number; is_active?: boolean }) => {
+  items: (params?: { search?: string; category?: number; brand?: number; is_active?: boolean; page_size?: number }) => {
     const q = new URLSearchParams();
     if (params?.search) q.set("search", params.search);
     if (params?.category !== undefined) q.set("category", String(params.category));
     if (params?.brand !== undefined) q.set("brand", String(params.brand));
     if (params?.is_active !== undefined) q.set("is_active", params.is_active ? "true" : "false");
+    if (params?.page_size !== undefined) q.set("page_size", String(params.page_size));
     const qs = q.toString();
     return apiFetch<Paginated<LibraryItem>>(`/library/items/${qs ? `?${qs}` : ""}`);
   },
