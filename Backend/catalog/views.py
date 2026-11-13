@@ -172,7 +172,7 @@ class FurnitureCalculateView(APIView):
         cost = margin = gst = Decimal('0')
         for r in rows:
             row_cost = rules.d2(r['qty'] * r['rate'])
-            row_margin = rules.d2(row_cost * furniture.margin_pct / 100)
+            row_margin = rules.d2(row_cost * r['margin_pct'] / 100)
             cost, margin = cost + row_cost, margin + row_margin
             gst += rules.d2((row_cost + row_margin) * r['gst_pct'] / 100)
         return Response({

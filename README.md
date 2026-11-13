@@ -528,6 +528,33 @@ rows below them (ply, hinges, laminate, channels …), as in the sheet. The
 catalogue's **Calculate** preview shows the same cost plus margin and GST, so
 its total equals the estimate's for the same size and options.
 
+### Furniture taken from a worked estimate
+
+`seed_initial_estimate_demo` loads the client's workbook ("Create this Initial
+Estimate.xlsx") as a demo project **and** as catalogue furniture, so the same
+estimate can be made again from Design Requirements → Generate.
+
+- Each workbook line is a furniture whose components are that line's rows as
+  written: quantity, brand, model, price, margin and type. A component may
+  repeat (two laminates, Box and Panel carpentry, three Accessories).
+- The quantity is what the piece needs at its default size
+  (`FurnitureComponent.fixed_qty`). At another size it scales
+  (`FurnitureComponent.scaling`):
+  - sheets, kg, tape and sft work scale with width × height;
+  - running lengths (rft, m) scale with width;
+  - counts stay as they are.
+
+  Sheets stay in quarter sheets and whole counts stay whole.
+- The workbook reuses names for pieces that differ (an 8 ft and a 9 ft Wardrobe).
+  The first keeps the name and each different one is a variant named after its
+  area, e.g. "Wardrobe (Suite 1)". A line that repeats a piece row for row reuses it.
+- Project-level lines (Design, False Ceiling, Site Management …) are furniture
+  too, named after their area.
+
+Generating all 42 lines gives ₹46,42,670.15 against the workbook's ₹46,42,665.68.
+The gap is a 5.625 sft quantity stored as 5.63. `projects/test_workbook_generation.py`
+checks every row.
+
 `python manage.py recalculate_groups` re-runs the rules for every furniture group
 on estimates that aren't approved. It also restores the separate rows of any
 group made during the short-lived per-piece pricing.

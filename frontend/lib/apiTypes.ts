@@ -603,6 +603,10 @@ export interface FurnitureComponent {
   default_material_label: string;
   rate: number;
   fixed_qty: string | null;
+  /** How fixed_qty grows from the furniture's default size: "" (not at all), "area" or "width". */
+  scaling?: "" | "area" | "width";
+  /** This row's margin when it differs from the furniture's. */
+  margin_pct?: string | null;
   application: string;
   sort_order: number;
   is_active: boolean;

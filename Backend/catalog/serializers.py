@@ -54,9 +54,10 @@ class BasicComponentSerializer(serializers.ModelSerializer):
 
 class FurnitureComponentSerializer(serializers.ModelSerializer):
     basic_component_name = serializers.CharField(source='basic_component.name', read_only=True)
-    item_type = serializers.CharField(source='basic_component.item_type', read_only=True)
+    # The row's own type / unit when it has one, else the basic component's.
+    item_type = serializers.CharField(source='row_type', read_only=True)
     quantity_rule = serializers.CharField(source='basic_component.quantity_rule', read_only=True)
-    unit = serializers.CharField(source='basic_component.unit', read_only=True)
+    unit = serializers.CharField(source='row_unit', read_only=True)
     library_category = serializers.IntegerField(source='basic_component.library_category_id',
                                                 read_only=True)
     default_material_label = serializers.SerializerMethodField()
@@ -66,8 +67,8 @@ class FurnitureComponentSerializer(serializers.ModelSerializer):
         model = FurnitureComponent
         fields = ['id', 'furniture', 'basic_component', 'basic_component_name', 'item_type',
                   'quantity_rule', 'unit', 'library_category', 'default_material',
-                  'default_material_label', 'rate', 'fixed_qty', 'application',
-                  'sort_order', 'is_active']
+                  'default_material_label', 'rate', 'fixed_qty', 'scaling', 'margin_pct',
+                  'application', 'sort_order', 'is_active']
         read_only_fields = ['furniture']
 
     def get_default_material_label(self, obj):
@@ -76,6 +77,8 @@ class FurnitureComponentSerializer(serializers.ModelSerializer):
 
     def get_rate(self, obj):
         from .pricing import price_for
+        if obj.rate is not None:
+            return float(obj.rate)
         _, rate = price_for(obj.basic_component, obj.default_material)
         return float(rate)
 

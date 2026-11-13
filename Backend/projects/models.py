@@ -512,6 +512,12 @@ class EstimateItem(models.Model):
         'catalog.BasicComponent', on_delete=models.SET_NULL, null=True, blank=True,
         related_name='estimate_rows',
     )
+    furniture_component = models.ForeignKey(
+        'catalog.FurnitureComponent', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='estimate_rows',
+        help_text='The furniture row this was generated from (a furniture may use a '
+                  'basic component more than once)',
+    )
     raw_material = models.ForeignKey(
         'library.MaterialItem', on_delete=models.SET_NULL, null=True, blank=True,
         related_name='estimate_rows', help_text='Brand/model this row is priced from',

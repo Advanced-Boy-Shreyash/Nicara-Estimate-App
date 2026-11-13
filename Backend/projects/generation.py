@@ -65,13 +65,14 @@ def create_group(estimate, furniture, width, height, depth, *, options=None, are
     for r in rows:
         created.append(EstimateItem.objects.create(
             estimate=estimate, group_key=key, design_requirement=design_requirement,
-            furniture=furniture, basic_component=r['basic_component'], raw_material=r['raw_material'],
+            furniture=furniture, furniture_component=r['component'],
+            basic_component=r['basic_component'], raw_material=r['raw_material'],
             area=area, zone=zone, item=item_name or furniture.name, **dims,
             item_type=r['item_type'], specification=r['specification'],
             brand=r['brand'], model_name=r['model'], application=r['application'],
             qty=r['qty'], calculated_qty=r['qty'], unit=r['unit'],
             rate=r['rate'], price_unit=r['price_unit'],
-            margin_pct=furniture.margin_pct, gst_pct=r['gst_pct'],
+            margin_pct=r['margin_pct'], gst_pct=r['gst_pct'],
             quantity_rule=r['quantity_rule'], calc_basis=r['basis'][:500],
             flag=r['needs_input'], config=options,
         ))
@@ -84,7 +85,8 @@ def recalculate_group(estimate, group_key, *, width=None, height=None, depth=Non
     """
     Re-run the rules for a group. Sizes/options not given keep their current
     values. Rows whose quantity was typed over keep it (their calculated value
-    and basis still refresh); fixed-quantity rows are left alone.
+    and basis still refresh). A furniture row's fixed quantity follows the new
+    size when it scales; other fixed-quantity rows are left alone.
     """
     rows = group_rows(estimate, group_key)
     if not rows:
@@ -106,6 +108,8 @@ def recalculate_group(estimate, group_key, *, width=None, height=None, depth=Non
     furniture = first.furniture
     calc = rules.compute(furniture.cabinet_type, width, height, depth, options) if furniture else None
     dims = _dims(width, height, depth)
+    planned = breakdown(furniture, width, height, depth, options)[0] if furniture else []
+    plan = {r['component'].id: r for r in planned}
 
     for row in rows:
         for field, value in dims.items():
@@ -121,7 +125,17 @@ def recalculate_group(estimate, group_key, *, width=None, height=None, depth=Non
             row.components.all().delete()      # a per-piece breakdown → back to a count
             row.rate = 0
         bc = row.basic_component
-        if calc is not None and bc is not None and row.quantity_rule != 'fixed':
+        r = plan.get(row.furniture_component_id)
+        if r is not None:
+            # Generated from a furniture row: its quantity at this size.
+            row.quantity_rule = r['quantity_rule']
+            row.calculated_qty, row.calc_basis = r['qty'], r['basis'][:500]
+            if not row.qty_overridden:
+                row.qty = r['qty']
+                row.flag = r['needs_input']
+            if row.quantity_rule in rules.SPEC_RULES:
+                row.application = application_text(row.quantity_rule, row.qty, options)
+        elif calc is not None and bc is not None and row.quantity_rule not in ('fixed', 'scaled'):
             qty, basis, needs = calc.quantity(row.quantity_rule, None, bc.default_qty)
             row.calculated_qty, row.calc_basis = qty, basis[:500]
             if not row.qty_overridden:
@@ -133,19 +147,20 @@ def recalculate_group(estimate, group_key, *, width=None, height=None, depth=Non
 
     if furniture is not None:
         present = {r.basic_component_id for r in rows}
-        missing = [r for r in breakdown(furniture, width, height, depth, options)[0]
+        missing = [r for r in planned
                    if r['basic_component'].id not in present and r['quantity_rule'] in FOLDED_RULES]
         sno = max(r.sno for r in rows)
         for r in missing:
             rows.append(EstimateItem.objects.create(
                 estimate=estimate, group_key=group_key, design_requirement=first.design_requirement,
-                sno=sno, furniture=furniture, basic_component=r['basic_component'],
+                sno=sno, furniture=furniture, furniture_component=r['component'],
+                basic_component=r['basic_component'],
                 raw_material=r['raw_material'], area=first.area, zone=first.zone, item=first.item, **dims,
                 item_type=r['item_type'], specification=r['specification'],
                 brand=r['brand'], model_name=r['model'], application=r['application'],
                 qty=r['qty'], calculated_qty=r['qty'], unit=r['unit'],
                 rate=r['rate'], price_unit=r['price_unit'],
-                margin_pct=first.margin_pct, gst_pct=r['gst_pct'],
+                margin_pct=r['margin_pct'], gst_pct=r['gst_pct'],
                 quantity_rule=r['quantity_rule'], calc_basis=r['basis'][:500],
                 flag=r['needs_input'], config=options,
             ))

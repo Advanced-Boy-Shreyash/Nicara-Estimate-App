@@ -223,11 +223,23 @@ class Furniture(TimeStamped):
         return self.components.filter(is_active=True).count()
 
 
+class Scaling(models.TextChoices):
+    NONE = '', 'Same at every size'
+    AREA = 'area', 'With width × height'
+    WIDTH = 'width', 'With width'
+
+
 class FurnitureComponent(TimeStamped):
     """
-    One basic component a furniture is estimated from, optionally with a
-    default raw material (brand/model/price) and a fixed quantity that
+    One row a furniture is estimated from: a basic component, optionally with
+    a default raw material (brand/model/price) and a fixed quantity that
     replaces the rule.
+
+    A furniture taken from a worked estimate stores that estimate's rows here
+    as they are: `fixed_qty` is the quantity at the furniture's default size
+    and `scaling` says how it grows when the piece is made at another size.
+    The same basic component may appear more than once (two laminates, box and
+    panel carpentry), each row with its own material, margin and type.
     """
     furniture = models.ForeignKey(Furniture, on_delete=models.CASCADE, related_name='components')
     basic_component = models.ForeignKey(BasicComponent, on_delete=models.PROTECT,
@@ -243,9 +255,38 @@ class FurnitureComponent(TimeStamped):
     )
     application = models.CharField(max_length=200, blank=True, default='',
                                    help_text='e.g. For drawers, Selection')
+    scaling = models.CharField(
+        max_length=10, choices=Scaling.choices, blank=True, default='',
+        help_text='How the fixed quantity changes from the furniture\'s default size',
+    )
+    # Blank / empty = take it from the basic component (or the furniture, for margin).
+    item_type = models.CharField(max_length=30, choices=ItemType.choices, blank=True, default='')
+    unit = models.CharField(max_length=20, blank=True, default='')
+    price_unit = models.CharField(max_length=30, blank=True, default='')
+    margin_pct = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    rate = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text="Price for this furniture when it differs from the raw material's",
+    )
 
     class Meta:
         ordering = ['sort_order', 'id']
 
     def __str__(self):
         return f'{self.furniture.name} ← {self.basic_component.name}'
+
+    @property
+    def row_type(self):
+        return self.item_type or self.basic_component.item_type
+
+    @property
+    def row_unit(self):
+        return self.unit or self.basic_component.unit
+
+    @property
+    def row_price_unit(self):
+        return self.price_unit or self.basic_component.price_unit
+
+    @property
+    def row_margin_pct(self):
+        return self.furniture.margin_pct if self.margin_pct is None else self.margin_pct

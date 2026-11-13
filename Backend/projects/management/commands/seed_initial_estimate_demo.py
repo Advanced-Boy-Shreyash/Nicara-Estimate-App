@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from decimal import Decimal
 from pathlib import Path
 
@@ -63,6 +64,49 @@ def cabinet_type(name):
     return CabinetType.PANEL
 
 
+def scaling_for(component):
+    """How a workbook row's quantity grows when its furniture is made at another
+    size: sheet goods, glue, tape and sft work with the front area, running
+    lengths with the width, counts not at all."""
+    unit = component['unit'].strip().casefold()
+    name = component['basic_component'].casefold()
+    if unit in ('sheet', 'sheets', 'kg', 'roll') or name.startswith('adhesive'):
+        return 'area'
+    if unit == 'sft':
+        # Panel carpentry is width × depth (12 × 1.25); box carpentry width × height.
+        return 'width' if component['model'].strip().casefold() == 'panel' else 'area'
+    if unit in ('rft', 'm', 'mtr'):
+        return 'width'
+    return ''
+
+
+def furniture_names(items):
+    """
+    The catalogue furniture each workbook line is made from → [(name, is_template)].
+
+    Every line is a catalogue furniture, so the whole estimate can be generated
+    again; project-level lines (False Ceiling, Site Management …) have no item
+    name and go by their area. The workbook reuses a name for pieces that are
+    not the same (an 8 ft and a 9 ft Wardrobe; Bed back Walls with different
+    wallpaper): the first keeps the name and each different one is a variant
+    named after its area — "Wardrobe (Suite 1)". A line that repeats a piece
+    row for row reuses it. `is_template` marks the line that defines a furniture.
+    """
+    variants, names = {}, []
+    for item in items:
+        base = item['item'] if item.get('catalog_furniture') else item['area']
+        signature = (item['length'], item['height'], item['breadth'], tuple(
+            (c['basic_component'], c['brand'], c['model'], c['detail'], c['quantity'],
+             c['unit'], c['price'], c['margin_pct'], c['category_type'])
+            for c in item['components']))
+        known = variants.setdefault(base, {})
+        is_template = signature not in known
+        if is_template:
+            known[signature] = base if not known else f"{base} ({item['area']})"
+        names.append((known[signature][:150], is_template))
+    return names
+
+
 def dimension_parts(value):
     inches = size_inches(value, '', '')[0]
     feet = int(inches // 12)
@@ -123,26 +167,32 @@ class Command(BaseCommand):
         furniture_models = {}
         imported_components = 0
 
-        for item_data in items:
-            room = None
-            furniture = None
-            if item_data.get('catalog_furniture'):
+        for item_data, (furniture_name, is_template) in zip(items, furniture_names(items)):
+            is_cabinet = bool(item_data.get('catalog_furniture'))
+            margins = Counter(decimal_value(c['margin_pct']) for c in item_data['components'])
+            furniture_margin = margins.most_common(1)[0][0]
+            furniture, created = Furniture.objects.get_or_create(
+                name=furniture_name,
+                defaults={
+                    'cabinet_type': cabinet_type(furniture_name) if is_cabinet else CabinetType.PANEL,
+                    'default_length': item_data['length'][:20],
+                    'default_breadth': item_data['breadth'][:20],
+                    'default_height': item_data['height'][:20],
+                    'margin_pct': furniture_margin,
+                },
+            )
+            if is_template and not created and furniture.margin_pct != furniture_margin:
+                furniture.margin_pct = furniture_margin
+                furniture.save(update_fields=['margin_pct'])
+            furniture_models[furniture.pk] = furniture
+            if is_cabinet:
                 room, _ = Room.objects.get_or_create(name=item_data['area'][:120])
-                furniture, _ = Furniture.objects.get_or_create(
-                    name=item_data['item'][:150],
-                    defaults={
-                        'cabinet_type': cabinet_type(item_data['item']),
-                        'default_length': item_data['length'][:20],
-                        'default_breadth': item_data['breadth'][:20],
-                        'default_height': item_data['height'][:20],
-                    },
-                )
                 furniture.rooms.add(room)
-                furniture_models[furniture.pk] = furniture
                 if item_data['zone']:
                     Zone.objects.get_or_create(
                         name=item_data['zone'][:120],
                     )
+            template_rows = []
 
             estimate_item, _ = EstimateItem.objects.update_or_create(
                 estimate=estimate,
@@ -195,14 +245,19 @@ class Command(BaseCommand):
                     },
                 )
 
+                # Brand, model and price live in the Raw Material Library for every
+                # priced or named row — services (Carpentry: Box / Panel) included —
+                # so a generated row is priced exactly as the workbook row is. A row
+                # with no model is stored under its component's name.
                 library_item = None
-                if component_type in ('Procurement', 'Procurement cum Service'):
+                priced = decimal_value(component['price']) > 0
+                if component['brand'] or component['model'] or priced:
                     brand = None
                     if component['brand']:
                         brand, _ = MaterialBrand.objects.get_or_create(
                             name=component['brand'][:100],
                         )
-                    model_name = component['model'] or component['detail'] or basic_name
+                    model_name = component['model'] or basic_name
                     library_item, _ = MaterialItem.objects.get_or_create(
                         category=category,
                         brand=brand,
@@ -249,21 +304,40 @@ class Command(BaseCommand):
                 material_cost += line_cost
                 weighted_margin += line_cost * decimal_value(component['margin_pct'])
 
-                if furniture:
-                    lookup = {
-                        'furniture': furniture,
-                        'basic_component': basic_component,
-                    }
-                    FurnitureComponent.objects.get_or_create(
-                        **lookup,
+                if is_template:
+                    row_margin = decimal_value(component['margin_pct'])
+                    row_type = ITEM_TYPES[component_type]
+                    row_price = decimal_value(component['price'])
+                    row, _ = FurnitureComponent.objects.update_or_create(
+                        furniture=furniture,
+                        sort_order=component_index,
                         defaults={
+                            'basic_component': basic_component,
                             'default_material': library_item,
+                            'fixed_qty': decimal_value(component['quantity']),
+                            'scaling': scaling_for(component),
                             'application': component['detail'][:200],
+                            'item_type': '' if row_type == basic_component.item_type else row_type,
+                            'unit': ('' if component['unit'] == basic_component.unit
+                                     else component['unit'][:20]),
+                            'price_unit': ('' if component['price_unit'] == basic_component.price_unit
+                                           else component['price_unit'][:30]),
+                            'margin_pct': None if row_margin == furniture_margin else row_margin,
+                            # The same model is priced differently in places (wallpaper,
+                            # glass); the furniture keeps the price of its own row.
+                            'rate': (None if library_item is not None
+                                     and library_item.default_rate == row_price else row_price),
+                            'is_active': True,
                         },
                     )
+                    template_rows.append(row.pk)
 
                 imported_components += 1
 
+            if is_template:
+                furniture.components.exclude(pk__in=template_rows).exclude(
+                    basic_component__code='SAMPLE-KITCHEN-PULLOUT',
+                ).delete()
             if component_numbers:
                 estimate_item.components.exclude(sno__in=component_numbers).delete()
             estimate_item.margin_pct = (
@@ -318,13 +392,16 @@ class Command(BaseCommand):
             None,
         )
         if kitchen_furniture:
-            FurnitureComponent.objects.get_or_create(
+            # Listed at quantity 0: the brand can be picked and a quantity typed,
+            # but a generated kitchen still totals what the workbook's does.
+            FurnitureComponent.objects.update_or_create(
                 furniture=kitchen_furniture,
                 basic_component=kitchen_component,
                 defaults={
                     'default_material': kitchen_material,
-                    'fixed_qty': Decimal('1'),
+                    'fixed_qty': Decimal('0'),
                     'application': 'Kitchen base units',
+                    'sort_order': 999,
                 },
             )
         materials[(
