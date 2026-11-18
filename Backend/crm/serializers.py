@@ -79,7 +79,7 @@ class LeadListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lead
         fields = ['id', 'code', 'name', 'email', 'phone', 'project_name', 'developer',
-                  'city', 'property_type', 'area', 'estimated_budget',
+                  'address', 'city', 'property_type', 'area', 'estimated_budget',
                   'stage', 'stage_display', 'source', 'source_display', 'priority',
                   'owner', 'owner_name', 'next_follow_up',
                   'converted_project', 'created_at']

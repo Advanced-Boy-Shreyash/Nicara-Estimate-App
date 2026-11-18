@@ -135,6 +135,7 @@ class ConvertLeadView(APIView):
                     name=lead.name,
                     defaults={
                         'email': lead.email, 'phone': lead.phone,
+                        'address': lead.address,
                         'city': lead.city, 'state': lead.state,
                         'created_by': request.user,
                     },
@@ -148,6 +149,7 @@ class ConvertLeadView(APIView):
                 name=data.get('project_name') or lead.project_name or f'{lead.name} Residence',
                 developer=lead.developer,
                 unit_no=lead.unit_no,
+                client_address=lead.address,
                 city=lead.city or 'Mumbai',
                 state=lead.state,
                 area=lead.area,

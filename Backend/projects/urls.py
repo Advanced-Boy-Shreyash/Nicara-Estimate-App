@@ -12,6 +12,7 @@ urlpatterns = [
     path('', views.ProjectListCreateView.as_view(), name='project-list'),
     path('dashboard/', views.ProjectDashboardView.as_view(), name='project-dashboard'),
     path('meta/', views.ProjectMetaView.as_view(), name='project-meta'),
+    path('by-public-id/<str:public_id>/', views.ProjectPublicIdDetailView.as_view(), name='project-public-detail'),
     path('<int:pk>/', views.ProjectDetailView.as_view(), name='project-detail'),
 
     # ══ INITIAL ENGAGEMENT ══════════════════════════════════
@@ -22,6 +23,8 @@ urlpatterns = [
     path('<int:project_id>/design-requirements/', views.DesignRequirementListCreateView.as_view(), name='design-req-list'),
     path('<int:project_id>/design-requirements/bulk/', views.DesignRequirementBulkView.as_view(), name='design-req-bulk'),
     path('<int:project_id>/design-requirements/<int:pk>/', views.DesignRequirementDetailView.as_view(), name='design-req-detail'),
+    path('<int:project_id>/floor-plans/', views.ProjectFloorPlanListCreateView.as_view(), name='floor-plan-list'),
+    path('<int:project_id>/floor-plans/<int:pk>/', views.ProjectFloorPlanDetailView.as_view(), name='floor-plan-detail'),
 
     # ── Deliverables (FL, MB, 3D, Renders, WD) — versioned + approvals ──
     path('<int:project_id>/deliverables/', views.DeliverableListCreateView.as_view(), name='deliverable-list'),
@@ -38,6 +41,9 @@ urlpatterns = [
     path('<int:project_id>/estimates/<int:pk>/request-revision/', views.EstimateRequestRevisionView.as_view(), name='estimate-revision'),
     path('<int:project_id>/estimates/<int:pk>/duplicate/', views.EstimateDuplicateView.as_view(), name='estimate-duplicate'),
     path('<int:project_id>/estimates/<int:pk>/apply-smart-materials/', views.EstimateApplySmartMaterialsView.as_view(), name='estimate-apply-materials'),
+    path('<int:project_id>/estimates/<int:pk>/generate-from-design/', views.EstimateGenerateFromDesignView.as_view(), name='estimate-generate-from-design'),
+    path('<int:project_id>/estimates/<int:pk>/add-furniture/', views.EstimateAddFurnitureView.as_view(), name='estimate-add-furniture'),
+    path('<int:project_id>/estimates/<int:pk>/groups/<str:group_key>/', views.EstimateGroupView.as_view(), name='estimate-group'),
     path('<int:project_id>/estimates/<int:pk>/pdf/', views.EstimatePDFView.as_view(), name='estimate-pdf'),
     path('<int:project_id>/estimates/<int:pk>/excel/', views.EstimateExcelView.as_view(), name='estimate-excel'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/', views.EstimateItemListCreateView.as_view(), name='estimate-item-list'),
@@ -46,7 +52,7 @@ urlpatterns = [
     # ── Line breakdown (bill of materials) ──
     path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/components/', views.EstimateItemComponentListCreateView.as_view(), name='estimate-item-component-list'),
     path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/components/<int:pk>/', views.EstimateItemComponentDetailView.as_view(), name='estimate-item-component-detail'),
-    path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/populate-from-furniture/', views.EstimatePopulateFromFurnitureView.as_view(), name='estimate-item-populate'),
+    path('<int:project_id>/estimates/<int:estimate_id>/items/<int:item_id>/reset-qty/', views.EstimateItemResetQtyView.as_view(), name='estimate-item-reset-qty'),
 
     # ── Booking Form ──
     path('<int:project_id>/booking-form/', views.BookingFormView.as_view(), name='booking-form'),

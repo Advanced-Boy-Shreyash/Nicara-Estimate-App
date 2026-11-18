@@ -116,9 +116,20 @@ class EstimateExcelTests(ExportTestCase):
         self.assertIn('Wardrobe', text)
         self.assertIn('GRAND TOTAL', text)
 
-        # Grand total = (145000 + 225000) × 1.18 must land as a real number so
-        # the workbook can be summed, not just read. openpyxl hands whole
-        # values back as int, so accept either.
+        # The exported line GST and total use the same margin-aware values as
+        # the estimate model.
+        item_row = next(
+            row for row in range(9, ws.max_row + 1)
+            if ws.cell(row=row, column=4).value == 'Wardrobe'
+        )
+        wardrobe = self.estimate.items.get(item='Wardrobe')
+        self.assertEqual(ws.cell(row=item_row, column=15).value,
+                         float(wardrobe.gst_amount_stored))
+        self.assertEqual(ws.cell(row=item_row, column=16).value,
+                         float(wardrobe.total_amount))
+
+        # The grand total must land as a real number so the workbook can be
+        # summed, not just read. openpyxl hands whole values back as int.
         numbers = [
             float(ws.cell(row=r, column=c).value)
             for r in range(1, ws.max_row + 1)

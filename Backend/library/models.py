@@ -2,7 +2,9 @@
 NICARA Component Library — Models
 
 Materials database that designers use to build estimates.
-Hierarchy: MaterialCategory → MaterialBrand → MaterialItem
+    MaterialCategory  what the material is   (Core Material(16mm BWP Ply), Box Hinges)
+    MaterialBrand     who makes it — one master list (Austin, Hettich, Greenlam)
+    MaterialItem      a priced model: category + brand + model + rate
 Plus separate ServiceItem for labour/service-type entries.
 
 Structure mirrors the "Sample Detail" sheet in sample template.xlsx.
@@ -25,7 +27,18 @@ class MaterialCategory(models.Model):
         SPEC_PURPOSE = 'Spec Purpose', 'Spec Purpose'
         PROC_SERVICE = 'Procurement cum Service', 'Procurement cum Service'
 
+    class ProductGroup(models.TextChoices):
+        PLYWOOD = 'plywood', 'Plywood'
+        HARDWARE = 'hardware', 'Hardware'
+        KITCHEN_ACCESSORIES = 'kitchen_accessories', 'Kitchen Accessories'
+        FINISHING = 'finishing', 'Finishing'
+        OTHER = 'other', 'Other'
+
     name = models.CharField(max_length=150, unique=True)
+    product_group = models.CharField(
+        max_length=30, choices=ProductGroup.choices, default=ProductGroup.OTHER,
+        db_index=True,
+    )
     type = models.CharField(max_length=30, choices=SpecType.choices, default=SpecType.PROCUREMENT)
     icon = models.CharField(max_length=10, blank=True, default='📦')
     description = models.TextField(blank=True, default='')
@@ -42,22 +55,20 @@ class MaterialCategory(models.Model):
 
 class MaterialBrand(models.Model):
     """
-    Brands within a category.
-    Examples: Category='Box Hinges' → Brand='Hettich'
-              Category='Core Material(16mm BWP Ply)' → Brand='Austin'
-              Category='Finishing - Laminate' → Brand='Greenlam'
+    A brand — one master list shared by every category. A raw material links
+    to one brand; the Smart Estimate Generator offers brands, then picks that
+    brand's model in each row's category.
+    Examples: Austin, Hettich, Greenlam, Fevicol
     """
-    category = models.ForeignKey(MaterialCategory, on_delete=models.CASCADE, related_name='brands')
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=100, unique=True)
     website = models.URLField(blank=True, default='')
     is_active = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['name']
-        unique_together = ('category', 'name')
 
     def __str__(self):
-        return f"{self.category.name} — {self.name}"
+        return self.name
 
 
 class MaterialItem(models.Model):
@@ -67,9 +78,22 @@ class MaterialItem(models.Model):
               Brand='Austin' → Model='Lincoln BWP'
               Brand='Greenlam' → Model='Off white Colour'
     """
-    brand = models.ForeignKey(MaterialBrand, on_delete=models.CASCADE, related_name='items')
+    category = models.ForeignKey(
+        MaterialCategory, on_delete=models.PROTECT, related_name='materials',
+    )
+    brand = models.ForeignKey(
+        MaterialBrand, on_delete=models.SET_NULL, related_name='items',
+        null=True, blank=True,
+    )
     model_name = models.CharField(max_length=200, help_text='Product model/variant name')
     description = models.TextField(blank=True, default='')
+    # Physical dimensions / specs
+    weight = models.CharField(max_length=50, blank=True, default='',
+                              help_text='e.g. 2.5 kg, 500g')
+    length = models.CharField(max_length=50, blank=True, default='',
+                              help_text='e.g. 8ft, 2440mm')
+    thickness = models.CharField(max_length=50, blank=True, default='',
+                                 help_text='e.g. 16mm, 18mm')
     default_unit = models.CharField(max_length=20, default='nos',
                                      help_text='sheets, sets, nos, sft, kg, rft')
     default_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0,
@@ -86,12 +110,14 @@ class MaterialItem(models.Model):
         ordering = ['model_name']
 
     def __str__(self):
-        return f"{self.brand.name} — {self.model_name}"
+        brand = f'{self.brand.name} — ' if self.brand_id else ''
+        return f'{brand}{self.model_name}'
 
     @property
     def full_display(self):
         """Full display text: 'Category: Brand Model'"""
-        return f"{self.brand.category.name}: {self.brand.name} {self.model_name}"
+        brand = f'{self.brand.name} ' if self.brand_id else ''
+        return f'{self.category.name}: {brand}{self.model_name}'
 
 
 class ServiceItem(models.Model):

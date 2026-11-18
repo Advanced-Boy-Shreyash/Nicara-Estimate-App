@@ -1,27 +1,41 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { ApiError, designRequirementsApi, catalogApi } from "@/lib/api";
-import type { DesignRequirement, Project, Furniture } from "@/lib/apiTypes";
+import { ApiError, catalogApi, designRequirementsApi, floorPlansApi } from "@/lib/api";
+function splitDimension(value: string): [number, number] {
+  const match = /^\s*(\d+)\s*['′]\s*(\d+)?\s*(?:"|″)?\s*$/.exec(value);
+  if (match) return [Number(match[1]), Number(match[2] || 0)];
+  const totalInches = Number.parseFloat(value);
+  return Number.isFinite(totalInches)
+    ? [Math.floor(totalInches / 12), Math.round(totalInches % 12)]
+    : [0, 0];
+}
+
+function updateDimensionPart(value: string, part: "feet" | "inches", input: string): string {
+  const [feet, inches] = splitDimension(value);
+  const nextFeet = part === "feet" ? Math.max(0, Number.parseInt(input, 10) || 0) : feet;
+  const nextInches = part === "inches" ? Math.max(0, Number.parseInt(input, 10) || 0) : inches;
+  const totalInches = nextFeet * 12 + nextInches;
+  return `${Math.floor(totalInches / 12)}'${totalInches % 12}"`;
+}
+import type { CalcOptions, CatalogZone, DesignRequirement, Furniture, Project } from "@/lib/apiTypes";
 import { useApiData } from "@/lib/hooks";
 import { useToast } from "@/components/ui/Toast";
 import { Btn } from "@/components/ui/Form";
 import Modal from "@/components/ui/Modal";
+import SearchSelect from "@/components/ui/SearchSelect";
 import { ErrorState, InlineError, Loading } from "@/components/ui/States";
-import { Upload, Eye, Download, Trash2, Plus, X } from "lucide-react";
-import { SearchableSelect } from "@/components/ui/SearchableSelect";
-import { AddFurnitureModal } from "@/components/catalog/AddFurnitureModal";
 
 type Row = Omit<DesignRequirement, "id" | "sort_order"> & { id?: number; designImage?: string };
 
 const BLANK_ROW: Row = {
-  room: "", unit: "", length: "", breadth: "", height: "",
+  room: "", zone: "", unit: "", furniture: null, options: {}, length: "", breadth: "", height: "",
   finishing: "", remarks: "", design_required: true,
 };
 
 const CELL = "w-full px-2 py-1.5 border border-transparent rounded-lg text-[11px] bg-transparent outline-none focus:border-nicara-gold focus:bg-white";
 const TH = "px-2 py-2 text-stone-200 font-semibold text-[10px] text-left whitespace-nowrap border-r border-stone-700";
-const BD = "border-r border-surface-200";   
+const BD = "border-r border-surface-200";
 
 /* ── Room definitions with pre-filled sub-items ──────────────── */
 
@@ -115,9 +129,30 @@ const ROOMS: { name: string; icon: string; items: { unit: string; finishing: str
 
 const FINISHING_OPTIONS = ["Laminate", "Veneer", "Acrylic", "Gypsum", "Upholstery", "Paint", "PU", "Glass", "Granite", "Tile", "HPL"];
 
+/** Room-chip unit names → the catalogue furniture they're estimated as (by cabinet type). */
+const UNIT_TO_CABINET: [RegExp, string][] = [
+  [/wardrobe|closet/i, "wardrobe_openable"],
+  [/tv/i, "tv_unit"],
+  [/crockery/i, "crockery_base"],
+  [/^base unit$/i, "kitchen_base"],
+  [/^wall unit$/i, "kitchen_wall"],
+  [/loft/i, "loft_box"],
+  [/pooja/i, "pooja"],
+  [/study/i, "study"],
+  [/shoe/i, "shoe_rack"],
+];
+
+function matchFurniture(unit: string, furniture: Furniture[]): Furniture | undefined {
+  const exact = furniture.find(f => f.name.toLowerCase() === unit.toLowerCase());
+  if (exact) return exact;
+  const rule = UNIT_TO_CABINET.find(([re]) => re.test(unit));
+  return rule ? furniture.find(f => f.cabinet_type === rule[1]) : undefined;
+}
+
 /**
  * Initial Engagement → Design Requirements.
- * Room selection chips + grouped table + image upload + AutoCAD integration.
+ * Each row picks a catalogue furniture and its size; the Initial Estimate's
+ * "Generate from Design Requirements" turns them into calculation-sheet rows.
  */
 export default function DesignRequirements({ project }: { project: Project }) {
   const toast = useToast();
@@ -125,6 +160,12 @@ export default function DesignRequirements({ project }: { project: Project }) {
     () => designRequirementsApi.list(project.id),
     [project.id]
   );
+  // Finished products the rows are estimated as, and the room zones.
+  const furnitureQuery = useApiData(() => catalogApi.furniture(), []);
+  const furniture = useMemo(() => (furnitureQuery.data?.results ?? []).filter(f => f.is_active),
+    [furnitureQuery.data]);
+  const zonesQuery = useApiData(() => catalogApi.zones(), []);
+  const zones = zonesQuery.data?.results ?? [];
 
   const [rows, setRows] = useState<Row[] | null>(null);
   const [banner, setBanner] = useState("");
@@ -132,37 +173,42 @@ export default function DesignRequirements({ project }: { project: Project }) {
   const [fRoom, setFRoom] = useState("All");
   const [fFinishing, setFFinishing] = useState("All");
   const [viewingImage, setViewingImage] = useState<string | null>(null);
-  const [floorPlan, setFloorPlan] = useState<{ url: string; name: string; size: string } | null>(null);
   const floorPlanRef = useRef<HTMLInputElement>(null);
+  const floorPlanQuery = useApiData(() => floorPlansApi.list(project.id), [project.id]);
+  const [floorPlanBusy, setFloorPlanBusy] = useState(false);
+  const [floorPlanError, setFloorPlanError] = useState("");
 
-  // Fetch catalogue furniture to populate the Unit dropdowns
-  const { data: catData, reload: reloadCat } = useApiData(() => catalogApi.furniture(), []);
-  const catalogOptions = useMemo(() => {
-    return (catData?.results || []).map(f => ({ value: f.name, label: f.name }));
-  }, [catData]);
-
-  // Modal state for adding new Furniture
-  const [addFurnOpen, setAddFurnOpen] = useState(false);
-  const [addFurnName, setAddFurnName] = useState("");
-  const [addFurnTargetRow, setAddFurnTargetRow] = useState<Row | null>(null);
-
-  const handleAddFurniture = (name: string, row: Row) => {
-    setAddFurnName(name);
-    setAddFurnTargetRow(row);
-    setAddFurnOpen(true);
+  const uploadFloorPlans = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setFloorPlanBusy(true);
+    setFloorPlanError("");
+    const form = new FormData();
+    Array.from(files).forEach(file => form.append("files", file));
+    try {
+      await floorPlansApi.upload(project.id, form);
+      await floorPlanQuery.reload();
+    } catch (error) {
+      setFloorPlanError(error instanceof Error ? error.message : "Could not upload the floor plan.");
+    } finally {
+      setFloorPlanBusy(false);
+      if (floorPlanRef.current) floorPlanRef.current.value = "";
+    }
   };
 
-  const handleFurnitureAdded = (furniture: Furniture) => {
-    if (addFurnTargetRow) {
-      editByRef(addFurnTargetRow, "unit", furniture.name);
+  const deleteFloorPlan = async (id: number) => {
+    setFloorPlanError("");
+    try {
+      await floorPlansApi.delete(project.id, id);
+      await floorPlanQuery.reload();
+    } catch (error) {
+      setFloorPlanError(error instanceof Error ? error.message : "Could not delete the floor plan.");
     }
-    setAddFurnOpen(false);
-    reloadCat();
   };
 
   const serverRows = data?.results ?? [];
   const working: Row[] = rows ?? serverRows;
   const dirty = rows !== null;
+  const unlinked = working.filter(r => r.unit.trim() && !r.furniture).length;
 
   const uRooms = useMemo(() => ["All", ...Array.from(new Set(working.map(r => r.room).filter(Boolean)))], [working]);
   const uFinishings = useMemo(() => ["All", ...Array.from(new Set(working.map(r => r.finishing).filter(Boolean)))], [working]);
@@ -191,12 +237,12 @@ export default function DesignRequirements({ project }: { project: Project }) {
     return counts;
   }, [working]);
 
-  const editByRef = (actualRow: Row, key: keyof Row, value: string | boolean) => {
+  const patchByRef = (actualRow: Row, patch: Partial<Row>) => {
     const actualIndex = working.indexOf(actualRow);
     if (actualIndex === -1) return;
     setRows(current => {
       const next = [...(current ?? serverRows)];
-      next[actualIndex] = { ...next[actualIndex], [key]: value };
+      next[actualIndex] = { ...next[actualIndex], ...patch };
       return next;
     });
   };
@@ -207,32 +253,35 @@ export default function DesignRequirements({ project }: { project: Project }) {
     setRows((rows ?? serverRows).filter((_, i) => i !== actualIndex));
   };
 
-  const addRow = () => setRows([...(rows ?? serverRows), { ...BLANK_ROW }]);
+  /** Pick a catalogue furniture; an empty size takes the furniture's default. */
+  const withFurniture = (row: Row, f: Furniture): Partial<Row> => ({
+    furniture: f.id, furniture_name: f.name, cabinet_type: f.cabinet_type, unit: f.name,
+    length: row.length || f.default_length, height: row.height || f.default_height,
+    breadth: row.breadth || f.default_breadth,
+  });
 
-  const addRowToRoom = (roomName: string) => {
-    setRows([...(rows ?? serverRows), { ...BLANK_ROW, room: roomName }]);
-  };
+  const addRow = () => setRows([...(rows ?? serverRows), { ...BLANK_ROW }]);
+  const addRowToRoom = (roomName: string) => setRows([...(rows ?? serverRows), { ...BLANK_ROW, room: roomName }]);
 
   const addRoomRows = (room: typeof ROOMS[number]) => {
-    const newRows: Row[] = room.items.map(item => ({
-      ...BLANK_ROW,
-      room: room.name,
-      unit: item.unit,
-      finishing: item.finishing,
-    }));
+    const newRows: Row[] = room.items.map(item => {
+      const base: Row = { ...BLANK_ROW, room: room.name, unit: item.unit, finishing: item.finishing };
+      const match = matchFurniture(item.unit, furniture);
+      return match ? { ...base, ...withFurniture(base, match), unit: item.unit } : base;
+    });
     setRows([...(rows ?? serverRows), ...newRows]);
   };
 
   const handleImageUpload = (row: Row, file: File) => {
-    const url = URL.createObjectURL(file);
-    editByRef(row, "designImage" as keyof Row, url);
+    patchByRef(row, { designImage: URL.createObjectURL(file) });
   };
 
   const save = async () => {
     const payload = working
       .filter(r => r.room.trim() || r.unit.trim())
       .map(r => ({
-        room: r.room, unit: r.unit, length: r.length, breadth: r.breadth,
+        id: r.id, room: r.room, zone: r.zone, unit: r.unit, furniture: r.furniture,
+        options: r.options ?? {}, length: r.length, breadth: r.breadth,
         height: r.height, finishing: r.finishing, remarks: r.remarks,
         design_required: r.design_required,
       }));
@@ -272,7 +321,7 @@ export default function DesignRequirements({ project }: { project: Project }) {
       <div className="bg-white border border-surface-200 rounded-2xl p-4 mb-4">
         <div className="flex items-center gap-2 mb-3">
           <span className="text-[10px] font-bold text-nicara-gold uppercase tracking-wider">Select Rooms</span>
-          <span className="text-[10px] text-surface-400">Click a room to add pre-filled rows</span>
+          <span className="text-[10px] text-surface-400">Click a room to add pre-filled rows — catalogue furniture is linked automatically</span>
         </div>
         <div className="flex flex-wrap gap-2">
           {ROOMS.map(room => {
@@ -302,35 +351,33 @@ export default function DesignRequirements({ project }: { project: Project }) {
             <div className="text-[10px] font-bold text-nicara-gold uppercase tracking-wider">Floor Plan</div>
             <div className="text-[10px] text-surface-400">Upload a floor plan reference (PDF, Images)</div>
           </div>
-          <input type="file" ref={floorPlanRef} accept=".pdf,.png,.jpg,.jpeg,.gif,.dxf,.dwg" className="hidden"
-            onChange={e => {
-              const f = e.target.files?.[0];
-              if (f) {
-                const sz = f.size < 1024 ? `${f.size} B` : f.size < 1048576 ? `${(f.size / 1024).toFixed(1)} KB` : `${(f.size / 1048576).toFixed(1)} MB`;
-                setFloorPlan({ url: URL.createObjectURL(f), name: f.name, size: sz });
-              }
-            }} />
-          <button onClick={() => floorPlanRef.current?.click()}
+          <input type="file" ref={floorPlanRef} accept=".pdf,.png,.jpg,.jpeg,.gif,.dxf,.dwg" className="hidden" multiple
+            onChange={e => { void uploadFloorPlans(e.target.files); }} />
+          <button onClick={() => floorPlanRef.current?.click()} disabled={floorPlanBusy}
             className="px-3 py-1.5 bg-surface-50 border border-dashed border-surface-300 rounded-lg text-[11px] font-semibold text-surface-500 cursor-pointer hover:border-nicara-gold hover:text-nicara-gold">
-            Upload Floor Plan
+            {floorPlanBusy ? "Uploading…" : "Upload Floor Plan"}
           </button>
         </div>
-        {floorPlan && (
-          <div className="flex items-center gap-2 px-3 py-2 bg-surface-50 border border-surface-100 rounded-lg">
-            <span className="text-[11px] font-semibold text-nicara-dark flex-1 truncate">{floorPlan.name}</span>
-            <span className="text-[9px] text-surface-400">{floorPlan.size}</span>
-            {floorPlan.name.match(/\.(png|jpg|jpeg|gif)$/i) ? (
-              <button onClick={() => setViewingImage(floorPlan.url)}
-                className="px-2 py-1 bg-blue-50 border border-blue-200 rounded text-[10px] font-semibold text-blue-600 cursor-pointer hover:bg-blue-100">
-                View
-              </button>
-            ) : null}
-            <a href={floorPlan.url} download={floorPlan.name}
+        {floorPlanError && <InlineError message={floorPlanError} />}
+        {floorPlanQuery.error && <InlineError message={floorPlanQuery.error} />}
+        {floorPlanQuery.data?.results.map(plan => (
+          <div key={plan.id} className="flex items-center gap-2 px-3 py-2 bg-surface-50 border border-surface-100 rounded-lg">
+            <span className="text-[11px] font-semibold text-nicara-dark flex-1 truncate">{plan.file_name}</span>
+            <span className="text-[9px] text-surface-400">{(plan.file_size / 1048576).toFixed(1)} MB</span>
+            <a href={plan.file_url} target="_blank" rel="noopener noreferrer"
+              className="px-2 py-1 bg-blue-50 border border-blue-200 rounded text-[10px] font-semibold text-blue-600 no-underline hover:bg-blue-100">
+              View
+            </a>
+            <a href={plan.file_url} download={plan.file_name}
               className="px-2 py-1 bg-surface-50 border border-surface-200 rounded text-[10px] font-semibold text-surface-600 no-underline hover:bg-surface-100">
               Download
             </a>
+            <button type="button" onClick={() => { void deleteFloorPlan(plan.id); }}
+              className="px-2 py-1 border border-red-200 rounded text-[10px] font-semibold text-red-600 cursor-pointer hover:bg-red-50">
+              Delete
+            </button>
           </div>
-        )}
+        ))}
       </div>
 
       {/* ── Filter Bar ── */}
@@ -346,15 +393,20 @@ export default function DesignRequirements({ project }: { project: Project }) {
           <button onClick={() => { setFRoom("All"); setFFinishing("All"); }}
             className="px-2.5 py-1 bg-transparent border border-surface-200 rounded-md text-[11px] text-surface-400 cursor-pointer hover:bg-surface-50">✕ Clear</button>
         )}
+        {unlinked > 0 && (
+          <span className="text-[11px] text-amber-700">
+            {unlinked} row(s) not linked to catalogue furniture — they won&apos;t be estimated
+          </span>
+        )}
         <span className="ml-auto text-[11px] text-surface-400">{filtered.length}/{working.length}</span>
       </div>
 
       {/* ── Table (grouped by Room like Initial Estimate) ── */}
       <div className="overflow-x-auto border border-surface-200 rounded-xl">
-        <table className="w-full text-[11px] min-w-[1000px]">
+        <table className="w-full text-[11px] min-w-[1100px]">
           <thead>
             <tr className="bg-nicara-dark">
-              {["Unit Selection", "L", "B", "H", "Finishing", "Remarks", "Design Ref.", "Del"].map(h => (
+              {["Furniture / Unit", "Zone", "W", "H", "D", "Finishing", "Remarks", "Design Ref.", "Del"].map(h => (
                 <th key={h} className={TH}>{h}</th>
               ))}
             </tr>
@@ -364,7 +416,11 @@ export default function DesignRequirements({ project }: { project: Project }) {
               <RoomGroup
                 key={group.room}
                 group={group}
-                editByRef={editByRef}
+                furniture={furniture}
+                furnitureLoading={furnitureQuery.loading}
+                zones={zones}
+                patchByRef={patchByRef}
+                withFurniture={withFurniture}
                 removeByRef={removeByRef}
                 onImageUpload={handleImageUpload}
                 onViewImage={setViewingImage}
@@ -427,12 +483,19 @@ export default function DesignRequirements({ project }: { project: Project }) {
 
 /* ── Room group with heading row (like Initial Estimate area grouping) ── */
 
-function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, onAddRow, catalogOptions, onAddFurniture }: {
-  group: { room: string; items: Row[] };
-  editByRef: (row: Row, key: keyof Row, value: string | boolean) => void;
+type RowProps = {
+  furniture: Furniture[];
+  furnitureLoading: boolean;
+  zones: CatalogZone[];
+  patchByRef: (row: Row, patch: Partial<Row>) => void;
+  withFurniture: (row: Row, f: Furniture) => Partial<Row>;
   removeByRef: (row: Row) => void;
   onImageUpload: (row: Row, file: File) => void;
   onViewImage: (url: string) => void;
+};
+
+function RoomGroup({ group, onAddRow, ...props }: RowProps & {
+  group: { room: string; items: Row[] };
   onAddRow: () => void;
   catalogOptions: { value: string, label: string }[];
   onAddFurniture: (name: string, row: Row) => void;
@@ -441,7 +504,7 @@ function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, 
     <>
       {/* Room heading */}
       <tr className="bg-nicara-gold/10">
-        <td colSpan={8} className="px-3 py-2">
+        <td colSpan={9} className="px-3 py-2">
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-bold text-nicara-dark uppercase tracking-wider">{group.room}</span>
             <span className="text-[10px] text-surface-400">{group.items.length} item(s)</span>
@@ -452,19 +515,8 @@ function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, 
           </div>
         </td>
       </tr>
-      {/* Rows under this room */}
       {group.items.map((row, i) => (
-        <DesignRow
-          key={row.id ?? `new-${group.room}-${i}`}
-          row={row}
-          ri={i}
-          editByRef={editByRef}
-          removeByRef={removeByRef}
-          onImageUpload={onImageUpload}
-          onViewImage={onViewImage}
-          catalogOptions={catalogOptions}
-          onAddFurniture={onAddFurniture}
-        />
+        <DesignRow key={row.id ?? `new-${group.room}-${i}`} row={row} ri={i} {...props} />
       ))}
     </>
   );
@@ -472,41 +524,99 @@ function RoomGroup({ group, editByRef, removeByRef, onImageUpload, onViewImage, 
 
 /* ── Single design requirement row ── */
 
-function DesignRow({ row, ri, editByRef, removeByRef, onImageUpload, onViewImage, catalogOptions, onAddFurniture }: {
-  row: Row;
-  ri: number;
-  editByRef: (row: Row, key: keyof Row, value: string | boolean) => void;
-  removeByRef: (row: Row) => void;
-  onImageUpload: (row: Row, file: File) => void;
-  onViewImage: (url: string) => void;
-  catalogOptions: { value: string, label: string }[];
-  onAddFurniture: (name: string, row: Row) => void;
-}) {
+function DesignRow({ row, ri, furniture, furnitureLoading, zones, patchByRef, withFurniture, removeByRef,
+  onImageUpload, onViewImage }: RowProps & { row: Row; ri: number }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const options: CalcOptions = row.options ?? {};
+  const setOption = (patch: Partial<CalcOptions>) => patchByRef(row, { options: { ...options, ...patch } });
+  const linked = furniture.find(f => f.id === row.furniture);
 
   return (
     <tr className={`border-b border-surface-100 ${ri % 2 === 0 ? "bg-white" : "bg-surface-50/50"}`}>
-      {/* Unit Selection */}
-      <td className={`px-2 py-1.5 min-w-[140px] ${BD}`}>
-        <SearchableSelect
+      {/* Furniture — catalogue product; free text keeps a unit that isn't estimated */}
+      <td className={`px-2 py-1.5 min-w-[220px] ${BD}`}>
+        <SearchSelect
           value={row.unit}
-          onChange={v => editByRef(row, "unit", v)}
-          options={catalogOptions}
-          onAdd={searchTerm => onAddFurniture(searchTerm, row)}
-          placeholder="Wardrobe"
+          options={furniture}
+          loading={furnitureLoading}
+          getLabel={f => f.name}
+          getSublabel={f => f.cabinet_type_display}
+          placeholder="Pick furniture…"
+          onPick={f => patchByRef(row, withFurniture(row, f))}
+          onCreate={name => patchByRef(row, { unit: name, furniture: null, furniture_name: "", cabinet_type: "" })}
+          addLabel={q => `Use “${q}” (not in catalogue — won't be estimated)`}
         />
+        <div className="px-2 text-[9px]">
+          {linked ? <span className="text-emerald-700">⇄ {linked.name}</span>
+            : row.unit ? <span className="text-amber-600">not in catalogue</span> : null}
+        </div>
+        {row.furniture && (
+          <details className="mt-1 px-2 text-[10px]">
+            <summary className="w-fit cursor-pointer font-semibold text-surface-500 hover:text-nicara-gold">
+              Calculation options
+            </summary>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-surface-600">
+              <select value={options.shelf_type ?? "ply"} title="Shelves"
+                onChange={e => setOption({ shelf_type: e.target.value as "ply" | "glass" })}
+                className="px-1 py-0.5 border border-surface-200 rounded text-[10px] bg-white cursor-pointer">
+                <option value="ply">Ply shelves</option>
+                <option value="glass">Glass shelves</option>
+              </select>
+              <label className="flex items-center gap-1 cursor-pointer" title="Handleless design — no handles or knobs">
+                <input type="checkbox" checked={!!options.handleless} onChange={e => setOption({ handleless: e.target.checked })}
+                  className="accent-nicara-gold" />Handleless
+              </label>
+              <label className="flex items-center gap-1 cursor-pointer" title="One side visible — finish the side panel too">
+                <input type="checkbox" checked={!!options.one_side_visible}
+                  onChange={e => setOption({ one_side_visible: e.target.checked })} className="accent-nicara-gold" />Side
+              </label>
+            </div>
+          </details>
+        )}
       </td>
-      {/* L B H */}
-      <td className={`px-2 py-1.5 w-[60px] ${BD}`}><input className={`${CELL} font-mono`} value={row.length}
-        onChange={e => editByRef(row, "length", e.target.value)} placeholder={`8'0"`} /></td>
-      <td className={`px-2 py-1.5 w-[60px] ${BD}`}><input className={`${CELL} font-mono`} value={row.breadth}
-        onChange={e => editByRef(row, "breadth", e.target.value)} placeholder={`2'0"`} /></td>
-      <td className={`px-2 py-1.5 w-[60px] ${BD}`}><input className={`${CELL} font-mono`} value={row.height}
-        onChange={e => editByRef(row, "height", e.target.value)} placeholder={`8'0"`} /></td>
+      {/* Zone */}
+      <td className={`px-2 py-1.5 min-w-[110px] ${BD}`}>
+        <select className={`${CELL} cursor-pointer`} value={row.zone}
+          onChange={e => patchByRef(row, { zone: e.target.value })}>
+          <option value="">—</option>
+          {zones.map(z => <option key={z.id} value={z.name}>{z.name}</option>)}
+        </select>
+      </td>
+      {/* W H D (width = length, depth = breadth) */}
+      <td className={`px-2 py-1.5 min-w-[145px] ${BD}`}>
+        <div className="flex items-center gap-1">
+          <input aria-label="Width feet" type="number" min="0" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.length)[0]} onChange={e => patchByRef(row, { length: updateDimensionPart(row.length, "feet", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">ft</span>
+          <input aria-label="Width inches" type="number" min="0" max="11" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.length)[1]} onChange={e => patchByRef(row, { length: updateDimensionPart(row.length, "inches", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">in</span>
+        </div>
+      </td>
+      <td className={`px-2 py-1.5 min-w-[145px] ${BD}`}>
+        <div className="flex items-center gap-1">
+          <input aria-label="Height feet" type="number" min="0" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.height)[0]} onChange={e => patchByRef(row, { height: updateDimensionPart(row.height, "feet", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">ft</span>
+          <input aria-label="Height inches" type="number" min="0" max="11" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.height)[1]} onChange={e => patchByRef(row, { height: updateDimensionPart(row.height, "inches", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">in</span>
+        </div>
+      </td>
+      <td className={`px-2 py-1.5 min-w-[145px] ${BD}`}>
+        <div className="flex items-center gap-1">
+          <input aria-label="Depth feet" type="number" min="0" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.breadth)[0]} onChange={e => patchByRef(row, { breadth: updateDimensionPart(row.breadth, "feet", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">ft</span>
+          <input aria-label="Depth inches" type="number" min="0" max="11" className="w-10 px-1 py-1 border border-surface-200 rounded text-[10px] font-mono text-center"
+            value={splitDimension(row.breadth)[1]} onChange={e => patchByRef(row, { breadth: updateDimensionPart(row.breadth, "inches", e.target.value) })} />
+          <span className="text-[9px] text-surface-500">in</span>
+        </div>
+      </td>
       {/* Finishing */}
       <td className={`px-2 py-1.5 min-w-[100px] ${BD}`}>
         <select className={`${CELL} cursor-pointer`} value={row.finishing}
-          onChange={e => editByRef(row, "finishing", e.target.value)}>
+          onChange={e => patchByRef(row, { finishing: e.target.value })}>
           <option value="">Select…</option>
           {FINISHING_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
         </select>
@@ -514,7 +624,7 @@ function DesignRow({ row, ri, editByRef, removeByRef, onImageUpload, onViewImage
       {/* Remarks */}
       <td className={`px-2 py-1.5 ${BD}`}>
         <input className={CELL} value={row.remarks}
-          onChange={e => editByRef(row, "remarks", e.target.value)} placeholder="—" />
+          onChange={e => patchByRef(row, { remarks: e.target.value })} placeholder="—" />
       </td>
       {/* Design Ref — Image Upload */}
       <td className={`px-2 py-1.5 ${BD}`}>

@@ -114,6 +114,7 @@ class Lead(models.Model):
     project_name = models.CharField(max_length=200, blank=True, default='')
     developer = models.CharField(max_length=200, blank=True, default='')
     unit_no = models.CharField(max_length=50, blank=True, default='')
+    address = models.TextField(blank=True, default='')
     city = models.CharField(max_length=100, blank=True, default='')
     state = models.CharField(max_length=100, blank=True, default='')
     property_type = models.CharField(max_length=40, blank=True, default='')

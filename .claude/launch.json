@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:\\Program Files\\nodejs\\npm.cmd",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
       "port": 3000
+    },
+    {
+      "name": "nicara-backend",
+      "runtimeExecutable": "Backend\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["Backend\\manage.py", "runserver", "8000"],
+      "port": 8000
     }
   ]
 }

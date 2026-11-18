@@ -45,7 +45,9 @@ class ItemCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
 @_items_module
 class ItemListCreateView(generics.ListCreateAPIView):
     """GET /api/items/ — catalogue, POST — add an item."""
-    queryset = Item.objects.select_related('category').all()
+    queryset = Item.objects.select_related('category').prefetch_related(
+        'components__material_item', 'components__service_item',
+    ).all()
     filterset_fields = ['category', 'unit', 'calc_method', 'is_active', 'default_room']
     search_fields = ['name', 'code', 'description', 'default_room', 'category__name']
     ordering_fields = ['name', 'default_rate', 'created_at', 'sort_order']

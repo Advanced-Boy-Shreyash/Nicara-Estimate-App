@@ -1,184 +1,124 @@
 """
-Seed the furniture catalogue from the shared "Detailed Components" sheet,
-plus enough sensible defaults to make the drill-down demo-ready.
+Seed the catalogue from Sriniketh's calculation workbook (catalog/sheet_data.py):
+
+    Rooms & Zones
+    Raw Material Library  — category → brand → model + rate (the sheet's prices,
+                            plus the sample estimate's brands as alternatives)
+    Basic Components      — one per estimate row type, each with its quantity rule
+    Furniture             — finished products and the components they're estimated from
 
     python manage.py seed_catalog
-    python manage.py seed_catalog --reset
+    python manage.py seed_catalog --reset     # clear catalogue furniture/components first
+
+Idempotent: re-running updates prices, rules and component lists in place.
 """
 from decimal import Decimal
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from catalog.models import (
-    Furniture, FurniturePart, Material, MaterialOption, PartMaterial, Room, Zone,
-)
-
-# ── From the sheet ──────────────────────────────────────────
+from catalog.models import BasicComponent, Furniture, FurnitureComponent, Room, Zone
+from catalog.sheet_data import BASIC_COMPONENTS, FURNITURE, RAW_MATERIALS, SAMPLE_MATERIALS
+from library.models import MaterialBrand, MaterialCategory, MaterialItem
 
 ROOMS = [
-    ('Master Bedroom', '🛏️'), ('Kitchen', '🍳'),
-    ('Bedroom 2', '🛏️'), ('Bedroom 3', '🛏️'),
-    ('Living Room', '🛋️'), ('Bathroom', '🚿'),
+    ('Master Bedroom', '🛏️'), ('Kitchen', '🍳'), ('Bedroom 2', '🛏️'), ('Bedroom 3', '🛏️'),
+    ('Living Room', '🛋️'), ('Drawing Room', '🛋️'), ('Kids Room', '🧒'), ('Guest Bedroom', '🛏️'),
+    ('Pooja Room', '🕉️'), ('Home Office', '💼'), ('Entrance', '🚪'), ('Bathroom', '🚿'),
+    ('Dining Room', '🍽️'),
 ]
 
-ZONES = ['East Wall', 'West Wall', 'North Wall', 'South Wall',
-         'Ceiling', 'Floor', 'Island', 'Walk-in Closet', 'Balcony']
+ZONES = ['East Wall', 'West Wall', 'North Wall', 'South Wall', 'Ceiling', 'Floor',
+         'Island', 'Walk-in Closet', 'Balcony', 'Window Side', 'Entry Side']
 
-# material → default unit → [ (detail, brand, model, size, price, unit) ]
-MATERIALS = {
-    'Plywood': ('sft', [
-        ('18mm Plywood', 'Austin', 'Lincoln', '8x4', 100, 'sft'),
-        ('16mm Plywood', 'Austin', 'Lincoln', '8x4', 90, 'sft'),
-        ('8mm Plywood', 'Austin', 'Lincoln', '8x4', 60, 'sft'),
-        ('18mm Plywood', 'Austin', 'Gold', '8x4', 120, 'sft'),
-        ('8mm Plywood', 'Austin', 'Gold', '8x4', 80, 'sft'),
-    ]),
-    'Hardware': ('nos', [
-        ('Hinge', 'Hettich', 'Onsys', '0 crank', 45, 'nos'),
-        ('Hinge', 'Hettich', 'Sensys', '8 crank', 120, 'nos'),
-    ]),
-    'Adhesive': ('litre', [
-        ('Fevicol SH', 'Pidilite', 'SH', '5 kg', 550, 'nos'),
-    ]),
-    'Laminate': ('nos', [
-        ('1mm Laminate', 'Greenlam', 'Suede', '8x4', 1450, 'nos'),
-        ('1mm Laminate', 'Greenlam', 'SU', '8x4', 100, 'sft'),
-        ('1mm Laminate', 'Virgo', 'SU', '8x4', 80, 'sft'),
-    ]),
-    'Acrylic': ('nos', [
-        ('Acrylic Sheet', 'Merino', 'Hi-Gloss', '8x4', 3200, 'nos'),
-    ]),
-    'Veneer': ('sft', [
-        ('Natural Veneer', 'Century', 'Teak', '8x4', 180, 'sft'),
-    ]),
-    'Wallpaper': ('sft', [
-        ('Textured Wallpaper', 'Nilaya', 'Classic', 'roll', 65, 'sft'),
-    ]),
-    'Paint': ('sft', [
-        ('Emulsion', 'Asian Paints', 'Royale', '—', 22, 'sft'),
-    ]),
-    'Light': ('nos', [
-        ('Profile Light', 'Philips', 'Cove', '1m', 320, 'nos'),
-    ]),
-}
-
-# furniture → rooms (empty = every room) → parts → [ (material, qty, unit, wastage) ]
-FURNITURE = [
-    ('Wardrobe', ['Master Bedroom', 'Bedroom 2', 'Bedroom 3'], 'nos', {
-        'Cabinet (18mm)': [('Plywood', 64, 'sft', 0)],
-        'Back Panel (8mm)': [('Plywood', 16, 'sft', 0)],
-        'Finish': [('Laminate', 32, 'sft', 0)],
-        'Hardware': [('Hardware', 4, 'nos', 0)],
-    }),
-    ('Study Unit', ['Master Bedroom', 'Bedroom 2', 'Bedroom 3'], 'nos', {
-        'Cabinet (18mm)': [('Plywood', 32, 'sft', 0)],
-        'Back Panel (8mm)': [('Plywood', 8, 'sft', 0)],
-        'Finish': [('Laminate', 16, 'sft', 0)],
-        'Hardware': [('Hardware', 4, 'nos', 0)],
-    }),
-    ('TV Unit', ['Master Bedroom', 'Living Room'], 'nos', {
-        'Cabinet': [('Plywood', 18, 'sft', 8), ('Hardware', 6, 'nos', 0)],
-        'Panel': [('Plywood', 12, 'sft', 8), ('Veneer', 12, 'sft', 5)],
-    }),
-    ('Wall Décor', [], 'nos', {
-        'Wallpaper': [('Wallpaper', 40, 'sft', 10)],
-    }),
-    ('Wall Panels', ['Living Room'], 'nos', {
-        'Panel': [('Plywood', 24, 'sft', 8), ('Veneer', 24, 'sft', 5)],
-    }),
-    ('Kitchen Base Unit', ['Kitchen'], 'nos', {
-        'Cabinet': [('Plywood', 40, 'sft', 8), ('Hardware', 18, 'nos', 0)],
-        'Shutter': [('Plywood', 20, 'sft', 8), ('Acrylic', 6, 'nos', 5)],
-    }),
-    ('Kitchen Wall Unit', ['Kitchen'], 'nos', {
-        'Cabinet': [('Plywood', 28, 'sft', 8), ('Hardware', 12, 'nos', 0)],
-        'Shutter': [('Plywood', 14, 'sft', 8), ('Acrylic', 4, 'nos', 5)],
-    }),
-    ('Kitchen Loft', ['Kitchen'], 'nos', {
-        'Cabinet': [('Plywood', 18, 'sft', 8), ('Laminate', 3, 'nos', 5)],
-    }),
-    ('Wardrobe Loft', ['Master Bedroom', 'Bedroom 2'], 'nos', {
-        'Cabinet': [('Plywood', 14, 'sft', 8), ('Laminate', 2, 'nos', 5)],
-    }),
-    ('Paint', [], 'sft', {
-        'Paint': [('Paint', 1, 'sft', 5)],
-    }),
-    ('Lights', [], 'nos', {
-        'Light': [('Light', 1, 'nos', 0)],
-    }),
-    ('Bed', ['Master Bedroom', 'Bedroom 2', 'Bedroom 3'], 'nos', {
-        'Frame': [('Plywood', 30, 'sft', 8), ('Veneer', 20, 'sft', 5)],
-    }),
-    ('Sofa', ['Living Room'], 'nos', {
-        'Frame': [('Plywood', 22, 'sft', 8)],
-    }),
-]
+ASSUMED_NOTE = 'Component list assumed (no worked example in the calculation sheet) — confirm with Sriniketh.'
 
 
 class Command(BaseCommand):
-    help = 'Seed the furniture catalogue from the shared components sheet.'
+    help = "Seed rooms, raw materials, basic components and furniture from the calculation sheet."
 
     def add_arguments(self, parser):
-        parser.add_argument('--reset', action='store_true')
+        parser.add_argument('--reset', action='store_true',
+                            help='Delete existing furniture and basic components first.')
 
     @transaction.atomic
     def handle(self, *args, **options):
         if options['reset']:
-            for model in (PartMaterial, FurniturePart, Furniture, MaterialOption,
-                          Material, Zone, Room):
-                model.objects.all().delete()
-            self.stdout.write(self.style.WARNING('Cleared existing catalogue.'))
+            FurnitureComponent.objects.all().delete()
+            Furniture.objects.all().delete()
+            BasicComponent.objects.all().delete()
+            self.stdout.write(self.style.WARNING('Cleared furniture and basic components.'))
 
         rooms = {}
         for order, (name, icon) in enumerate(ROOMS, start=1):
             rooms[name], _ = Room.objects.get_or_create(
                 name=name, defaults={'icon': icon, 'sort_order': order})
-
         for order, name in enumerate(ZONES, start=1):
             Zone.objects.get_or_create(name=name, defaults={'sort_order': order})
 
-        materials = {}
-        for order, (name, (unit, options)) in enumerate(MATERIALS.items(), start=1):
-            material, _ = Material.objects.get_or_create(
-                name=name, defaults={'default_unit': unit, 'sort_order': order})
-            materials[name] = material
-            for o_order, (detail, brand, model, size, price, o_unit) in enumerate(options, start=1):
-                MaterialOption.objects.get_or_create(
-                    material=material, detail=detail, brand=brand, model_no=model, size=size,
-                    defaults={'price': Decimal(price), 'unit': o_unit, 'sort_order': o_order},
+        # ── Raw materials ──
+        categories, items, sheet_default = {}, {}, {}
+        for order, (cat_name, (spec_type, group, rows)) in enumerate(RAW_MATERIALS.items(), start=1):
+            category, _ = MaterialCategory.objects.update_or_create(
+                name=cat_name,
+                defaults={'type': spec_type, 'product_group': group, 'sort_order': order, 'is_active': True},
+            )
+            categories[cat_name] = category
+            for brand_name, model, unit, rate in rows + SAMPLE_MATERIALS.get(cat_name, []):
+                brand = None
+                if brand_name:
+                    brand = (MaterialBrand.objects.filter(name__iexact=brand_name).first()
+                             or MaterialBrand.objects.create(name=brand_name))
+                item, _ = MaterialItem.objects.update_or_create(
+                    category=category, brand=brand, model_name=model,
+                    defaults={'default_unit': unit, 'default_rate': Decimal(str(rate)), 'is_active': True},
                 )
+                # The calculation sheet's model is the default when furniture names it
+                # (or names none); the sample's brands are alternatives.
+                items.setdefault((cat_name, model), item)
+                sheet_default.setdefault(cat_name, item)
 
-        furniture_made = parts_made = links_made = 0
-        for f_order, (name, room_names, unit, parts) in enumerate(FURNITURE, start=1):
-            furniture, was_new = Furniture.objects.get_or_create(
-                name=name, defaults={'default_unit': unit, 'sort_order': f_order})
-            if was_new:
-                furniture_made += 1
-            if room_names:
-                furniture.rooms.set([rooms[r] for r in room_names if r in rooms])
+        # ── Basic components ──
+        components = {}
+        for order, (name, spec) in enumerate(BASIC_COMPONENTS.items(), start=1):
+            item_type, cat_name, unit, price_unit, rule, default_qty, gst = spec
+            components[name], _ = BasicComponent.objects.update_or_create(
+                name=name,
+                defaults={
+                    'item_type': item_type, 'library_category': categories.get(cat_name),
+                    'unit': unit, 'price_unit': price_unit, 'quantity_rule': rule,
+                    'default_qty': Decimal(str(default_qty)), 'gst_pct': Decimal(str(gst)),
+                    'sort_order': order, 'is_active': True,
+                },
+            )
 
-            for p_order, (part_name, mats) in enumerate(parts.items(), start=1):
-                part, _ = FurniturePart.objects.get_or_create(
-                    furniture=furniture, name=part_name, defaults={'sort_order': p_order})
-                parts_made += 1
-                for m_order, (mat_name, qty, m_unit, wastage) in enumerate(mats, start=1):
-                    material = materials.get(mat_name)
-                    if not material:
-                        continue
-                    PartMaterial.objects.get_or_create(
-                        part=part, material=material,
-                        defaults={
-                            'qty_per_unit': Decimal(str(qty)), 'unit': m_unit,
-                            'wastage_pct': Decimal(str(wastage)), 'sort_order': m_order,
-                        },
-                    )
-                    links_made += 1
+        # ── Furniture ──
+        for order, (name, cabinet_type, room_names, (w, h, d), parts, assumed) in enumerate(FURNITURE, start=1):
+            furniture, _ = Furniture.objects.update_or_create(
+                name=name,
+                defaults={
+                    'cabinet_type': cabinet_type, 'default_length': w, 'default_height': h,
+                    'default_breadth': d, 'margin_pct': Decimal('15'), 'sort_order': order,
+                    'description': ASSUMED_NOTE if assumed else '', 'is_active': True,
+                },
+            )
+            furniture.rooms.set([rooms[r] for r in room_names if r in rooms])
+            furniture.components.all().delete()
+            for c_order, part in enumerate(parts, start=1):
+                bc_name, extra = (part, {}) if isinstance(part, str) else part
+                bc = components[bc_name]
+                category = bc.library_category.name if bc.library_category_id else None
+                default_material = (items.get((category, extra['model'])) if extra.get('model')
+                                    else sheet_default.get(category))
+                FurnitureComponent.objects.create(
+                    furniture=furniture, basic_component=bc, default_material=default_material,
+                    fixed_qty=None if extra.get('fixed_qty') is None else Decimal(str(extra['fixed_qty'])),
+                    application=extra.get('application', ''), sort_order=c_order,
+                )
 
         self.stdout.write(self.style.SUCCESS(
             f'Rooms: {Room.objects.count()} | Zones: {Zone.objects.count()} | '
-            f'Materials: {Material.objects.count()} '
-            f'({MaterialOption.objects.count()} options) | '
-            f'Furniture: {Furniture.objects.count()} | '
-            f'Parts: {FurniturePart.objects.count()} | BOM lines: {PartMaterial.objects.count()}'
+            f'Raw material categories: {len(categories)} ({len(items)} models) | '
+            f'Basic components: {len(components)} | Furniture: {len(FURNITURE)} '
+            f'({FurnitureComponent.objects.count()} component links)'
         ))

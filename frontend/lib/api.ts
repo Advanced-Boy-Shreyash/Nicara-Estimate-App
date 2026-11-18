@@ -1,19 +1,20 @@
 // ── NICARA Project OS — Django REST Framework API Layer ──────
 //
-// Talks to the Django backend at NEXT_PUBLIC_API_URL. Access tokens are
-// short lived; when one expires this layer transparently redeems the
-// refresh token and replays the request.
+// Talks to the Django backend at NEXT_PUBLIC_API_URL. Access tokens are short lived; when one expires
+// this layer transparently redeems the refresh token and replays the request.
 
 import type {
-  BookingForm, CatalogMaterial, CatalogMeta, CatalogRoom, CatalogZone, Client,
+  BasicComponent, BookingForm, CalcOptions, CatalogMeta, CatalogRoom, CatalogZone, Client,
   CrmMeta, CrmNote, Deliverable, DeliverableType, DesignRequirement, Estimate,
-  EstimateItem, EstimateItemComponent, EstimateListItem, EstimateType, Furniture, FurniturePart, Item,
-  ItemCategory, ItemMeta, Lead, LeadPipeline, MaterialOption, ModuleRegistry,
-  MyPermissions, PartMaterial, PermissionMatrixRow, Project, ProjectListItem,
+  EstimateItem, EstimateItemComponent, EstimateListItem, EstimateType, Furniture, FurnitureCalc,
+  FurnitureComponent, Lead, LeadPipeline, LibraryBrand, LibraryItem, LibraryItemInput, LibraryMeta,
+  ModuleRegistry,
+  MyPermissions, PermissionMatrixRow, Project, ProjectListItem,
   ProjectMeta, Vendor, VendorMeta,
 } from "@/lib/apiTypes";
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL
+  || "https://anuragwebpythonbackend2225.pythonanywhere.com/api";
 
 const ACCESS_KEY = "nicara_token";
 const REFRESH_KEY = "nicara_refresh";
@@ -216,7 +217,7 @@ async function apiFetch<T>(endpoint: string, options: FetchOptions = {}): Promis
     response = await send(anonymous ? null : tokenStore.access());
   } catch {
     throw new ApiError(
-      "Cannot reach the server. Is the Django backend running on port 8000?",
+      `Cannot reach the server at ${BASE_URL}. Check the API URL and server availability.`,
       0,
     );
   }
@@ -376,6 +377,8 @@ export const projectsApi = {
     return apiFetch<Paginated<ProjectListItem>>(`/projects/${qs ? `?${qs}` : ""}`);
   },
   get: (id: number) => apiFetch<Project>(`/projects/${id}/`),
+  getByPublicId: (publicId: string) =>
+    apiFetch<Project>(`/projects/by-public-id/${encodeURIComponent(publicId)}/`),
   create: (data: Partial<Project>) =>
     apiFetch<Project>("/projects/", {
       method: "POST",
@@ -415,7 +418,8 @@ export const designRequirementsApi = {
       body: JSON.stringify(data),
     }),
   /** Replace the whole grid in one call. */
-  saveAll: (projectId: number, rows: Partial<DesignRequirementInput>[]) =>
+  /** Rows with an `id` are updated in place (keeps generated estimate groups linked). */
+  saveAll: (projectId: number, rows: (Partial<DesignRequirementInput> & { id?: number })[]) =>
     apiFetch<DesignRequirement[]>(`/projects/${projectId}/design-requirements/bulk/`, {
       method: "PUT",
       body: JSON.stringify({ rows }),
@@ -546,7 +550,7 @@ export const crmApi = {
   meta: () => apiFetch<CrmMeta>("/crm/meta/"),
 };
 
-// ── Catalogue: Rooms → Furniture → Materials ──────────────────
+// ── Catalogue: Rooms · Basic Components · Furniture ──────────
 
 export const catalogApi = {
   meta: () => apiFetch<CatalogMeta>("/catalog/meta/"),
@@ -567,35 +571,20 @@ export const catalogApi = {
     apiFetch<CatalogZone>(`/catalog/zones/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteZone: (id: number) => apiFetch<void>(`/catalog/zones/${id}/`, { method: "DELETE" }),
 
-  // Materials + their priced options
-  materials: (withOptions = false) =>
-    apiFetch<Paginated<CatalogMaterial>>(
-      `/catalog/materials/?page_size=200${withOptions ? "&with_options=1" : ""}`
-    ),
-  material: (id: number) => apiFetch<CatalogMaterial>(`/catalog/materials/${id}/`),
-  createMaterial: (data: Partial<CatalogMaterial>) =>
-    apiFetch<CatalogMaterial>("/catalog/materials/", { method: "POST", body: JSON.stringify(data) }),
-  updateMaterial: (id: number, data: Partial<CatalogMaterial>) =>
-    apiFetch<CatalogMaterial>(`/catalog/materials/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteMaterial: (id: number) => apiFetch<void>(`/catalog/materials/${id}/`, { method: "DELETE" }),
+  // Basic components — estimate row types and their quantity rules
+  basicComponents: () =>
+    apiFetch<Paginated<BasicComponent>>("/catalog/basic-components/?page_size=500"),
+  createBasicComponent: (data: Partial<BasicComponent>) =>
+    apiFetch<BasicComponent>("/catalog/basic-components/", { method: "POST", body: JSON.stringify(data) }),
+  updateBasicComponent: (id: number, data: Partial<BasicComponent>) =>
+    apiFetch<BasicComponent>(`/catalog/basic-components/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteBasicComponent: (id: number) =>
+    apiFetch<void>(`/catalog/basic-components/${id}/`, { method: "DELETE" }),
 
-  options: (materialId: number) =>
-    apiFetch<Paginated<MaterialOption>>(`/catalog/materials/${materialId}/options/?page_size=200`),
-  createOption: (materialId: number, data: Partial<MaterialOption>) =>
-    apiFetch<MaterialOption>(`/catalog/materials/${materialId}/options/`, {
-      method: "POST", body: JSON.stringify(data),
-    }),
-  updateOption: (materialId: number, id: number, data: Partial<MaterialOption>) =>
-    apiFetch<MaterialOption>(`/catalog/materials/${materialId}/options/${id}/`, {
-      method: "PATCH", body: JSON.stringify(data),
-    }),
-  deleteOption: (materialId: number, id: number) =>
-    apiFetch<void>(`/catalog/materials/${materialId}/options/${id}/`, { method: "DELETE" }),
-
-  // Furniture → parts → part-materials
+  // Furniture — finished products and the components they're estimated from
   furniture: (roomId?: number) =>
     apiFetch<Paginated<Furniture>>(
-      `/catalog/furniture/?page_size=200${roomId ? `&room=${roomId}` : ""}`
+      `/catalog/furniture/?page_size=500${roomId ? `&room=${roomId}` : ""}`
     ),
   furnitureDetail: (id: number) => apiFetch<Furniture>(`/catalog/furniture/${id}/`),
   createFurniture: (data: Partial<Furniture>) =>
@@ -604,39 +593,41 @@ export const catalogApi = {
     apiFetch<Furniture>(`/catalog/furniture/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteFurniture: (id: number) => apiFetch<void>(`/catalog/furniture/${id}/`, { method: "DELETE" }),
 
-  createPart: (furnitureId: number, data: Partial<FurniturePart>) =>
-    apiFetch<FurniturePart>(`/catalog/furniture/${furnitureId}/parts/`, {
+  addComponent: (furnitureId: number, data: Partial<FurnitureComponent>) =>
+    apiFetch<FurnitureComponent>(`/catalog/furniture/${furnitureId}/components/`, {
       method: "POST", body: JSON.stringify(data),
     }),
-  updatePart: (id: number, data: Partial<FurniturePart>) =>
-    apiFetch<FurniturePart>(`/catalog/furniture/parts/${id}/`, {
+  updateComponent: (id: number, data: Partial<FurnitureComponent>) =>
+    apiFetch<FurnitureComponent>(`/catalog/furniture/components/${id}/`, {
       method: "PATCH", body: JSON.stringify(data),
     }),
-  deletePart: (id: number) => apiFetch<void>(`/catalog/furniture/parts/${id}/`, { method: "DELETE" }),
+  deleteComponent: (id: number) =>
+    apiFetch<void>(`/catalog/furniture/components/${id}/`, { method: "DELETE" }),
 
-  addPartMaterial: (partId: number, data: Partial<PartMaterial>) =>
-    apiFetch<PartMaterial>(`/catalog/furniture/parts/${partId}/materials/`, {
-      method: "POST", body: JSON.stringify(data),
+  /** Preview a furniture's rows at a size — nothing is saved. Blank sizes use its defaults. */
+  calculate: (id: number, body: { width?: string; height?: string; depth?: string; options?: CalcOptions } = {}) =>
+    apiFetch<FurnitureCalc>(`/catalog/furniture/${id}/calculate/`, {
+      method: "POST", body: JSON.stringify(body),
     }),
-  updatePartMaterial: (id: number, data: Partial<PartMaterial>) =>
-    apiFetch<PartMaterial>(`/catalog/furniture/part-materials/${id}/`, {
-      method: "PATCH", body: JSON.stringify(data),
-    }),
-  deletePartMaterial: (id: number) =>
-    apiFetch<void>(`/catalog/furniture/part-materials/${id}/`, { method: "DELETE" }),
 };
 
 // ── Estimates ─────────────────────────────────────────────────
 
 export type EstimateItemInput = Partial<
   Pick<EstimateItem, "area" | "zone" | "finishing" | "category" | "subcategory" |
-       "item" | "description" | "length" | "breadth" | "height" | "unit" | "remarks">
-  & { qty: number | string; rate: number | string; gst_pct: number | string }
+       "item" | "description" | "length" | "breadth" | "height" | "unit" | "remarks" |
+       "item_type" | "specification" | "brand" | "model_name" | "application" |
+       "estimate_spec_flag" | "price_unit" | "flag" | "raw_material">
+  & { qty: number | string; rate: number | string; gst_pct: number | string;
+      margin_pct?: number | string; referral_pct?: number | string;
+      width_ft?: number; width_in?: number;
+      height_ft?: number; height_in?: number;
+      depth_ft?: number; depth_in?: number }
 >;
 
 export type ComponentInput = Partial<
   Pick<EstimateItemComponent, "basic_component" | "detail" | "brand" | "model" | "unit">
-  & { qty: number | string; price: number | string; catalog_material: number | null; catalog_option: number | null }
+  & { qty: number | string; price: number | string; library_material_item: number | null }
 >;
 
 export const estimatesApi = {
@@ -698,16 +689,6 @@ export const estimatesApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  /** Push catalogue items onto the estimate; defaults come from the Item. */
-  addFromCatalog: (
-    projectId: number,
-    estimateId: number,
-    items: ({ item_id: number } & EstimateItemInput)[]
-  ) =>
-    apiFetch<{ detail: string; items: EstimateItem[]; estimate: Estimate }>(
-      `/projects/${projectId}/estimates/${estimateId}/items/add-from-catalog/`,
-      { method: "POST", body: JSON.stringify({ items }) }
-    ),
   updateItem: (projectId: number, estimateId: number, itemId: number, data: EstimateItemInput) =>
     apiFetch<EstimateItem>(`/projects/${projectId}/estimates/${estimateId}/items/${itemId}/`, {
       method: "PATCH",
@@ -738,12 +719,43 @@ export const estimatesApi = {
       `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/components/${componentId}/`,
       { method: "DELETE" }
     ),
-  /** Fill a line's breakdown from a catalogue furniture's bill of materials. */
-  populateFromFurniture: (projectId: number, estimateId: number, itemId: number, furnitureId: number) =>
-    apiFetch<{ detail: string; item: EstimateItem }>(
-      `/projects/${projectId}/estimates/${estimateId}/items/${itemId}/populate-from-furniture/`,
-      { method: "POST", body: JSON.stringify({ furniture_id: furnitureId, replace: true }) }
+  /** Undo a typed-over quantity (or a door/drawer/shelf count). */
+  resetQty: (projectId: number, estimateId: number, itemId: number) =>
+    apiFetch<EstimateItem>(`/projects/${projectId}/estimates/${estimateId}/items/${itemId}/reset-qty/`, {
+      method: "POST",
+    }),
+
+  // ── Calculation-sheet generation ──
+  /** Create / refresh a furniture group for every linked design requirement. */
+  generateFromDesign: (projectId: number, estimateId: number) =>
+    apiFetch<{ detail: string; created: number; updated: number; skipped: string[]; estimate: Estimate }>(
+      `/projects/${projectId}/estimates/${estimateId}/generate-from-design/`, { method: "POST" }
     ),
+  /** Add one catalogue furniture as its rows. Sizes like "7'0\"" (blank = furniture default). */
+  addFurniture: (projectId: number, estimateId: number, body: {
+    furniture_id: number; area?: string; zone?: string; item?: string;
+    width?: string; height?: string; depth?: string; options?: CalcOptions;
+  }) =>
+    apiFetch<{ detail: string; group_key: string; warnings: string[]; estimate: Estimate }>(
+      `/projects/${projectId}/estimates/${estimateId}/add-furniture/`,
+      { method: "POST", body: JSON.stringify(body) }
+    ),
+  /** Re-run a furniture group's rules after a size / option change. */
+  recalculateGroup: (projectId: number, estimateId: number, groupKey: string, body: {
+    width_ft?: number; width_in?: number; height_ft?: number; height_in?: number;
+    depth_ft?: number; depth_in?: number; options?: CalcOptions; area?: string; zone?: string; item?: string;
+  }) =>
+    apiFetch<{ detail: string; estimate: Estimate }>(
+      `/projects/${projectId}/estimates/${estimateId}/groups/${groupKey}/`,
+      { method: "POST", body: JSON.stringify(body) }
+    ),
+  deleteGroup: (projectId: number, estimateId: number, groupKey: string) =>
+    apiFetch<void>(`/projects/${projectId}/estimates/${estimateId}/groups/${groupKey}/`, { method: "DELETE" }),
+  /** Smart Estimate Generator — a brand per product group, applied to every matching row and part. */
+  applySmartBrands: (projectId: number, estimateId: number, brands: { group: string; brand_id: number }[]) =>
+    apiFetch<Estimate & { brand_result: { changed: number; unchanged: number } }>(
+      `/projects/${projectId}/estimates/${estimateId}/apply-smart-materials/`,
+      { method: "POST", body: JSON.stringify({ brands }) }),
 };
 
 // ── Initial Engagement: Booking Form ──────────────────────────
@@ -763,42 +775,6 @@ export const bookingApi = {
     }),
   downloadPdf: (projectId: number) =>
     downloadFile(`/projects/${projectId}/booking-form/pdf/`, "booking-form.pdf"),
-};
-
-// ── Items catalogue ───────────────────────────────────────────
-
-export type ItemInput = Partial<Omit<Item, "id" | "code" | "category_name" | "category_icon" | "unit_display">>;
-
-export const itemsApi = {
-  list: (params: { category?: number; search?: string; room?: string } = {}) => {
-    const query = new URLSearchParams();
-    if (params.category) query.set("category", String(params.category));
-    if (params.search) query.set("search", params.search);
-    if (params.room) query.set("default_room", params.room);
-    query.set("page_size", "200"); // the catalogue is small; fetch it in one go
-    return apiFetch<Paginated<Item>>(`/items/?${query.toString()}`);
-  },
-  get: (id: number) => apiFetch<Item>(`/items/${id}/`),
-  create: (data: ItemInput) =>
-    apiFetch<Item>("/items/", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: number, data: ItemInput) =>
-    apiFetch<Item>(`/items/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
-  delete: (id: number) => apiFetch<void>(`/items/${id}/`, { method: "DELETE" }),
-
-  categories: () => apiFetch<Paginated<ItemCategory>>("/items/categories/"),
-  createCategory: (data: Partial<ItemCategory>) =>
-    apiFetch<ItemCategory>("/items/categories/", { method: "POST", body: JSON.stringify(data) }),
-
-  /** Bill of materials for an item — drives future rate build-up. */
-  components: (itemId: number) => apiFetch<Paginated<unknown>>(`/items/${itemId}/components/`),
-  addComponent: (itemId: number, data: unknown) =>
-    apiFetch<unknown>(`/items/${itemId}/components/`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-
-  /** Units, calc methods, rooms and categories for the item form. */
-  meta: () => apiFetch<ItemMeta>("/items/meta/"),
 };
 
 // ── Vendors: Material Suppliers & Contractors ─────────────────
@@ -935,30 +911,72 @@ export const fileApi = {
   download: (fileId: string) => `${BASE_URL}/files/${fileId}/download/`,
 };
 
-// ── Component Library ─────────────────────────────────────────
+// ── Raw Material Library ──────────────────────────────────────
+
+/** A brand the Smart Estimate Generator can apply to one product group. */
+export interface SmartBrand {
+  id: number; name: string; categories: string[]; models: number;
+}
 
 export const libraryApi = {
-  categories: () => apiFetch<unknown[]>("/library/categories/"),
-  categoryDetail: (id: number) => apiFetch<unknown>(`/library/categories/${id}/`),
-  createCategory: (data: unknown) =>
-    apiFetch<unknown>("/library/categories/", { method: "POST", body: JSON.stringify(data) }),
-  brands: (categoryId?: number) =>
-    apiFetch<unknown[]>(categoryId ? `/library/brands/?category=${categoryId}` : "/library/brands/"),
-  createBrand: (data: unknown) =>
-    apiFetch<unknown>("/library/brands/", { method: "POST", body: JSON.stringify(data) }),
-  items: (brandId?: number) =>
-    apiFetch<unknown[]>(brandId ? `/library/items/?brand=${brandId}` : "/library/items/"),
-  createItem: (data: unknown) =>
-    apiFetch<unknown>("/library/items/", { method: "POST", body: JSON.stringify(data) }),
-  updateItem: (id: number, data: unknown) =>
-    apiFetch<unknown>(`/library/items/${id}/`, { method: "PUT", body: JSON.stringify(data) }),
+  /** Dropdown data: categories, brands, units, counts. */
+  meta: () => apiFetch<LibraryMeta>("/library/meta/"),
+
+  /** Paginated list of MaterialItems with optional filters/search. */
+  items: (params?: { search?: string; category?: number; brand?: number; is_active?: boolean; page_size?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.search) q.set("search", params.search);
+    if (params?.category !== undefined) q.set("category", String(params.category));
+    if (params?.brand !== undefined) q.set("brand", String(params.brand));
+    if (params?.is_active !== undefined) q.set("is_active", params.is_active ? "true" : "false");
+    if (params?.page_size !== undefined) q.set("page_size", String(params.page_size));
+    const qs = q.toString();
+    return apiFetch<Paginated<LibraryItem>>(`/library/items/${qs ? `?${qs}` : ""}`);
+  },
+
+  createItem: (data: LibraryItemInput) =>
+    apiFetch<LibraryItem>("/library/items/", { method: "POST", body: JSON.stringify(data) }),
+
+  updateItem: (id: number, data: Partial<LibraryItemInput>) =>
+    apiFetch<LibraryItem>(`/library/items/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+
   deleteItem: (id: number) =>
     apiFetch<void>(`/library/items/${id}/`, { method: "DELETE" }),
-  services: () => apiFetch<unknown[]>("/library/services/"),
-  createService: (data: unknown) =>
-    apiFetch<unknown>("/library/services/", { method: "POST", body: JSON.stringify(data) }),
-  updateService: (id: number, data: unknown) =>
-    apiFetch<unknown>(`/library/services/${id}/`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteService: (id: number) =>
-    apiFetch<void>(`/library/services/${id}/`, { method: "DELETE" }),
+
+  /** Every active model in one raw-material category (incl. ones without a brand). */
+  categoryItems: (categoryId: number) =>
+    apiFetch<Paginated<LibraryItem>>(`/library/items/?category=${categoryId}&is_active=true&page_size=200`),
+
+  /** Smart Estimate Generator: brands per product group. */
+  smartOptions: () => apiFetch<Record<string, SmartBrand[]>>("/library/smart-estimate-options/"),
+
+  // ── Brands (one master list) ──────────────────────────────────
+  brands: (categoryId?: number) =>
+    apiFetch<Paginated<LibraryBrand>>(
+      `/library/brands/?page_size=500${categoryId ? `&category=${categoryId}` : ""}`),
+
+  createBrand: (data: { name: string; website?: string }) =>
+    apiFetch<LibraryBrand>("/library/brands/", { method: "POST", body: JSON.stringify(data) }),
+
+  updateBrand: (id: number, data: Partial<LibraryBrand>) =>
+    apiFetch<LibraryBrand>(`/library/brands/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+
+  deleteBrand: (id: number) =>
+    apiFetch<void>(`/library/brands/${id}/`, { method: "DELETE" }),
+};
+export type FloorPlanFile = {
+  id: number;
+  file_name: string;
+  file_size: number;
+  file_url: string;
+  created_at: string;
+};
+
+export const floorPlansApi = {
+  list: (projectId: number) =>
+    apiFetch<{ count: number; results: FloorPlanFile[] }>(`/projects/${projectId}/floor-plans/`),
+  upload: (projectId: number, form: FormData) =>
+    apiUpload<{ results: FloorPlanFile[] }>(`/projects/${projectId}/floor-plans/`, form),
+  delete: (projectId: number, id: number) =>
+    apiFetch<void>(`/projects/${projectId}/floor-plans/${id}/`, { method: "DELETE" }),
 };

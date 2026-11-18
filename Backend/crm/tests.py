@@ -108,6 +108,20 @@ class LeadTests(CrmTestCase):
         self.assertEqual(lead.stage, Lead.Stage.WON)
         self.assertIsNotNone(lead.converted_at)
 
+    def test_address_is_preserved_in_lead_list_and_project_conversion(self):
+        address = 'Flat 12, Sample Residency, Mumbai'
+        lead = self.make_lead(address=address)
+
+        list_response = self.client.get(reverse('lead-list'))
+        self.assertEqual(list_response.data['results'][0]['address'], address)
+
+        response = self.client.post(reverse('lead-convert', args=[lead.pk]), {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        project = Project.objects.get(pk=response.data['project_id'])
+        client = Client.objects.get(pk=response.data['client_id'])
+        self.assertEqual(project.client_address, address)
+        self.assertEqual(client.address, address)
+
     def test_convert_is_not_repeatable(self):
         lead = self.make_lead()
         self.client.post(reverse('lead-convert', args=[lead.pk]), {}, format='json')

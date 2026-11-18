@@ -25,6 +25,7 @@ export type BookingStatus = "draft" | "sent" | "signed" | "cancelled";
 
 export interface ProjectListItem {
   id: number;
+  public_id: string;
   name: string;
   client_name: string;
   client_phone: string;
@@ -152,7 +153,13 @@ export interface ProjectMeta {
 export interface DesignRequirement {
   id: number;
   room: string;
+  zone: string;
   unit: string;
+  /** Catalogue furniture this requirement is estimated as. */
+  furniture: number | null;
+  furniture_name?: string;
+  cabinet_type?: string;
+  options: CalcOptions;
   length: string;
   breadth: string;
   height: string;
@@ -208,8 +215,9 @@ export interface EstimateItemComponent {
   unit: string;
   price: string;
   amount: string;
-  catalog_material: number | null;
-  catalog_option: number | null;
+  library_material_item: number | null;
+  /** Raw-material category of library_material_item — its brand/model choices. */
+  material_category: number | null;
 }
 
 export interface EstimateItem {
@@ -224,20 +232,74 @@ export interface EstimateItem {
   subcategory: string;
   item: string;
   description: string;
+  // Dimensions ft/in
+  width_ft: number;
+  width_in: number;
+  height_ft: number;
+  height_in: number;
+  depth_ft: number;
+  depth_in: number;
+  // Legacy dimensions
   length: string;
   breadth: string;
   height: string;
+  // Type & spec
+  item_type: string;
+  specification: string;
+  brand: string;
+  model_name: string;
+  application: string;
+  specifications_text: string;
+  estimate_spec_flag: boolean;
+  // Qty & pricing
   qty: string;
   unit: string;
   rate: string;
+  price_unit: string;
+  cost: string;
   amount: string;
+  // Margin
+  margin_pct: string;
+  margin_amount: string;
+  // Referral
+  referral_pct: string;
+  referral_amount: string;
+  // GST & Total
   gst_pct: string;
   gst_amount: string;
+  gst_amount_stored: string;
+  total_amount: string;
   total_with_gst: string;
+  // Flag & misc
+  flag: boolean;
   remarks: string;
   /** The material breakdown; when present, `amount` is its sum. */
   components: EstimateItemComponent[];
   has_components: boolean;
+  /** Calculation options shared by every row of a furniture group. */
+  config: CalcOptions | null;
+  // Generated from the catalogue (calculation sheet)
+  group_key: string;
+  design_requirement: number | null;
+  furniture: number | null;
+  furniture_name: string;
+  cabinet_type: string;
+  basic_component: number | null;
+  raw_material: number | null;
+  raw_material_category: number | null;
+  quantity_rule: string;
+  calc_basis: string;
+  calculated_qty: string | null;
+  qty_overridden: boolean;
+}
+
+/** Options that tune a furniture's quantity rules (catalog/rules.py). */
+export interface CalcOptions {
+  shelf_type?: "ply" | "glass";
+  one_side_visible?: boolean;
+  handleless?: boolean;
+  /** Typed door / drawer / shelf counts that replace the calculated ones. */
+  overrides?: Partial<Record<"doors" | "drawers" | "shelves", number>>;
 }
 
 export interface Estimate {
@@ -347,6 +409,9 @@ export interface Item {
   gst_pct: string;
   margin_pct: string;
   is_active: boolean;
+  /** Furniture Catalogue entry whose bill-of-materials backs this item. */
+  catalog_furniture: number | null;
+  catalog_furniture_name: string;
 }
 
 export interface ItemMeta {
@@ -421,6 +486,7 @@ export interface Lead {
   project_name: string;
   developer: string;
   unit_no?: string;
+  address?: string;
   city: string;
   state?: string;
   property_type: string;
@@ -505,59 +571,39 @@ export interface CatalogZone {
   is_active: boolean;
 }
 
-export interface MaterialOption {
-  id: number;
-  material: number;
-  material_name?: string;
-  detail: string;
-  brand: string;
-  model_no: string;
-  size: string;
-  price: string;
-  unit: string;
-  notes?: string;
-  library_item?: number | null;
-  label: string;
-  sort_order: number;
-  is_active: boolean;
-}
-
-export interface CatalogMaterial {
+export interface BasicComponent {
   id: number;
   code: string;
   name: string;
-  default_unit: string;
-  icon: string;
-  option_count: number;
-  price_from?: number | null;
-  options?: MaterialOption[];
+  item_type: string;
+  library_category: number | null;
+  library_category_name: string;
+  unit: string;
+  price_unit: string;
+  quantity_rule: string;
+  default_qty: string;
+  fallback_rate: string;
+  gst_pct: string;
+  description: string;
+  used_in: number;
   sort_order: number;
   is_active: boolean;
 }
 
-export interface PartMaterial {
-  id: number;
-  part: number;
-  material: number;
-  material_name: string;
-  default_option: number | null;
-  option_label: string;
-  qty_per_unit: string;
-  unit: string;
-  wastage_pct: string;
-  unit_price: string;
-  line_cost: string;
-  notes: string;
-  sort_order: number;
-}
-
-export interface FurniturePart {
+export interface FurnitureComponent {
   id: number;
   furniture: number;
-  name: string;
-  notes: string;
-  materials: PartMaterial[];
-  material_cost: string;
+  basic_component: number;
+  basic_component_name: string;
+  item_type: string;
+  quantity_rule: string;
+  unit: string;
+  library_category: number | null;
+  default_material: number | null;
+  default_material_label: string;
+  rate: number;
+  fixed_qty: string | null;
+  application: string;
   sort_order: number;
   is_active: boolean;
 }
@@ -569,30 +615,64 @@ export interface Furniture {
   description: string;
   rooms: number[];
   room_names: string[];
-  default_unit: string;
-  default_length?: string;
-  default_breadth?: string;
-  default_height?: string;
-  base_rate: string;
-  gst_pct: string;
+  cabinet_type: string;
+  cabinet_type_display: string;
+  default_length: string;
+  default_breadth: string;
+  default_height: string;
   margin_pct: string;
-  part_count: number;
-  parts?: FurniturePart[];
-  material_cost?: string;
-  suggested_rate?: string;
+  gst_pct: string;
+  component_count: number;
+  components?: FurnitureComponent[];
   sort_order: number;
   is_active: boolean;
 }
 
 export interface CatalogMeta {
   units: Choice[];
-  counts: {
-    rooms: number;
-    zones: number;
-    furniture: number;
-    materials: number;
-    options: number;
+  cabinet_types: Choice[];
+  item_types: Choice[];
+  rules: Choice[];
+  spec_rules: string[];
+  counts: { rooms: number; zones: number; furniture: number; basic_components: number };
+}
+
+/** A row previewed by POST /catalog/furniture/{id}/calculate/. */
+export interface CalcRow {
+  component_id: number;
+  basic_component: number;
+  item_type: string;
+  specification: string;
+  brand: string;
+  model: string;
+  raw_material: number | null;
+  qty: number;
+  unit: string;
+  rate: number;
+  price_unit: string;
+  amount: number;
+  gst_pct: number;
+  quantity_rule: string;
+  basis: string;
+  needs_input: boolean;
+  application: string;
+}
+
+export interface FurnitureCalc {
+  furniture: number;
+  calculation: {
+    cabinet_type: string;
+    size: string;
+    counts: { doors: number; drawers: number; shelves: number; verticals: number };
+    warnings: string[];
   };
+  rows: CalcRow[];
+  total_cost: number;
+  /** The furniture's margin and each row's GST — rounded per row like the estimate, so `total` matches it. */
+  margin_pct: number;
+  margin_amount: number;
+  gst_amount: number;
+  total: number;
 }
 
 /* ── Vendors ─────────────────────────────────────────────────── */
@@ -647,4 +727,80 @@ export interface VendorMeta {
   payment_terms: Choice[];
   document_types: Choice[];
   counts: { suppliers: number; contractors: number };
+}
+
+/* ── Raw Material Library ────────────────────────────────────── */
+
+export interface LibraryCategory {
+  id: number;
+  name: string;
+  icon: string;
+  type: string;
+}
+
+/** A brand from the master list — any raw material in any category can use it. */
+export interface LibraryBrand {
+  id: number;
+  name: string;
+  website?: string;
+  is_active?: boolean;
+  /** Meta only: categories where the brand has a raw material. */
+  category_ids?: number[];
+  /** Brand list only. */
+  item_count?: number;
+  categories?: string[];
+}
+
+/** Full MaterialItem as returned by the API. */
+export interface LibraryItem {
+  id: number;
+  category: number;
+  brand: number | null;
+  brand_name: string;
+  category_id: number;
+  category_name: string;
+  category_icon: string;
+  model_name: string;
+  description: string;
+  weight: string;
+  length: string;
+  thickness: string;
+  default_unit: string;
+  default_rate: string;
+  gst_pct: string;
+  margin_pct: string;
+  is_active: boolean;
+  notes: string;
+  full_display: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Fields sent when creating or updating a MaterialItem. */
+export interface LibraryItemInput {
+  category: number | "";
+  brand: number | "" | null;
+  model_name: string;
+  description: string;
+  weight: string;
+  length: string;
+  thickness: string;
+  default_unit: string;
+  default_rate: string;
+  gst_pct: string;
+  margin_pct: string;
+  is_active: boolean;
+  notes: string;
+}
+
+export interface LibraryMeta {
+  categories: LibraryCategory[];
+  brands: LibraryBrand[];
+  units: Choice[];
+  counts: {
+    categories: number;
+    brands: number;
+    items: number;
+    services: number;
+  };
 }

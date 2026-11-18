@@ -1,24 +1,6 @@
 from django.contrib import admin
 
-from .models import (
-    Furniture, FurniturePart, Material, MaterialOption, PartMaterial, Room, Zone,
-)
-
-
-class MaterialOptionInline(admin.TabularInline):
-    model = MaterialOption
-    extra = 0
-
-
-class PartMaterialInline(admin.TabularInline):
-    model = PartMaterial
-    extra = 0
-    autocomplete_fields = ['material', 'default_option']
-
-
-class FurniturePartInline(admin.TabularInline):
-    model = FurniturePart
-    extra = 0
+from .models import BasicComponent, Furniture, FurnitureComponent, Room, Zone
 
 
 @admin.register(Room)
@@ -37,35 +19,25 @@ class ZoneAdmin(admin.ModelAdmin):
     readonly_fields = ['code']
 
 
-@admin.register(Material)
-class MaterialAdmin(admin.ModelAdmin):
-    list_display = ['icon', 'name', 'code', 'default_unit', 'options_total', 'is_active']
-    list_filter = ['is_active']
+@admin.register(BasicComponent)
+class BasicComponentAdmin(admin.ModelAdmin):
+    list_display = ['name', 'item_type', 'library_category', 'unit', 'quantity_rule', 'gst_pct', 'is_active']
+    list_filter = ['item_type', 'quantity_rule', 'is_active']
     search_fields = ['name', 'code']
     readonly_fields = ['code']
-    inlines = [MaterialOptionInline]
 
 
-@admin.register(MaterialOption)
-class MaterialOptionAdmin(admin.ModelAdmin):
-    list_display = ['detail', 'material', 'brand', 'model_no', 'size', 'price', 'unit', 'is_active']
-    list_filter = ['material', 'brand', 'is_active']
-    search_fields = ['detail', 'brand', 'model_no']
+class FurnitureComponentInline(admin.TabularInline):
+    model = FurnitureComponent
+    extra = 0
+    autocomplete_fields = ['basic_component']
 
 
 @admin.register(Furniture)
 class FurnitureAdmin(admin.ModelAdmin):
-    list_display = ['name', 'code', 'default_unit', 'parts_total', 'base_rate', 'is_active']
-    list_filter = ['is_active', 'rooms']
+    list_display = ['name', 'code', 'cabinet_type', 'components_total', 'margin_pct', 'is_active']
+    list_filter = ['is_active', 'cabinet_type', 'rooms']
     search_fields = ['name', 'code', 'description']
-    readonly_fields = ['code', 'material_cost', 'suggested_rate']
+    readonly_fields = ['code']
     filter_horizontal = ['rooms']
-    inlines = [FurniturePartInline]
-
-
-@admin.register(FurniturePart)
-class FurniturePartAdmin(admin.ModelAdmin):
-    list_display = ['name', 'furniture', 'sort_order', 'is_active']
-    list_filter = ['is_active']
-    search_fields = ['name', 'furniture__name']
-    inlines = [PartMaterialInline]
+    inlines = [FurnitureComponentInline]

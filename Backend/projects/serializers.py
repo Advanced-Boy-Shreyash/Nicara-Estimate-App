@@ -4,7 +4,7 @@ Full project lifecycle serializers.
 """
 from rest_framework import serializers
 from .models import (
-    BookingForm, Project, DesignRequirement, ProjectDeliverable, Estimate,
+    BookingForm, Project, DesignRequirement, ProjectFloorPlan, ProjectDeliverable, Estimate,
     EstimateItem, EstimateItemComponent, Measurement, MaterialSelection,
     ExecutionStage, PaymentMilestone, QualityCheck,
 )
@@ -12,6 +12,9 @@ from .models import (
 
 # ── Design Requirements ─────────────────────────────────────
 class DesignRequirementSerializer(serializers.ModelSerializer):
+    furniture_name = serializers.CharField(source='furniture.name', read_only=True, default='')
+    cabinet_type = serializers.CharField(source='furniture.cabinet_type', read_only=True, default='')
+
     class Meta:
         model = DesignRequirement
         fields = '__all__'
@@ -21,6 +24,29 @@ class DesignRequirementSerializer(serializers.ModelSerializer):
 class DesignRequirementBulkSerializer(serializers.Serializer):
     """Replace a project's requirement rows in one call (the grid saves whole)."""
     rows = serializers.ListField(child=serializers.DictField(), allow_empty=True)
+
+
+class ProjectFloorPlanSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+    file_size_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProjectFloorPlan
+        fields = ['id', 'file', 'file_name', 'file_size', 'file_size_display', 'file_url', 'created_at']
+        read_only_fields = ['file_name', 'file_size', 'created_at']
+        extra_kwargs = {'file': {'write_only': True}}
+
+    def get_file_url(self, obj):
+        request = self.context.get('request')
+        return request.build_absolute_uri(obj.file.url) if request else obj.file.url
+
+    def get_file_size_display(self, obj):
+        size = obj.file_size
+        if size < 1024:
+            return f'{size} B'
+        if size < 1024 * 1024:
+            return f'{size / 1024:.1f} KB'
+        return f'{size / (1024 * 1024):.1f} MB'
 
 
 # ── Deliverables (FL, MB, 3D, Renders, WD) ──────────────────
@@ -90,14 +116,26 @@ class DeliverableReviewSerializer(serializers.Serializer):
 
 # ── Estimate Items ──────────────────────────────────────────
 class EstimateItemComponentSerializer(serializers.ModelSerializer):
-    """One row of a line's material breakdown; `amount` is qty × price."""
+    """One row of a line's material breakdown; `amount` is qty × price.
+    Choosing another raw material re-prices the part from it (unless a price
+    is sent too)."""
+    material_category = serializers.IntegerField(
+        source='library_material_item.category_id', read_only=True, default=None)
 
     class Meta:
         model = EstimateItemComponent
         fields = ['id', 'estimate_item', 'sno', 'basic_component', 'detail',
                   'brand', 'model', 'qty', 'unit', 'price', 'amount',
-                  'catalog_material', 'catalog_option']
+                  'library_material_item', 'material_category']
         read_only_fields = ['estimate_item', 'amount']
+
+    def update(self, instance, validated_data):
+        material = validated_data.get('library_material_item')
+        if material is not None and material != instance.library_material_item:
+            validated_data.setdefault('brand', material.brand.name if material.brand_id else '')
+            validated_data.setdefault('model', material.model_name)
+            validated_data.setdefault('price', material.default_rate)
+        return super().update(instance, validated_data)
 
     def validate_qty(self, value):
         if value is not None and value < 0:
@@ -120,11 +158,49 @@ class EstimateItemSerializer(serializers.ModelSerializer):
     catalog_item_code = serializers.CharField(source='catalog_item.code', read_only=True)
     components = EstimateItemComponentSerializer(many=True, read_only=True)
     has_components = serializers.BooleanField(read_only=True)
+    furniture_name = serializers.CharField(source='furniture.name', read_only=True, default='')
+    cabinet_type = serializers.CharField(source='furniture.cabinet_type', read_only=True, default='')
+    raw_material_category = serializers.IntegerField(
+        source='basic_component.library_category_id', read_only=True, default=None)
 
     class Meta:
         model = EstimateItem
-        fields = '__all__'
-        read_only_fields = ['estimate', 'amount']
+        fields = [
+            'id', 'estimate', 'catalog_item', 'catalog_item_code', 'sno',
+            'area', 'zone', 'finishing', 'category', 'subcategory',
+            'item', 'description',
+            # Dimensions ft/in
+            'width_ft', 'width_in', 'height_ft', 'height_in',
+            'depth_ft', 'depth_in',
+            # Legacy dimensions
+            'length', 'breadth', 'height',
+            # Type & spec
+            'item_type', 'specification', 'brand', 'model_name',
+            'application', 'specifications_text', 'estimate_spec_flag',
+            # Qty & pricing
+            'qty', 'unit', 'rate', 'price_unit', 'cost', 'amount',
+            # Margin
+            'margin_pct', 'margin_amount',
+            # Referral
+            'referral_pct', 'referral_amount',
+            # GST & Total
+            'gst_pct', 'gst_amount', 'gst_amount_stored', 'total_amount',
+            'total_with_gst',
+            # Flag & misc
+            'flag', 'remarks', 'config',
+            # Generated from the catalogue
+            'group_key', 'design_requirement', 'furniture', 'furniture_name', 'cabinet_type',
+            'basic_component', 'raw_material', 'raw_material_category', 'quantity_rule',
+            'calc_basis', 'calculated_qty', 'qty_overridden',
+            # Breakdown
+            'components', 'has_components',
+        ]
+        read_only_fields = [
+            'estimate', 'amount', 'cost', 'margin_amount', 'referral_amount',
+            'gst_amount_stored', 'total_amount', 'specifications_text',
+            'group_key', 'design_requirement', 'furniture', 'basic_component',
+            'quantity_rule', 'calc_basis', 'calculated_qty', 'qty_overridden',
+        ]
 
     def validate_qty(self, value):
         if value is not None and value < 0:
@@ -140,6 +216,22 @@ class EstimateItemSerializer(serializers.ModelSerializer):
         if value is not None and not (0 <= value <= 100):
             raise serializers.ValidationError('GST percentage must be between 0 and 100.')
         return value
+
+    def validate_raw_material(self, value):
+        component = getattr(self.instance, 'basic_component', None)
+        if value and component and component.library_category_id                 and value.category_id != component.library_category_id:
+            raise serializers.ValidationError(
+                f'Pick a {component.library_category.name} raw material.')
+        return value
+
+    def update(self, instance, validated_data):
+        # Switching brand/model re-prices the row unless a rate was typed too.
+        material = validated_data.get('raw_material')
+        if material is not None and material != instance.raw_material:
+            validated_data.setdefault('brand', material.brand.name if material.brand_id else '')
+            validated_data.setdefault('model_name', material.model_name)
+            validated_data.setdefault('rate', material.default_rate)
+        return super().update(instance, validated_data)
 
 
 class EstimateSerializer(serializers.ModelSerializer):
@@ -168,6 +260,16 @@ class EstimateSerializer(serializers.ModelSerializer):
 
     def get_approved_by_name(self, obj):
         return obj.approved_by.get_full_name() if obj.approved_by else ''
+
+    def validate_discount_pct(self, value):
+        if value is not None and not (0 <= value <= 100):
+            raise serializers.ValidationError('Discount percentage must be between 0 and 100.')
+        return value
+
+    def validate_discount_amount(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError('Discount amount cannot be negative.')
+        return value
 
 
 class EstimateListSerializer(serializers.ModelSerializer):
@@ -270,7 +372,7 @@ class ProjectListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = [
-            'id', 'name', 'client_name', 'client_phone', 'developer', 'unit_no',
+            'id', 'public_id', 'name', 'client_name', 'client_phone', 'developer', 'unit_no',
             'city', 'state', 'area', 'property_type', 'project_type', 'purpose',
             'interior_style', 'stage', 'progress', 'budget',
             'start_date', 'target_date',
@@ -301,7 +403,7 @@ class ProjectDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = '__all__'
-        read_only_fields = ['created_by', 'created_at', 'updated_at']
+        read_only_fields = ['public_id', 'created_by', 'created_at', 'updated_at']
 
     def get_estimates_summary(self, obj):
         return [

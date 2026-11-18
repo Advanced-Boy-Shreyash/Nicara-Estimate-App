@@ -7,7 +7,10 @@ Initial Estimate, Booking Form.
 Run: python manage.py test projects
 """
 from decimal import Decimal
+import tempfile
 
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -16,7 +19,7 @@ from accounts.models import User
 from items.models import Item, ItemCategory
 from projects.models import (
     BookingForm, DesignRequirement, Estimate, EstimateItem,
-    Project, ProjectDeliverable,
+    Project, ProjectDeliverable, ProjectFloorPlan,
 )
 
 PASSWORD = 'Str0ng!Passw0rd'
@@ -58,6 +61,18 @@ class ClientDetailsTests(EngagementTestCase):
         res = self.client.get(reverse('project-list'))
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data['results'][0]['name'], 'Sharma Residence')
+        self.assertEqual(res.data['results'][0]['public_id'], self.project.public_id)
+
+    def test_project_public_id_is_unique_and_alphanumeric(self):
+        self.assertRegex(self.project.public_id, r'^[A-Z0-9]{8}$')
+        other = Project.objects.create(name='Second Residence', client_name='Another Client')
+        self.assertNotEqual(self.project.public_id, other.public_id)
+
+    def test_project_can_be_retrieved_by_public_id(self):
+        res = self.client.get(reverse('project-public-detail', args=[self.project.public_id]))
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['id'], self.project.id)
+        self.assertEqual(res.data['public_id'], self.project.public_id)
 
     def test_patch_updates_client_details(self):
         res = self.client.patch(
@@ -141,6 +156,51 @@ class DesignRequirementTests(EngagementTestCase):
         self.assertEqual(orders, [1, 2])
 
 
+class ProjectFloorPlanTests(EngagementTestCase):
+    def test_upload_multiple_floor_plans_and_list_saved_files(self):
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            res = self.client.post(
+                reverse('floor-plan-list', args=[self.project.pk]),
+                {'files': [
+                    SimpleUploadedFile('layout.pdf', b'floor plan pdf', content_type='application/pdf'),
+                    SimpleUploadedFile('levels.dwg', b'floor plan dwg', content_type='application/acad'),
+                ]},
+                format='multipart',
+            )
+            self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+            self.assertEqual(len(res.data), 2)
+            self.assertEqual(ProjectFloorPlan.objects.filter(project=self.project).count(), 2)
+            self.assertEqual([plan['file_name'] for plan in res.data], ['layout.pdf', 'levels.dwg'])
+            self.assertTrue(all(plan['file_url'].startswith('http') for plan in res.data))
+
+            listed = self.client.get(reverse('floor-plan-list', args=[self.project.pk]))
+            self.assertEqual(listed.data['count'], 2)
+            self.assertEqual(listed.data['results'][0]['file_size'], len(b'floor plan pdf'))
+
+            deleted = self.client.delete(
+                reverse('floor-plan-detail', args=[self.project.pk, res.data[0]['id']])
+            )
+            self.assertEqual(deleted.status_code, status.HTTP_204_NO_CONTENT)
+            self.assertEqual(ProjectFloorPlan.objects.filter(project=self.project).count(), 1)
+
+    def test_rejects_unsupported_file_extensions(self):
+        res = self.client.post(
+            reverse('floor-plan-list', args=[self.project.pk]),
+            {'files': [SimpleUploadedFile('notes.txt', b'not a floor plan')]},
+            format='multipart',
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(ProjectFloorPlan.objects.filter(project=self.project).count(), 0)
+
+    def test_upload_requires_at_least_one_file(self):
+        res = self.client.post(
+            reverse('floor-plan-list', args=[self.project.pk]),
+            {},
+            format='multipart',
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+
 # ── 3. FL & Mood Board ──────────────────────────────────────
 
 class DeliverableTests(EngagementTestCase):
@@ -222,17 +282,55 @@ class EstimateTests(EngagementTestCase):
                                     qty=1, rate=Decimal('1000'), gst_pct=18)
         EstimateItem.objects.create(estimate=estimate, area='B', item='Y',
                                     qty=2, rate=Decimal('500'), gst_pct=18)
-        self.assertEqual(estimate.subtotal, Decimal('2000'))
-        self.assertEqual(estimate.gst_total, Decimal('360'))
-        self.assertEqual(estimate.grand_total, Decimal('2360'))
+        # ₹2,000 base + 15% default margin, then 18% GST.
+        self.assertEqual(estimate.subtotal, Decimal('2300'))
+        self.assertEqual(estimate.gst_total, Decimal('414'))
+        self.assertEqual(estimate.grand_total, Decimal('2714'))
 
     def test_percentage_discount_reduces_gst_proportionally(self):
         estimate = self.make_estimate(discount_pct=Decimal('10'))
         EstimateItem.objects.create(estimate=estimate, area='A', item='X',
                                     qty=1, rate=Decimal('1000'), gst_pct=18)
-        self.assertEqual(estimate.taxable_amount, Decimal('900'))
-        self.assertEqual(estimate.gst_total, Decimal('162'))
-        self.assertEqual(estimate.grand_total, Decimal('1062'))
+        self.assertEqual(estimate.subtotal, Decimal('1150'))
+        self.assertEqual(estimate.total_discount, Decimal('115'))
+        self.assertEqual(estimate.taxable_amount, Decimal('1035'))
+        self.assertEqual(estimate.gst_total, Decimal('186.30'))
+        self.assertEqual(estimate.grand_total, Decimal('1221.30'))
+
+    def test_totals_include_referral_and_round_gst_per_line(self):
+        estimate = self.make_estimate(discount_amount=Decimal('25'))
+        first = EstimateItem.objects.create(
+            estimate=estimate, area='A', item='X', qty=1, rate=Decimal('1000'),
+            margin_pct=10, referral_pct=5, gst_pct=18,
+        )
+        second = EstimateItem.objects.create(
+            estimate=estimate, area='B', item='Y', qty=1, rate=Decimal('500'),
+            margin_pct=0, referral_pct=0, gst_pct=5,
+        )
+
+        self.assertEqual(first.pre_tax_amount, Decimal('1150'))
+        self.assertEqual(first.total_amount, Decimal('1357'))
+        self.assertEqual(estimate.subtotal, Decimal('1650'))
+        self.assertEqual(estimate.total_discount, Decimal('25'))
+        self.assertEqual(estimate.taxable_amount, Decimal('1625'))
+        self.assertEqual(estimate.gst_total, Decimal('228.48'))
+        self.assertEqual(estimate.grand_total, Decimal('1853.48'))
+        self.assertEqual(
+            estimate.grand_total,
+            estimate.taxable_amount + estimate.gst_total,
+        )
+
+    def test_discount_is_capped_at_the_pre_tax_subtotal(self):
+        estimate = self.make_estimate(discount_amount=Decimal('9999'))
+        EstimateItem.objects.create(
+            estimate=estimate, area='A', item='X', qty=1, rate=Decimal('100'),
+            margin_pct=0, gst_pct=18,
+        )
+
+        self.assertEqual(estimate.total_discount, Decimal('100'))
+        self.assertEqual(estimate.taxable_amount, Decimal('0'))
+        self.assertEqual(estimate.gst_total, Decimal('0'))
+        self.assertEqual(estimate.grand_total, Decimal('0'))
 
     def test_totals_are_zero_for_an_empty_estimate(self):
         estimate = self.make_estimate()
@@ -357,9 +455,9 @@ class AddFromCatalogTests(EngagementTestCase):
     def test_response_carries_recalculated_estimate_totals(self):
         res = self.client.post(self.url, {'items': [{'item_id': self.ceiling.pk}]},
                                format='json')
-        # 168 sft × ₹165 = ₹27,720 + 18% GST
-        self.assertEqual(Decimal(res.data['estimate']['subtotal']), Decimal('27720.00'))
-        self.assertEqual(Decimal(res.data['estimate']['grand_total']), Decimal('32709.60'))
+        # ₹27,720 base + 15% margin, then 18% GST.
+        self.assertEqual(Decimal(res.data['estimate']['subtotal']), Decimal('31878.00'))
+        self.assertEqual(Decimal(res.data['estimate']['grand_total']), Decimal('37616.04'))
 
     def test_unknown_item_id_is_rejected_without_partial_writes(self):
         res = self.client.post(self.url, {'items': [
@@ -407,7 +505,7 @@ class BookingFormTests(EngagementTestCase):
 
         res = self.client.post(self.url, {'advance_amount': 100}, format='json')
         self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
-        self.assertEqual(Decimal(res.data['total_value']), Decimal('1180.00'))
+        self.assertEqual(Decimal(res.data['total_value']), Decimal('1357.00'))  # 1000 + 15% + 18% GST
         self.assertEqual(res.data['estimate'], estimate.pk)
 
     def test_only_one_booking_form_per_project(self):

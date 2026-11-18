@@ -94,6 +94,26 @@ class ItemCatalogueTests(APITestCase):
         self.assertTrue(any(u['value'] == 'sft' for u in res.data['units']))
         self.assertEqual(res.data['counts']['items'], 1)
 
+    def test_quick_create_without_category_defaults_to_general(self):
+        """The inline '+ Add' in the estimate/design dropdowns posts a bare name."""
+        res = self.client.post(reverse('item-list'), {'name': 'Pooja Unit'}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED, res.data)
+        created = Item.objects.get(name='Pooja Unit')
+        self.assertEqual(created.category.name, 'General')
+
+    def test_item_links_to_a_catalog_furniture(self):
+        from catalog.models import Furniture
+        furniture = Furniture.objects.create(name='Wardrobe')
+        res = self.client.patch(
+            reverse('item-detail', args=[self.item.id]),
+            {'catalog_furniture': furniture.id}, format='json',
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.data)
+        self.assertEqual(res.data['catalog_furniture'], furniture.id)
+        self.assertEqual(res.data['catalog_furniture_name'], 'Wardrobe')
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.catalog_furniture_id, furniture.id)
+
 
 class ItemComponentTests(APITestCase):
     def setUp(self):
@@ -107,9 +127,9 @@ class ItemComponentTests(APITestCase):
         self.item = Item.objects.create(name='Wardrobe', category=self.category, margin_pct=50)
 
         lib_cat = MaterialCategory.objects.create(name='Core Material')
-        brand = MaterialBrand.objects.create(category=lib_cat, name='Austin')
+        brand = MaterialBrand.objects.create(name='Austin')
         self.ply = MaterialItem.objects.create(
-            brand=brand, model_name='Lincoln BWP', default_rate=Decimal('100'),
+            category=lib_cat, brand=brand, model_name='Lincoln BWP', default_rate=Decimal('100'),
             default_unit='sheets',
         )
 
@@ -131,12 +151,44 @@ class ItemComponentTests(APITestCase):
     def test_suggested_rate_is_zero_without_a_bom(self):
         self.assertEqual(self.item.suggested_rate, Decimal('0'))
 
+    def test_plan_area_component_uses_width_and_depth(self):
+        item = Item.objects.create(
+            name='TV Unit with Ledge', category=self.category,
+            default_length="8'0\"", default_breadth="1'0\"", default_height="1'3\"",
+        )
+        component = ItemComponent.objects.create(
+            item=item, material_item=self.ply, qty_per_unit=Decimal('2'),
+            quantity_basis=ItemComponent.QuantityBasis.PLAN_AREA,
+            unit='sft',
+        )
+
+        self.assertEqual(component.quantity_factor, Decimal('8'))
+        self.assertEqual(component.line_cost, Decimal('1600'))
+
     def test_rate_override_wins_over_library_rate(self):
         component = ItemComponent.objects.create(
             item=self.item, material_item=self.ply,
             qty_per_unit=Decimal('1'), rate_override=Decimal('250'),
         )
         self.assertEqual(component.effective_rate, Decimal('250'))
+
+    def test_brandless_raw_material_stays_in_the_library(self):
+        category = MaterialCategory.objects.create(
+            name='Fasteners', product_group=MaterialCategory.ProductGroup.HARDWARE,
+        )
+        MaterialItem.objects.create(
+            category=category, brand=None, model_name='Screws',
+            default_rate=Decimal('2.50'), default_unit='nos',
+        )
+
+        # The Smart Estimate Generator offers brands only.
+        response = self.client.get(reverse('smart-estimate-options'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['hardware'], [])
+        library_response = self.client.get('/api/library/items/', {'category': category.id})
+        self.assertEqual(library_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(library_response.data['results'][0]['brand'], None)
+        self.assertEqual(library_response.data['results'][0]['category_name'], 'Fasteners')
 
     def test_component_needs_a_link_or_a_label(self):
         res = self.client.post(
@@ -167,10 +219,10 @@ class SeedItemsCommandTests(APITestCase):
 
     def test_seeded_items_carry_estimate_fields(self):
         call_command('seed_items', verbosity=0)
-        wardrobe = Item.objects.get(name="Wardrobe 8'x2'x8'")
+        wardrobe = Item.objects.get(name='Wardrobe')
         self.assertEqual(wardrobe.default_room, 'Master Bedroom')
-        self.assertEqual(wardrobe.default_rate, Decimal('145000.00'))
-        self.assertEqual(wardrobe.default_length, "8'0\"")
+        self.assertEqual(wardrobe.default_rate, Decimal('95000.00'))
+        self.assertEqual(wardrobe.default_length, "6'0\"")
         self.assertEqual(wardrobe.gst_pct, Decimal('18.00'))
 
         ceiling = Item.objects.get(name='False Ceiling — Gypsum')
